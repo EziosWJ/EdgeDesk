@@ -55,27 +55,83 @@ jobs:
             bash scripts/integration_test.sh out/build/ci-gcc15-embed/bin/edgedesk 19092 web/dist
           '
 
-  arm64-cross:
-    # Real AArch64 cross build (Ubuntu glibc cross toolchain) executed under
-    # qemu-user-static: disk resource mode only (GCC 13 cross compiler).
+  x86_64-musl-static:
+    # musl static-pie release target, disk resource mode (musl.cc ships GCC 11).
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Install cross toolchain and qemu
+      - name: Fetch musl cross toolchain
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq g++-aarch64-linux-gnu qemu-user-static python3
+          mkdir -p "$HOME/opt/musl" && cd "$HOME/opt/musl"
+          curl -fsSL -o x86_64-linux-musl-cross.tgz https://musl.cc/x86_64-linux-musl-cross.tgz
+          tar xzf x86_64-linux-musl-cross.tgz
+      - name: Cross build (static-pie)
+        run: |
+          cmake -S . -B out/build/x86_64-musl -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DEDGEDESK_WEB_MODE=disk -DEDGEDESK_BUILD_WEB=OFF -DEDGEDESK_STATIC_PIE=ON \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/x86_64-linux-musl.cmake \
+            -DEDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/musl/x86_64-linux-musl-cross"
+          cmake --build out/build/x86_64-musl --parallel 3
+          file out/build/x86_64-musl/bin/edgedesk
+      - name: Unit tests (static musl binaries)
+        run: ctest --test-dir out/build/x86_64-musl --output-on-failure
+      - name: Integration tests
+        run: bash scripts/integration_test.sh out/build/x86_64-musl/bin/edgedesk 19093 ""
+
+  arm64-cross:
+    # Real AArch64 cross build executed under qemu-user-static. Mirrors the
+    # locally verified recipe in docs/testing.md (extracted deb prefix,
+    # ARM64 bash for the PTY tests, disk resource mode).
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch cross toolchain, qemu and ARM64 bash (no root)
+        run: |
+          mkdir -p "$HOME/opt/arm64/debs" "$HOME/opt/arm64/root" "$HOME/opt/arm64/hostlibs"
+          cd "$HOME/opt/arm64/debs"
+          apt-get download $(apt-cache depends --recurse --no-recommends --no-suggests \
+            --no-conflicts --no-breaks --no-replaces --no-enhances g++-aarch64-linux-gnu qemu-user-static \
+            | grep '^\w' | sort -u)
+          for d in *.deb; do dpkg -x "$d" "$HOME/opt/arm64/root"; done
+          cd "$HOME/opt/arm64/hostlibs"
+          ln -sf "$HOME"/opt/arm64/root/usr/lib/x86_64-linux-gnu/libopcodes-2.42-arm64.so .
+          ln -sf "$HOME"/opt/arm64/root/usr/lib/x86_64-linux-gnu/libbfd-2.42-arm64.so .
+          ln -sf "$HOME"/opt/arm64/root/usr/lib/x86_64-linux-gnu/libctf-arm64.so.0.0.0 .
+          ln -sf "$HOME"/opt/arm64/root/usr/lib/x86_64-linux-gnu/libctf-nobfd-arm64.so.0.0.0 .
+          ln -sf libctf-arm64.so.0.0.0 libctf-arm64.so.0
+          ln -sf libctf-nobfd-arm64.so.0.0.0 libctf-nobfd-arm64.so.0
+          cd "$HOME/opt/arm64/root"
+          mkdir -p lib usr/lib
+          ln -sfn ../usr/aarch64-linux-gnu/lib lib/aarch64-linux-gnu
+          ln -sfn ../aarch64-linux-gnu/lib usr/lib/aarch64-linux-gnu
+          ln -sf ../usr/aarch64-linux-gnu/lib/ld-linux-aarch64.so.1 lib/ld-linux-aarch64.so.1
+          ln -sfn usr/bin bin
+      - name: Install ARM64 bash for the terminal tests
+        run: |
+          bash_url=$(curl -fsSL http://ports.ubuntu.com/ubuntu-ports/pool/main/b/bash/ \
+            | grep -o 'bash_[0-9][^"]*_arm64\.deb' | sort -V | tail -1)
+          tinfo_url=$(curl -fsSL http://ports.ubuntu.com/ubuntu-ports/pool/main/n/ncurses/ \
+            | grep -o 'libtinfo6_[0-9][^"]*_arm64\.deb' | sort -V | tail -1)
+          curl -fsSL -o /tmp/bash.deb "http://ports.ubuntu.com/ubuntu-ports/pool/main/b/bash/$bash_url"
+          curl -fsSL -o /tmp/libtinfo6.deb "http://ports.ubuntu.com/ubuntu-ports/pool/main/n/ncurses/$tinfo_url"
+          dpkg -x /tmp/bash.deb "$HOME/opt/arm64/root"
+          dpkg -x /tmp/libtinfo6.deb "$HOME/opt/arm64/root"
+          "$HOME/opt/arm64/root/usr/bin/qemu-aarch64-static" -L "$HOME/opt/arm64/root" \
+            "$HOME/opt/arm64/root/bin/bash" --version | head -1
       - name: Cross build (disk resources)
         run: |
+          export LD_LIBRARY_PATH="$HOME/opt/arm64/hostlibs"
           cmake -S . -B out/build/arm64-disk -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DEDGEDESK_WEB_MODE=disk -DEDGEDESK_BUILD_WEB=OFF \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
-            -DEDGEDESK_TOOLCHAIN_ROOT=/usr
+            -DEDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/arm64/root"
           cmake --build out/build/arm64-disk --parallel 3
           file out/build/arm64-disk/bin/edgedesk
       - name: Run integration tests under qemu
         run: |
-          bash scripts/integration_test.sh out/build/arm64-disk/bin/edgedesk 19093 "" \
-            "/usr/bin/qemu-aarch64-static -L /usr/aarch64-linux-gnu"
+          bash scripts/integration_test.sh out/build/arm64-disk/bin/edgedesk 19094 "" \
+            "$HOME/opt/arm64/root/usr/bin/qemu-aarch64-static -L $HOME/opt/arm64/root"
