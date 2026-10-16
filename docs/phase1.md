@@ -1,6 +1,10 @@
 # EdgeDesk Phase 1 — Engineering Baseline
 
-Status: **scaffold implemented; platform integration requires environment validation**.
+Status: **历史记录（Phase 1 骨架）**。V1.0 已在同一仓库上按 ADR-0003..0006 实现；
+当前结构、接口与验证以 [architecture.md](architecture.md)、[api.md](api.md) 和
+[testing.md](testing.md) 为准。本文保留 Phase 1 的构建链路说明作为历史参考。
+
+> Phase 1 原始状态：scaffold implemented; platform integration requires environment validation.
 
 ## Phase 1 is deliberately minimal
 
@@ -97,4 +101,7 @@ These validate only the C++ core and Python `#embed` generator; **they do not va
 
 ## Next work after Phase 1
 
-Before files/PTY APIs, finalize React decision, authentication, origin checks and terminal teardown/reconnect rules in ADR/Spec. Then add distinct FileService, TerminalSessionManager and HardwareMonitorService modules, with bounded IO and tests.
+（已完成）认证、文件服务、PTY 终端、指标采集均已实现，见 ADR-0003..0006 与
+[architecture.md](architecture.md)。后续工作请以 [testing.md](testing.md) 中
+“未验证项”为准：ARM32 交叉工具链、musl GCC 15 正式发行链、真实设备验收、
+浏览器端手工交互与 TLS 网关集成。

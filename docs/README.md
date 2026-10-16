@@ -1,19 +1,27 @@
 # EdgeDesk 文档索引
 
-> 所有文档用于记录已确认的决策、需求与待确认问题。文档完成 != 功能完成。严禁 Agent 将原项目中已实现的功能视为 EdgeDesk 仓库已实现。
+> 所有文档用于记录已确认的决策、需求、实现状态与待确认问题。文档完成 != 功能完成。
+> 功能完成情况以代码、自动化测试与 [验证矩阵](testing.md) 的实际结果为准。
 
-## 工程阶段与开发约束
+## 当前实现（V1.0）
 
-- [Phase 1 目录架构、构建命令与验证矩阵](phase1.md)
+- [架构、线程模型与资源边界](architecture.md)
+- [API 与 WebSocket 协议](api.md)
+- [配置与部署](config.md)
+- [测试与验证矩阵](testing.md)（含各平台真实验证结果与未验证项）
 - [Coding Agent 开发规范](../AGENTS.md)
-- [CI 验证](https://github.com/EziosWJ/EdgeDesk/actions)
+- [Phase 1 工程骨架（历史记录）](phase1.md)
 
 ## ADR（为什么这样做）
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
-| [ADR-0001](adr/0001-technology-stack.md) | C++17、GCC 15+、libhv、musl、`#embed` | 已确认基线 |
-| [ADR-0002](adr/0002-architecture-security.md) | 业务模块分层、PTY 生命期与安全边界 | 设计提案 |
+| [ADR-0001](adr/0001-technology-stack.md) | C++17、GCC 15+、libhv、musl、`#embed`、React + xterm.js | 已确认基线 |
+| [ADR-0002](adr/0002-architecture-security.md) | 业务模块分层、PTY 生命周期与安全边界 | 已确认 |
+| [ADR-0003](adr/0003-v1-auth-api-protocol.md) | 认证（密钥 + 会话 Cookie）、API 面、实时协议、限流与审计 | 已确认 |
+| [ADR-0004](adr/0004-path-sandbox.md) | 目录 FD + openat 路径沙箱、符号链接策略 | 已确认 |
+| [ADR-0005](adr/0005-terminal-architecture.md) | PTY、线程边界、会话生命周期与重连 | 已确认 |
+| [ADR-0006](adr/0006-system-metrics.md) | 指标采集、内存窗口与增量推送 | 已确认 |
 
 ## Spec（要做什么）
 
@@ -31,21 +39,19 @@
 - [素材引用与 #embed 打包说明](design/asset-usage.md)
 - [四页原型拆解及视觉规范](design/prototype-guidelines.md)
 
-## 开发环境（宿主机构建）
+## 开发环境
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
-| [本地 GCC 15 工具链（免 sudo）](dev/gcc15-local-toolchain.md) | Ubuntu 24.04 上用 `scripts/install-gcc15-local.sh` 安装 GCC 15 到用户目录，`scripts/with-gcc15.sh` 用于 `release-embed` 构建 | 已验证（2026-10-16） |
+| [本地 GCC 15 工具链（免 sudo）](dev/gcc15-local-toolchain.md) | Ubuntu 24.04 上用 `scripts/install-gcc15-local.sh` 安装 GCC 15 到用户目录 | 已验证（2026-10-16） |
+| [测试与验证矩阵](testing.md) | 各平台构建/运行/交叉验证的真实结果 | 持续更新 |
 
-## 关键待确认项（不要擅自定案）
+## 仍然待确认（不影响 V1.0 已实现范围）
 
-- 前端是否正式使用 React，是否采用 xterm.js。
-- OpenHarmony ARM64 是否属于 V1.0 正式发行平台。
-- 认证方式、HTTPS/TLS 接入策略、默认监听地址。
-- 浏览器彻底关闭、显式关闭终端 Tab 后的后端会话保留策略；会话上限和空闲超时。
-- 窗口最小化、跨刷新布局记忆等增强交互。
-- 仪表盘刷新周期、曲线窗口和详细统计维度。
-- CMake/Ninja 以及不支持 `#embed` 的工具链是否必须提供资源嵌入回退。
+- TLS 是否内置终止（当前由外部网关终止）。
+- OpenHarmony ARM64 是否作为正式发行平台。
+- 多用户/角色、会话持久化是否需要。
+- 浮动窗口布局在跨刷新后的自动恢复策略（当前仅恢复会话列表，不自动重开窗口）。
 
 ## 变更约定
 

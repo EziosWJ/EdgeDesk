@@ -1,4 +1,5 @@
-name: Phase 1 CI
+name: CI
+
 on:
   push:
     branches: [main]
@@ -14,8 +15,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install frontend dependencies
-        run: npm install --no-audit --no-fund
+      - name: Frontend install (lockfile) and unit tests
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
         working-directory: web
       - name: Build React frontend
         run: npm run build
@@ -24,10 +27,10 @@ jobs:
         run: cmake --preset dev-disk -DEDGEDESK_BUILD_WEB=OFF
       - name: Build C++ and libhv
         run: cmake --build --preset dev-disk
-      - name: Unit tests
+      - name: Native unit tests
         run: ctest --preset dev-disk
-      - name: HTTP smoke test
-        run: bash scripts/smoke.sh out/build/dev-disk/bin/edgedesk 19091 web/dist
+      - name: HTTP smoke + end-to-end integration (REST, WebSocket, rate limit, audit)
+        run: bash scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19091 web/dist
 
   gcc15-embed:
     runs-on: ubuntu-24.04
@@ -39,9 +42,9 @@ jobs:
         with:
           node-version: '22'
       - name: Build React dist for embedding
-        run: npm install --no-audit --no-fund && npm run build
+        run: npm ci --no-audit --no-fund && npm run build
         working-directory: web
-      - name: GCC 15 #embed compile and smoke test
+      - name: GCC 15 #embed compile, tests and smoke test
         run: |
           docker run --rm -v "$PWD:/work" -w /work gcc:15 bash -euc '
             apt-get update -qq
@@ -49,5 +52,30 @@ jobs:
             cmake -S . -B out/build/ci-gcc15-embed -G Ninja -DCMAKE_BUILD_TYPE=Release -DEDGEDESK_WEB_MODE=embed -DEDGEDESK_BUILD_WEB=OFF
             cmake --build out/build/ci-gcc15-embed --parallel 3
             ctest --test-dir out/build/ci-gcc15-embed --output-on-failure
-            bash scripts/smoke.sh out/build/ci-gcc15-embed/bin/edgedesk 19092 web/dist
+            bash scripts/integration_test.sh out/build/ci-gcc15-embed/bin/edgedesk 19092 web/dist
           '
+
+  arm64-cross:
+    # Real AArch64 cross build (Ubuntu glibc cross toolchain) executed under
+    # qemu-user-static: disk resource mode only (GCC 13 cross compiler).
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross toolchain and qemu
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq g++-aarch64-linux-gnu qemu-user-static python3
+      - name: Cross build (disk resources)
+        run: |
+          cmake -S . -B out/build/arm64-disk -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DEDGEDESK_WEB_MODE=disk -DEDGEDESK_BUILD_WEB=OFF \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+            -DEDGEDESK_TOOLCHAIN_ROOT=/usr
+          cmake --build out/build/arm64-disk --parallel 3
+          file out/build/arm64-disk/bin/edgedesk
+      - name: Run integration tests under qemu
+        run: |
+          bash scripts/integration_test.sh out/build/arm64-disk/bin/edgedesk 19093 "" \
+            "/usr/bin/qemu-aarch64-static -L /usr/aarch64-linux-gnu"

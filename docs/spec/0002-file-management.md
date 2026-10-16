@@ -17,7 +17,7 @@
 | 删除 | 支持单项与批量删除，目录递归删除应有明确确认及范围限制 |
 | 路径范围 | 所有文件操作受配置文件根目录约束，防止路径穿越、符号链接逃逸及目录切换竞态 |
 
-原始 API 草案：`POST /file/mkdir`、`POST /file/rename`、`POST /file/delete`。其他端点命名、HTTP 方法和响应格式仍需统一定案。
+原始 API 草案：`POST /file/mkdir`、`POST /file/rename`、`POST /file/delete`。V1.0 实际端点见 [API 文档](../api.md)。
 
 ## 文件管理工作区
 

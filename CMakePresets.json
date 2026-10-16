@@ -13,6 +13,16 @@
       }
     },
     {
+      "name": "release-disk",
+      "displayName": "Release (disk assets, GCC 15+)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/release-disk",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "EDGEDESK_WEB_MODE": "disk"
+      }
+    },
+    {
       "name": "release-embed",
       "displayName": "Release (GCC 15+ #embed)",
       "generator": "Ninja",
@@ -37,11 +47,14 @@
   ],
   "buildPresets": [
     {"name": "dev-disk", "configurePreset": "dev-disk"},
+    {"name": "release-disk", "configurePreset": "release-disk"},
     {"name": "release-embed", "configurePreset": "release-embed"},
     {"name": "host-offline-tests", "configurePreset": "host-offline-tests"}
   ],
   "testPresets": [
     {"name": "dev-disk", "configurePreset": "dev-disk", "output": {"outputOnFailure": true}},
+    {"name": "release-disk", "configurePreset": "release-disk", "output": {"outputOnFailure": true}},
+    {"name": "release-embed", "configurePreset": "release-embed", "output": {"outputOnFailure": true}},
     {"name": "host-offline-tests", "configurePreset": "host-offline-tests", "output": {"outputOnFailure": true}}
   ]
 }

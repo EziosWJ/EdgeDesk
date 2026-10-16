@@ -6,6 +6,10 @@ compile_commands.json
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo
+# Runtime logs
+libhv.*.log
+*.log
+
 # Local
 .idea/
 .vscode/

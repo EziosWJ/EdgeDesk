@@ -5,8 +5,10 @@
 ## 单一事实来源
 
 - `docs/spec/` = 已确认的用户可见行为；`docs/adr/` = 已接受的技术决策或提案，注意区分其状态。
-- `docs/phase1.md` = 当前实现与测试。不要将原型截图当作功能已完成的证据。
-- React 仅是 **Phase 1 引导阶段的实现选择**；在宣布产品决策之前，其长期采用、UI 工具包、认证系统以及超出已批准需求的 Shell 生命周期都必须先经过确认。
+- `docs/architecture.md`（模块/线程/资源边界）、`docs/api.md`（HTTP 与 WS 协议）、
+  `docs/config.md`（配置项与部署）、`docs/testing.md`（验证矩阵）描述当前实现。
+- `docs/phase1.md` 是历史骨架记录；不要将其当作当前功能范围。
+- React + TypeScript + Vite 与 xterm.js 已确认为前端基线（ADR-0001）；不要再讨论替换。
 
 ## 固定的技术边界
 
@@ -19,17 +21,24 @@
 
 | 目录 | 归属 |
 | --- | --- |
-| `src/app/config.*` | CLI 配置与校验；不得包含 libhv 类型 |
-| `src/app/asset_provider.*` | 只读的静态前端资源；不得包含 HTTP 类型 |
-| `src/app/http_server.*` | libhv 路由与传输适配器；不得包含 Linux 业务逻辑 |
-| `src/main.cpp` | 仅作为入口点 |
+| `src/core/` | 配置、错误、工具、FD；不得包含 libhv 类型 |
+| `src/file/` | PathSandbox 与 FileService；所有路径安全只在这里实现 |
+| `src/terminal/` | PTY、会话、管理器、CommandGuard；路由不得直接 forkpty/kill/waitpid |
+| `src/system/` | /proc、/sys、statvfs 采集与采样服务 |
+| `src/security/` | 认证、限流、审计 |
+| `src/web/` | 静态资源抽象（磁盘 / #embed） |
+| `src/http/` | libhv 路由、中间件与协议适配；不包含设备业务逻辑 |
+| `src/app/` | 入口与进程级装配；main.cpp 仅作为入口点 |
 | `tools/` | 构建期生成器与测试 |
 | `web/src/` | React UI；不得调用不安全的系统命令 |
 | `web/public/assets/` | 源 SVG 资源；切勿在 Git 中修改生成的 dist |
 | `docs/spec/`, `docs/adr/` | 契约 / 决策 |
 | `tests/` | 确定性的原生测试 |
 
-未来的文件操作归属于 `FileService` 及其 OS 适配器；PTY 会话归属于 `TerminalSessionManager`；指标归属于 `HardwareMonitorService`。路由处理器只负责适配协议输入/输出。
+
+已实现：`FileService`（`src/file/`）、`TerminalSessionManager`（`src/terminal/`）、
+`SystemMetrics`（`src/system/`）、认证/限流/审计（`src/security/`）。路由处理器只负责
+适配协议输入/输出；不得在路由里实现路径校验、PTY 管理或指标采集。
 
 ## 强制性编码约束
 
@@ -46,8 +55,14 @@
 
 ## 每个任务的完成标准
 
-- 运行相关的测试/构建命令，如实报告确切的成功与失败。
-- 针对行为或 API 的变化更新文档。不得编造截图、基准测试或硬件测试结论。
+- 运行相关的测试/构建命令，如实报告确切的成功与失败：
+  - 原生：`cmake --preset host-offline-tests && cmake --build --preset host-offline-tests && ctest --preset host-offline-tests`
+  - 服务端：`cmake --build --preset dev-disk` + `ctest --preset dev-disk`
+  - 端到端：`bash scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19091 web/dist`
+  - 前端：`cd web && npm run build && npm test`
+  - Embed：`scripts/with-gcc15.sh all release-embed`
+- 针对行为或 API 的变化更新文档（`docs/api.md`、`docs/config.md`、`docs/architecture.md`、`docs/testing.md`）。
+- 不得编造截图、基准测试或硬件测试结论；未运行的平台在 `docs/testing.md` 中标注为未验证。
 - 确保生成的 `out/`、`web/dist/`、`web/node_modules/` 不进入 Git。
 - Phase 1 API 契约：`GET /api/health` => HTTP 200 JSON，且 `status=ok`、`service=edgedesk`、`phase=1`。
 - 所有后续功能在标记为完成之前，都应有针对具体议题的验收测试。

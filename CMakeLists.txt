@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(EdgeDesk VERSION 0.1.0 LANGUAGES C CXX)
+project(EdgeDesk VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,13 +31,13 @@ if(EDGEDESK_STATIC_PIE)
 endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+find_package(Threads REQUIRED)
 set(EDGEDESK_FRONTEND_DIR "${CMAKE_SOURCE_DIR}/web")
 set(EDGEDESK_DIST_DIR "${EDGEDESK_FRONTEND_DIR}/dist")
 
 if(EDGEDESK_BUILD_WEB)
   find_program(NPM_EXECUTABLE npm REQUIRED)
   add_custom_target(web_build
-    COMMAND ${NPM_EXECUTABLE} install --no-audit --no-fund
     COMMAND ${NPM_EXECUTABLE} run build
     WORKING_DIRECTORY "${EDGEDESK_FRONTEND_DIR}"
     COMMENT "Build EdgeDesk frontend (React + Vite)"
@@ -45,14 +45,44 @@ if(EDGEDESK_BUILD_WEB)
   )
 endif()
 
+# Library with all non-network modules: core, file, terminal, system, security,
+# web assets. Tests link this target without pulling in libhv.
 add_library(edgedesk_core STATIC
-  src/app/config.cpp
-  src/app/asset_provider.cpp
+  src/core/config.cpp
+  src/core/error.cpp
+  src/core/fd.cpp
+  src/core/types.cpp
+  src/core/util.cpp
+  src/file/file_service.cpp
+  src/file/file_types.cpp
+  src/file/path_sandbox.cpp
+  src/security/audit.cpp
+  src/security/auth.cpp
+  src/security/rate_limiter.cpp
+  src/system/cpu_metrics.cpp
+  src/system/disk_metrics.cpp
+  src/system/memory_metrics.cpp
+  src/system/network_metrics.cpp
+  src/system/system_metrics.cpp
+  src/terminal/command_guard.cpp
+  src/terminal/pty.cpp
+  src/terminal/terminal_manager.cpp
+  src/terminal/terminal_session.cpp
+  src/web/web_root.cpp
 )
 target_include_directories(edgedesk_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
 target_compile_features(edgedesk_core PUBLIC cxx_std_17)
 target_compile_options(edgedesk_core PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(edgedesk_core PRIVATE EDGEDESK_DISK_DEFAULT_DIR="${EDGEDESK_WEB_ROOT}")
+target_link_libraries(edgedesk_core PUBLIC Threads::Threads)
+if(UNIX AND NOT APPLE)
+  # forkpty lives in libutil on glibc and in libc on musl.
+  include(CheckLibraryExists)
+  check_library_exists(util forkpty "" EDGEDESK_HAVE_LIBUTIL)
+  if(EDGEDESK_HAVE_LIBUTIL)
+    target_link_libraries(edgedesk_core PUBLIC util)
+  endif()
+endif()
 
 if(EDGEDESK_WEB_MODE STREQUAL "embed")
   set(GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
@@ -78,11 +108,22 @@ endif()
 
 if(EDGEDESK_BUILD_SERVER)
   include(cmake/Libhv.cmake)
-  add_executable(edgedesk src/main.cpp src/app/http_server.cpp)
+  add_executable(edgedesk
+    src/app/main.cpp
+    src/app/application.cpp
+    src/http/http_util.cpp
+    src/http/middleware.cpp
+    src/http/server.cpp
+    src/http/routes/auth_route.cpp
+    src/http/routes/file_route.cpp
+    src/http/routes/health_route.cpp
+    src/http/routes/system_route.cpp
+    src/http/routes/terminal_route.cpp
+  )
   target_link_libraries(edgedesk PRIVATE edgedesk_core hv_static)
   # libhv v1.3.4 exports the static target but keeps several C API headers
   # in source subdirectories rather than an installed include tree.
-  target_include_directories(edgedesk PRIVATE
+  target_include_directories(edgedesk SYSTEM PRIVATE
     "${libhv_SOURCE_DIR}"
     "${libhv_SOURCE_DIR}/http/server" "${libhv_SOURCE_DIR}/http"
     "${libhv_SOURCE_DIR}/ssl" "${libhv_SOURCE_DIR}/event"
@@ -98,9 +139,25 @@ endif()
 
 if(EDGEDESK_BUILD_TESTS)
   enable_testing()
-  add_executable(edgedesk_core_test tests/core_test.cpp)
-  target_link_libraries(edgedesk_core_test PRIVATE edgedesk_core)
-  add_test(NAME core_test COMMAND edgedesk_core_test)
+  set(EDGEDESK_TEST_TARGETS
+    core_test:core/core_test.cpp
+    path_sandbox_test:file/path_sandbox_test.cpp
+    file_service_test:file/file_service_test.cpp
+    command_guard_test:terminal/command_guard_test.cpp
+    terminal_session_test:terminal/terminal_session_test.cpp
+    system_metrics_test:system/system_metrics_test.cpp
+  )
+  foreach(entry IN LISTS EDGEDESK_TEST_TARGETS)
+    string(REPLACE ":" ";" pair "${entry}")
+    list(GET pair 0 test_name)
+    list(GET pair 1 test_source)
+    add_executable(${test_name} "tests/${test_source}")
+    target_include_directories(${test_name} PRIVATE "${CMAKE_SOURCE_DIR}/tests")
+    target_link_libraries(${test_name} PRIVATE edgedesk_core)
+    target_compile_features(${test_name} PRIVATE cxx_std_17)
+    target_compile_options(${test_name} PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME ${test_name} COMMAND ${test_name})
+  endforeach()
   add_test(NAME embed_generator_test
     COMMAND ${Python3_EXECUTABLE} -m unittest discover -s "${CMAKE_SOURCE_DIR}/tools/tests" -p "test_*.py")
 endif()
