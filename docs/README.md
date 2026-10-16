@@ -2,6 +2,12 @@
 
 > 所有文档用于记录已确认的决策、需求与待确认问题。文档完成 != 功能完成。严禁 Agent 将原项目中已实现的功能视为 EdgeDesk 仓库已实现。
 
+## 工程阶段与开发约束
+
+- [Phase 1 目录架构、构建命令与验证矩阵](phase1.md)
+- [Coding Agent 开发规范](../AGENTS.md)
+- [CI 验证](https://github.com/EziosWJ/EdgeDesk/actions)
+
 ## ADR（为什么这样做）
 
 | 文档 | 内容 | 状态 |

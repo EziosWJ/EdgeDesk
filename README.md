@@ -2,7 +2,7 @@
 
 面向嵌入式与边缘 Linux 设备的轻量 Web 运维工作台。
 
-> 当前仓库处于**需求与架构设计阶段**。本文及 docs 下的 Spec/ADR 记录已确认的产品决策和实现约束，**不表示代码已经实现**。
+> 当前完成 **Phase 1 工程骨架**（C++/libhv HTTP、React 前端、静态资源嵌入构建、测试与 CI）。文件管理、Bash PTY 和硬件仪表盘的业务逻辑**尚未实现**；功能范围以 Spec/ADR 为准。
 
 ## V1.0 核心能力
 
@@ -10,6 +10,25 @@
 - Web Bash 终端：交互式登录环境、多终端 Tab，切换 Tab、页面导航和浏览器刷新不结束后端会话。
 - 设备仪表盘：CPU、内存、磁盘、网络基础指标及短时间实时曲线。
 - 文件管理工作区：终端和编辑器可作为多个可拖拽、可缩放的浮动窗口打开。
+
+## Phase 1 快速开始
+
+```sh
+git clone https://github.com/EziosWJ/EdgeDesk.git
+cd EdgeDesk
+cd web && npm install && npm run build && cd ..
+cmake --preset dev-disk
+cmake --build --preset dev-disk
+ctest --preset dev-disk
+./out/build/dev-disk/bin/edgedesk --web-root web/dist
+# 浏览器打开 http://127.0.0.1:8080
+```
+
+> Phase 1 暂无身份认证，因此**仅允许监听本机回环地址**。正式 `#embed` 构建使用 GCC 15+：`cmake --preset release-embed && cmake --build --preset release-embed`。交叉编译和 musl 静态链接须使用对应工具链验证。
+
+- [Phase 1 架构、目录、构建、验收](docs/phase1.md)
+- [Coding Agent 强制约束](AGENTS.md)
+- [GitHub Actions 验证](https://github.com/EziosWJ/EdgeDesk/actions)
 
 ## 已确认技术基线
 
