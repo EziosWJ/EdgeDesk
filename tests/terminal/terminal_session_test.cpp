@@ -117,11 +117,24 @@ void test_login_bash() {
 
     CHECK(session->running());
 
-    // Resize goes through TIOCSWINSZ.
+    // Resize goes through TIOCSWINSZ; the kernel updates the PTY size
+    // immediately, but bash may be busy, so poll a few times before failing.
     Error error = session->resize(120, 40);
     CHECK(error.ok());
-    session->send_raw("echo \"SIZE=$(stty size)\"\r");
-    CHECK(collector.wait_for("SIZE=40 120"));
+    const auto resized_info = session->info();
+    CHECK_EQ(resized_info.cols, static_cast<unsigned short>(120));
+    CHECK_EQ(resized_info.rows, static_cast<unsigned short>(40));
+    bool saw_size = false;
+    for (int attempt = 0; attempt < 6 && !saw_size; ++attempt) {
+        session->send_raw("echo \"SIZE=$(stty size)\"\r");
+        saw_size = collector.wait_for("SIZE=40 120", 2000);
+    }
+    if (!saw_size) {
+        const auto tail = collector.snapshot();
+        std::fprintf(stderr, "resize diagnostic, output tail: %s\n",
+                     tail.substr(tail.size() > 400 ? tail.size() - 400 : 0).c_str());
+    }
+    CHECK(saw_size);
 
     // The session survives a subscriber disconnect (reconnect gets the replay).
     const auto replay = session->replay_buffer();
