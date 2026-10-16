@@ -71,10 +71,10 @@ jobs:
           tar xJf toolchain.tar.xz
       - name: Cross build (static-pie)
         run: |
+          export EDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/musl/x86-64--musl--stable-2024.05-1"
           cmake -S . -B out/build/x86_64-musl -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DEDGEDESK_WEB_MODE=disk -DEDGEDESK_BUILD_WEB=OFF -DEDGEDESK_STATIC_PIE=ON \
-            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/x86_64-linux-musl.cmake \
-            -DEDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/musl/x86-64--musl--stable-2024.05-1"
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/x86_64-linux-musl.cmake
           cmake --build out/build/x86_64-musl --parallel 3
           file out/build/x86_64-musl/bin/edgedesk
       - name: Unit tests (static musl binaries)
@@ -127,10 +127,10 @@ jobs:
       - name: Cross build (disk resources)
         run: |
           export LD_LIBRARY_PATH="$HOME/opt/arm64/hostlibs"
+          export EDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/arm64/root"
           cmake -S . -B out/build/arm64-disk -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DEDGEDESK_WEB_MODE=disk -DEDGEDESK_BUILD_WEB=OFF \
-            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
-            -DEDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/arm64/root"
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake
           cmake --build out/build/arm64-disk --parallel 3
           file out/build/arm64-disk/bin/edgedesk
       - name: Run integration tests under qemu

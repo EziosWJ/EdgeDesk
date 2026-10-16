@@ -10,8 +10,15 @@
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 
+# Resolution order: -DEDGEDESK_TOOLCHAIN_ROOT, then the environment variable of
+# the same name (CMake's compiler-test sub-projects do not inherit -D cache
+# variables, but they do inherit the environment), then the default location.
 if(NOT DEFINED EDGEDESK_TOOLCHAIN_ROOT)
-  set(EDGEDESK_TOOLCHAIN_ROOT "$ENV{HOME}/opt/arm-linux-musleabihf-cross" CACHE PATH "musl cross toolchain root")
+  if(DEFINED ENV{EDGEDESK_TOOLCHAIN_ROOT} AND NOT "$ENV{EDGEDESK_TOOLCHAIN_ROOT}" STREQUAL "")
+    set(EDGEDESK_TOOLCHAIN_ROOT "$ENV{EDGEDESK_TOOLCHAIN_ROOT}" CACHE PATH "Cross toolchain root")
+  else()
+    set(EDGEDESK_TOOLCHAIN_ROOT "$ENV{HOME}/opt/arm-linux-musleabihf-cross" CACHE PATH "Cross toolchain root")
+  endif()
 endif()
 
 set(CMAKE_C_COMPILER "${EDGEDESK_TOOLCHAIN_ROOT}/bin/arm-linux-musleabihf-gcc")

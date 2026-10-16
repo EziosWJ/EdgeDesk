@@ -19,8 +19,15 @@
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
+# Resolution order: -DEDGEDESK_TOOLCHAIN_ROOT, then the environment variable of
+# the same name (CMake's compiler-test sub-projects do not inherit -D cache
+# variables, but they do inherit the environment), then the default location.
 if(NOT DEFINED EDGEDESK_TOOLCHAIN_ROOT)
-  set(EDGEDESK_TOOLCHAIN_ROOT "$ENV{HOME}/opt/musl/x86_64-linux-musl-cross" CACHE PATH "musl cross toolchain root")
+  if(DEFINED ENV{EDGEDESK_TOOLCHAIN_ROOT} AND NOT "$ENV{EDGEDESK_TOOLCHAIN_ROOT}" STREQUAL "")
+    set(EDGEDESK_TOOLCHAIN_ROOT "$ENV{EDGEDESK_TOOLCHAIN_ROOT}" CACHE PATH "Cross toolchain root")
+  else()
+    set(EDGEDESK_TOOLCHAIN_ROOT "$ENV{HOME}/opt/musl/x86_64-linux-musl-cross" CACHE PATH "Cross toolchain root")
+  endif()
 endif()
 
 set(_edgedesk_cc_names x86_64-linux-musl-gcc x86_64-linux-gcc x86_64-buildroot-linux-musl-gcc)
