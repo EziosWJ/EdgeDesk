@@ -1,0 +1,15 @@
+# C++
+out/
+build/
+compile_commands.json
+# Web
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+# Local
+.idea/
+.vscode/
+.DS_Store
+*.swp
+__pycache__/
+*.pyc

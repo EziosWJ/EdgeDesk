@@ -1,0 +1,30 @@
+name: Phase 1 CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  host-build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
+        working-directory: web
+      - name: Build React frontend
+        run: npm run build
+        working-directory: web
+      - name: Configure C++ host build (disk resources)
+        run: cmake --preset dev-disk -DEDGEDESK_BUILD_WEB=OFF
+      - name: Build C++ and libhv
+        run: cmake --build --preset dev-disk
+      - name: Unit tests
+        run: ctest --preset dev-disk
+      - name: HTTP smoke test
+        run: bash scripts/smoke.sh out/build/dev-disk/bin/edgedesk 19091 web/dist

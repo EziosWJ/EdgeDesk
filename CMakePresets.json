@@ -1,0 +1,47 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {"major": 3, "minor": 24, "patch": 0},
+  "configurePresets": [
+    {
+      "name": "dev-disk",
+      "displayName": "Debug (disk assets, host GCC)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/dev-disk",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "EDGEDESK_WEB_MODE": "disk"
+      }
+    },
+    {
+      "name": "release-embed",
+      "displayName": "Release (GCC 15+ #embed)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/release-embed",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "EDGEDESK_WEB_MODE": "embed"
+      }
+    },
+    {
+      "name": "host-offline-tests",
+      "displayName": "Core-only tests (no network / no npm)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/host-offline-tests",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "EDGEDESK_WEB_MODE": "disk",
+        "EDGEDESK_BUILD_SERVER": "OFF",
+        "EDGEDESK_BUILD_WEB": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {"name": "dev-disk", "configurePreset": "dev-disk"},
+    {"name": "release-embed", "configurePreset": "release-embed"},
+    {"name": "host-offline-tests", "configurePreset": "host-offline-tests"}
+  ],
+  "testPresets": [
+    {"name": "dev-disk", "configurePreset": "dev-disk", "output": {"outputOnFailure": true}},
+    {"name": "host-offline-tests", "configurePreset": "host-offline-tests", "output": {"outputOnFailure": true}}
+  ]
+}
