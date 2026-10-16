@@ -1,53 +1,53 @@
-# EdgeDesk Coding Agent Operating Rules
+# EdgeDesk 编码 Agent 运行规则
 
-Read this file **before changing code**, then read the relevant file in `docs/spec` and `docs/adr`.
+在**修改代码之前**先阅读本文件，然后阅读 `docs/spec` 和 `docs/adr` 中相关的文件。
 
-## Single source of truth
+## 单一事实来源
 
-- `docs/spec/` = confirmed user-visible behavior; `docs/adr/` = accepted technical decisions or proposals, distinguish status.
-- `docs/phase1.md` = current implementation and tests. Do not treat prototype screenshots as proof of completed features.
-- React is only an **implementation choice for the Phase 1 bootstrap**; its permanent adoption, UI toolkit, authentication system, and Shell lifecycle beyond approved requirements must be confirmed before declaring product decisions.
+- `docs/spec/` = 已确认的用户可见行为；`docs/adr/` = 已接受的技术决策或提案，注意区分其状态。
+- `docs/phase1.md` = 当前实现与测试。不要将原型截图当作功能已完成的证据。
+- React 仅是 **Phase 1 引导阶段的实现选择**；在宣布产品决策之前，其长期采用、UI 工具包、认证系统以及超出已批准需求的 Shell 生命周期都必须先经过确认。
 
-## Fixed technology boundaries
+## 固定的技术边界
 
-- Backend: C++17, libhv v1.3.4 pinned, GCC 15+ Linux release; musl static link is a target and requires a matching toolchain.
-- Resource mode: GCC 15 `#embed` in Release, disk mode for local development. Never replace it with huge generated `0xNN` C++ arrays.
-- Frontend Phase 1: React + TypeScript + Vite, using `web/public/assets` and tokens from `web/src/styles/edgedesk-tokens.css`.
-- No database, ORM, Node runtime on the device, or unnecessary third-party framework.
+- 后端：C++17，锁定 libhv v1.3.4，GCC 15+ Linux Release；musl 静态链接是目标，需要匹配的工具链。
+- 资源模式：Release 下使用 GCC 15 `#embed`，本地开发使用磁盘模式。切勿用大量生成的 `0xNN` C++ 数组替代。
+- 前端 Phase 1：React + TypeScript + Vite，使用 `web/public/assets` 和来自 `web/src/styles/edgedesk-tokens.css` 的 token。
+- 不使用数据库、ORM、设备上的 Node 运行时，也不引入不必要的第三方框架。
 
-## Directory ownership
+## 目录归属
 
-| Directory | Ownership |
+| 目录 | 归属 |
 | --- | --- |
-| `src/app/config.*` | CLI config and validation; no libhv types |
-| `src/app/asset_provider.*` | Read-only static frontend resources; no HTTP types |
-| `src/app/http_server.*` | libhv routes and transport adapter; no Linux business logic |
-| `src/main.cpp` | entry point only |
-| `tools/` | build-time generators and tests |
-| `web/src/` | React UI; must not call unsafe system commands |
-| `web/public/assets/` | source SVG assets; never edit generated dist in Git |
-| `docs/spec/`, `docs/adr/` | contracts / decisions |
-| `tests/` | deterministic native tests |
+| `src/app/config.*` | CLI 配置与校验；不得包含 libhv 类型 |
+| `src/app/asset_provider.*` | 只读的静态前端资源；不得包含 HTTP 类型 |
+| `src/app/http_server.*` | libhv 路由与传输适配器；不得包含 Linux 业务逻辑 |
+| `src/main.cpp` | 仅作为入口点 |
+| `tools/` | 构建期生成器与测试 |
+| `web/src/` | React UI；不得调用不安全的系统命令 |
+| `web/public/assets/` | 源 SVG 资源；切勿在 Git 中修改生成的 dist |
+| `docs/spec/`, `docs/adr/` | 契约 / 决策 |
+| `tests/` | 确定性的原生测试 |
 
-Future file operations belong in `FileService` and its OS adapter; PTY sessions in `TerminalSessionManager`; metrics in `HardwareMonitorService`. Route handlers only adapt protocol input/output.
+未来的文件操作归属于 `FileService` 及其 OS 适配器；PTY 会话归属于 `TerminalSessionManager`；指标归属于 `HardwareMonitorService`。路由处理器只负责适配协议输入/输出。
 
-## Mandatory coding constraints
+## 强制性编码约束
 
-1. Keep changes focused; never silently rewrite confirmed APIs or decisions.
-2. No global mutable business state, naked owning new/delete, or infinite unchecked queues/threads.
-3. Check all system call return values; use RAII for FD, PTY, socket and process lifecycle.
-4. All externally supplied paths must be validated. Future privileged file operations require directory-FD/path-race-safe design, not a `realpath`-only check.
-5. PTY Bash process must survive switching tabs, route changes and reload, independently of one WebSocket lifetime. Do not substitute `/bin/sh` for Bash or assume `.bashrc` is always loaded.
-6. **No public bind / credentials bypass:** Phase 1 binds loopback only. Do not expose 0.0.0.0 or add privileged endpoints before authentication, authorization, CSWSH protection, and transport security have been designed and tested.
-7. Never block the libhv event loop with unbounded filesystem, process or monitoring work.
-8. Keep static resource routing and device file management strictly separate.
-9. Distinguish host builds, cross-compilation and physical device tests; only claim what actually ran.
-10. New dependencies require justification, version pinning, license check and ARM/musl impact analysis.
+1. 保持改动聚焦；绝不在未声明的情况下重写已确认的 API 或决策。
+2. 不得使用全局可变业务状态、裸的所有权 new/delete，或无限且无检查的队列/线程。
+3. 检查所有系统调用的返回值；对 FD、PTY、socket 和进程生命周期使用 RAII。
+4. 所有外部提供的路径都必须校验。未来的特权文件操作需要基于目录 FD、能抵御路径竞态的设计，而不是仅靠 `realpath` 检查。
+5. PTY Bash 进程必须在切换标签页、路由变化和刷新后依然存活，且独立于单个 WebSocket 生命周期。不要用 `/bin/sh` 代替 Bash，也不要假设 `.bashrc` 总是被加载。
+6. **禁止公网绑定 / 绕过凭据：** Phase 1 仅绑定回环地址。在认证、授权、CSWSH 防护和传输安全经过设计并测试之前，不得暴露 0.0.0.0 或新增特权端点。
+7. 切勿用无界的文件系统、进程或监控工作阻塞 libhv 事件循环。
+8. 静态资源路由与设备文件管理必须严格分离。
+9. 区分宿主机构建、交叉编译和真机测试；只声明实际运行过的内容。
+10. 新增依赖需要理由说明、版本锁定、许可证检查以及 ARM/musl 影响分析。
 
-## Completion criteria for every task
+## 每个任务的完成标准
 
-- Run relevant test/build commands, report exact successes and failures.
-- Update docs for changed behavior or API. Do not fabricate screenshots, benchmarks, or hardware test claims.
-- Keep generated `out/`, `web/dist/`, `web/node_modules/` out of Git.
-- Phase 1 API contract: `GET /api/health` => HTTP 200 JSON with `status=ok`, `service=edgedesk`, `phase=1`.
-- All later features should have issue-specific acceptance tests before marking complete.
+- 运行相关的测试/构建命令，如实报告确切的成功与失败。
+- 针对行为或 API 的变化更新文档。不得编造截图、基准测试或硬件测试结论。
+- 确保生成的 `out/`、`web/dist/`、`web/node_modules/` 不进入 Git。
+- Phase 1 API 契约：`GET /api/health` => HTTP 200 JSON，且 `status=ok`、`service=edgedesk`、`phase=1`。
+- 所有后续功能在标记为完成之前，都应有针对具体议题的验收测试。
