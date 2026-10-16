@@ -80,7 +80,14 @@ if(EDGEDESK_BUILD_SERVER)
   include(cmake/Libhv.cmake)
   add_executable(edgedesk src/main.cpp src/app/http_server.cpp)
   target_link_libraries(edgedesk PRIVATE edgedesk_core hv_static)
-  target_include_directories(edgedesk PRIVATE "${libhv_SOURCE_DIR}/http/server" "${libhv_SOURCE_DIR}/http")
+  # libhv v1.3.4 exports the static target but keeps several C API headers
+  # in source subdirectories rather than an installed include tree.
+  target_include_directories(edgedesk PRIVATE
+    "${libhv_SOURCE_DIR}"
+    "${libhv_SOURCE_DIR}/http/server" "${libhv_SOURCE_DIR}/http"
+    "${libhv_SOURCE_DIR}/ssl" "${libhv_SOURCE_DIR}/event"
+    "${libhv_SOURCE_DIR}/base" "${libhv_SOURCE_DIR}/util"
+    "${libhv_SOURCE_DIR}/cpputil" "${libhv_SOURCE_DIR}/evpp")
   target_compile_features(edgedesk PRIVATE cxx_std_17)
   target_compile_options(edgedesk PRIVATE -Wall -Wextra -Wpedantic)
   set_target_properties(edgedesk PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
