@@ -28,3 +28,26 @@ jobs:
         run: ctest --preset dev-disk
       - name: HTTP smoke test
         run: bash scripts/smoke.sh out/build/dev-disk/bin/edgedesk 19091 web/dist
+
+  gcc15-embed:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build React dist for embedding
+        run: npm install --no-audit --no-fund && npm run build
+        working-directory: web
+      - name: GCC 15 #embed compile and smoke test
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work gcc:15 bash -euc '
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake ninja-build python3 git curl >/dev/null
+            cmake -S . -B out/build/ci-gcc15-embed -G Ninja -DCMAKE_BUILD_TYPE=Release -DEDGEDESK_WEB_MODE=embed -DEDGEDESK_BUILD_WEB=OFF
+            cmake --build out/build/ci-gcc15-embed --parallel 3
+            ctest --test-dir out/build/ci-gcc15-embed --output-on-failure
+            bash scripts/smoke.sh out/build/ci-gcc15-embed/bin/edgedesk 19092 web/dist
+          '
