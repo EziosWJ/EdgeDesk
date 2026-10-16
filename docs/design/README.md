@@ -1,5 +1,6 @@
 # EdgeDesk UI 设计资产
 
+- [浏览器素材画廊](asset-gallery.html)：无需构建即可查看独立 SVG 的显示效果
 - [素材使用指南](asset-usage.md)：路径、资源清单、React 引用、打包与验收
 - [原型实现规范](prototype-guidelines.md)：四页原型拆解、视觉 Token、功能/展示边界
 
