@@ -25,6 +25,12 @@
 - [素材引用与 #embed 打包说明](design/asset-usage.md)
 - [四页原型拆解及视觉规范](design/prototype-guidelines.md)
 
+## 开发环境（宿主机构建）
+
+| 文档 | 内容 | 状态 |
+| --- | --- | --- |
+| [本地 GCC 15 工具链（免 sudo）](dev/gcc15-local-toolchain.md) | Ubuntu 24.04 上用 `scripts/install-gcc15-local.sh` 安装 GCC 15 到用户目录，`scripts/with-gcc15.sh` 用于 `release-embed` 构建 | 已验证（2026-10-16） |
+
 ## 关键待确认项（不要擅自定案）
 
 - 前端是否正式使用 React，是否采用 xterm.js。

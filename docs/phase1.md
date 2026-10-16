@@ -62,6 +62,8 @@ curl -i http://127.0.0.1:8080/api/health
 bash scripts/smoke.sh out/build/dev-disk/bin/edgedesk 19091 web/dist
 ```
 
+**Note on local GCC 15:** if the host only ships GCC 13/14 (for example Ubuntu 24.04), `scripts/install-gcc15-local.sh` installs GCC 15 into a user directory without root, and `scripts/with-gcc15.sh all [preset]` configures, builds and tests with it. See [Local GCC 15 toolchain (no sudo)](dev/gcc15-local-toolchain.md).
+
 **Note on package lock:** Due to offline initial bootstrap the repository does not ship a verified npm lockfile. Once npm has network access, run `cd web && npm install`, verify `npm run build`, then commit the generated `web/package-lock.json` before CI uses `npm ci`. CMake currently runs `npm install` to permit this initial bootstrap; switch to `npm ci` after committing the lockfile.
 
 ### Native core checks without npm, libhv, or GCC 15
