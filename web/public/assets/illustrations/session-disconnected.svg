@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="156" viewBox="0 0 240 156" fill="none" >
+<title>终端暂时断开</title>
+<rect x="29" y="25" width="184" height="103" rx="12" fill="#1D3049" stroke="#52749E" stroke-width="2"/>
+<path d="M29 48h184" stroke="#52749E" stroke-width="2"/><circle cx="46" cy="37" r="4" fill="#54B9F9"/><circle cx="60" cy="37" r="4" fill="#617D9D"/>
+<path d="m55 73 17 13-17 13M84 100h18" stroke="#7BA6CE" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="m144 74-11 11 11 11m20-22 11 11-11 11M151 104l13-38" stroke="#F5BC72" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

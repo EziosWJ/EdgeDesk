@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none" >
+<title>EdgeDesk 标识</title>
+<path d="M31.5 4 58 18.5 31.5 33 5 18.5 31.5 4Z" fill="#40C2F6"/>
+<path d="M5 24 26.2 36.2V47L40 54.5 31.5 60 5 45.4V24Z" fill="#328FF8"/>
+<path d="m58 24-20.5 11.8V47L49 40.7V34l9-5.1V44L31.5 60l-8.3-4.6L58 35V24Z" fill="#318EF0"/>
+<path d="m31.5 18.5 12.5 7.2-12.5 7.1-12.4-7.1 12.4-7.2Z" fill="#5BD7FC"/>
+<path d="m5 18.5 26.5 14.6L58 18.5M31.5 4 5 18.5v26.9L31.5 60 58 44.1V18.5L31.5 4Z" stroke="#091626" stroke-width="2.5" stroke-linejoin="round"/>
+<path d="m19.1 25.7 12.4-7.2L44 25.7m-12.5 7.4v9.6" stroke="#091626" stroke-width="2.5" stroke-linejoin="round"/>
+<circle cx="49.8" cy="45.4" r="3" fill="#0D2138"/>
+</svg>

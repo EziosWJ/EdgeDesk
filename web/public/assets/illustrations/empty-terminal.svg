@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="156" viewBox="0 0 240 156" fill="none" >
+<title>暂无终端会话</title>
+<ellipse cx="120" cy="137" rx="83" ry="9" fill="#091829" opacity=".65"/>
+<rect x="27" y="24" width="185" height="105" rx="12" fill="#1D3049" stroke="#52749E" stroke-width="2"/>
+<path d="M27 49h185" stroke="#52749E" stroke-width="2"/>
+<circle cx="45" cy="37" r="4" fill="#43BDFA"/><circle cx="59" cy="37" r="4" fill="#58D9AB"/><circle cx="73" cy="37" r="4" fill="#667C9A"/>
+<path d="m53 73 19 14-19 14M81 101h26" stroke="#55D9B3" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M137 82h48M137 97h31" stroke="#6781A7" stroke-width="4" stroke-linecap="round" opacity=".8"/>
+</svg>

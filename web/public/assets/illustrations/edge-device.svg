@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="176" viewBox="0 0 256 176" fill="none" >
+<title>边缘设备插画</title>
+<defs><linearGradient id="top" x1="90" y1="13" x2="222" y2="86" gradientUnits="userSpaceOnUse"><stop stop-color="#3C4960"/><stop offset="1" stop-color="#1F2B3C"/></linearGradient><linearGradient id="side" x1="196" y1="71" x2="244" y2="139" gradientUnits="userSpaceOnUse"><stop stop-color="#28364D"/><stop offset="1" stop-color="#152337"/></linearGradient><linearGradient id="front" x1="38" y1="75" x2="185" y2="161" gradientUnits="userSpaceOnUse"><stop stop-color="#2F3D53"/><stop offset="1" stop-color="#172539"/></linearGradient><filter id="shadow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="8"/></filter></defs>
+<ellipse cx="130" cy="151" rx="103" ry="13" fill="#091729" opacity=".6" filter="url(#shadow)"/>
+<path d="m26 71 125-54c9-4 16-3 24 1l60 32c8 4 10 8 10 19v53c0 11-4 17-12 22l-57 27c-7 3-12 3-19 0L34 109c-8-4-10-9-10-18V80c0-4 1-7 2-9Z" fill="#1C293C" stroke="#485A74" stroke-width="2"/>
+<path d="m26 71 124-54c9-4 17-4 24 0l64 34c7 4 9 9 4 12l-72 39-144-31Z" fill="url(#top)"/>
+<path d="m170 102 72-39v61c0 9-4 14-12 19l-60 29v-70Z" fill="url(#side)"/>
+<path d="M26 71 170 102v70L35 110c-7-4-9-9-9-18V71Z" fill="url(#front)"/>
+<path d="m40 86 112 25v44L40 104V86Z" fill="#0C1726" stroke="#46556A" stroke-width="2" stroke-linejoin="round"/>
+<rect x="53" y="95" width="10" height="5" rx="2.5" transform="rotate(13 53 95)" fill="#35BDF0"/><rect x="53" y="106" width="10" height="5" rx="2.5" transform="rotate(13 53 106)" fill="#35BDF0"/>
+<rect x="74" y="102" width="8" height="5" rx="2.5" transform="rotate(13 74 102)" fill="#47DAAB"/><rect x="84" y="104" width="8" height="5" rx="2.5" transform="rotate(13 84 104)" fill="#47DAAB"/>
+<rect x="117" y="128" width="18" height="4" rx="2" transform="rotate(13 117 128)" fill="#38C4A7"/><circle cx="218" cy="104" r="3" fill="#39526F"/>
+<path d="m170 102 72-39M26 71l144 31" stroke="#61718A" stroke-opacity=".5" stroke-width="2"/>
+</svg>

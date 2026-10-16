@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="156" viewBox="0 0 240 156" fill="none" >
+<title>空目录</title>
+<ellipse cx="122" cy="136" rx="76" ry="10" fill="#0A1828" opacity=".65"/>
+<path d="M45 43c0-7 5-12 12-12h40l13 14h69c8 0 14 7 14 15v65H45V43Z" fill="#273A54" stroke="#58749B" stroke-width="2"/>
+<path d="M45 64h149l-14 67H29l16-67Z" fill="#1D67B2" stroke="#67B8F9" stroke-width="2" stroke-linejoin="round"/>
+<path d="M75 89h72" stroke="#8CD7FF" stroke-opacity=".65" stroke-width="4" stroke-linecap="round"/>
+<circle cx="177" cy="35" r="18" fill="#132B42" stroke="#3C9CE8"/><path d="M177 27v16M169 35h16" stroke="#68C8FC" stroke-width="2.6" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "product": "EdgeDesk",
+  "designSource": "2026-10-16 4 prototype screens",
+  "licenseNote": "Project-specific derivative vector artwork. Do not assume third-party icon licensing for these files.",
+  "paths": {
+    "base": "/assets/",
+    "logos": [
+      "brand/edgedesk-mark.svg",
+      "brand/edgedesk-mark-mono.svg"
+    ],
+    "illustrations": [
+      "illustrations/edge-device.svg",
+      "illustrations/empty-files.svg",
+      "illustrations/empty-terminal.svg",
+      "illustrations/monitor-unavailable.svg",
+      "illustrations/session-disconnected.svg"
+    ],
+    "decorations": [
+      "decorations/panel-grid.svg",
+      "decorations/dot-grid.svg"
+    ],
+    "icons": [
+      "icons/dashboard.svg",
+      "icons/files.svg",
+      "icons/terminal.svg",
+      "icons/sessions.svg",
+      "icons/settings.svg",
+      "icons/cpu.svg",
+      "icons/memory.svg",
+      "icons/disk.svg",
+      "icons/network.svg",
+      "icons/uptime.svg",
+      "icons/upload.svg",
+      "icons/download.svg",
+      "icons/edit.svg"
+    ]
+  },
+  "usage": "Treat these files as static assets under web/public; with Vite, refer to import.meta.env.BASE_URL + 'assets/...' (or /assets/... for root deployment)."
+}
