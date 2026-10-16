@@ -50,7 +50,7 @@ bash scripts/integration_test.sh out/build/arm64-disk/bin/edgedesk 19591 "" \
 | GCC 15 + musl + `#embed` 组合 | 需要 GCC 15 的 musl 交叉工具链 | **未验证**（预编译 musl 工具链当前最高 GCC 13.3；`#embed` 管线已在 glibc GCC 15.2 上验证，musl 静态链路已在 GCC 11.2 / 13.3 上验证，两者交集未验证） |
 | OpenHarmony ARM64 | 需要对应 SDK | **未验证** |
 | 真实设备（工控板/网关） | 目标硬件 | **未验证**（当前仅有 QEMU 运行证据） |
-| GitHub Actions CI | 本仓库 workflow（host / GCC15 embed / arm64-qemu 三个 job） | 已定义；**尚未在 Actions 上执行**（本地无推送权限），本地等价命令均已实际运行 |
+| GitHub Actions CI | 本仓库 workflow：host-build / gcc15-embed / arm64-cross / x86_64-musl-static 四个 job | **已执行并通过**（2026-10-16，main 分支；见仓库 Actions） |
 
 ### libhv 依赖的已知构建适配
 
@@ -62,8 +62,9 @@ libhv v1.3.4 的部分头文件依赖“隐式包含”（`struct stat`、fcntl 
 
 ### 已知缺口与诚实声明
 
-- **musl/static-pie 的最终发行验证**需要匹配的 GCC 15 musl 工具链；本机用 musl.cc
-  工具链验证（见下），但 musl.cc 当前版本不一定 ≥15，届时只能构建磁盘模式。
+- **musl/static-pie 的最终发行验证**需要匹配的 GCC 15 musl 工具链；本机与 CI 用
+  musl.cc（GCC 11.2）和 Bootlin（GCC 13.3）验证，预编译工具链当前最高 GCC 13，
+  因此 musl 目标目前只能构建磁盘模式。
 - **ARM32 与真实设备**没有运行证据；`cmake/toolchains/` 提供模板，
   不是“已成功”的声明。
 - 浏览器（Chrome/Firefox）手工交互未在本机执行；前端行为通过单元测试
