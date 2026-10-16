@@ -18,6 +18,13 @@
 | [SPEC-0003](spec/0003-terminal-workspace.md) | Bash、终端 Tab、刷新重连、浮动窗口 |
 | [SPEC-0004](spec/0004-device-dashboard.md) | 设备基本资源与实时曲线 |
 
+## 设计素材
+
+- [设计资源索引](design/README.md)
+- [浏览器素材画廊](design/asset-gallery.html)
+- [素材引用与 #embed 打包说明](design/asset-usage.md)
+- [四页原型拆解及视觉规范](design/prototype-guidelines.md)
+
 ## 关键待确认项（不要擅自定案）
 
 - 前端是否正式使用 React，是否采用 xterm.js。
