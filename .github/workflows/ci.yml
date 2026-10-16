@@ -56,23 +56,25 @@ jobs:
           '
 
   x86_64-musl-static:
-    # musl static-pie release target, disk resource mode (musl.cc ships GCC 11).
+    # musl static-pie release target, disk resource mode (prebuilt musl
+    # toolchains ship GCC 11-13; #embed needs GCC 15+).
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Fetch musl cross toolchain
+      - name: Fetch musl cross toolchain (Bootlin stable 2024.05)
         run: |
           mkdir -p "$HOME/opt/musl" && cd "$HOME/opt/musl"
-          curl -fsSL -o x86_64-linux-musl-cross.tgz https://musl.cc/x86_64-linux-musl-cross.tgz
-          tar xzf x86_64-linux-musl-cross.tgz
+          curl -fsSL --retry 3 -o toolchain.tar.xz \
+            "https://toolchains.bootlin.com/downloads/releases/toolchains/x86-64/tarballs/x86-64--musl--stable-2024.05-1.tar.xz"
+          tar xJf toolchain.tar.xz
       - name: Cross build (static-pie)
         run: |
           cmake -S . -B out/build/x86_64-musl -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DEDGEDESK_WEB_MODE=disk -DEDGEDESK_BUILD_WEB=OFF -DEDGEDESK_STATIC_PIE=ON \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/x86_64-linux-musl.cmake \
-            -DEDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/musl/x86_64-linux-musl-cross"
+            -DEDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/musl/x86-64--musl--stable-2024.05-1"
           cmake --build out/build/x86_64-musl --parallel 3
           file out/build/x86_64-musl/bin/edgedesk
       - name: Unit tests (static musl binaries)

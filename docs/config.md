@@ -25,7 +25,7 @@ audit-log = /var/lib/edgedesk/audit.log
 | `--host` | `127.0.0.1` | 监听地址。非回环地址必须显式提供访问密钥（文件/环境变量/`--auth-token`），否则启动失败。 |
 | `--port` | `8080` | 监听端口。 |
 | `--http-threads` | `1` | libhv 事件循环线程数。 |
-| `--web-root` | 构建期 `web/dist` | disk 模式的静态资源目录（embed 模式忽略）。 |
+| `--web-root` | 构建期 `web/dist` | disk 模式的静态资源目录（embed 模式忽略）。显式传入但不存在 → 启动失败；编译期默认目录缺失 → 启动告警，API/终端仍可用，Web UI 返回 404。 |
 | `--file-root` | `/` | 文件 API 沙箱根目录（必须是存在的绝对路径）。 |
 | `--follow-symlinks` | 关闭 | 打开后允许沙箱内符号链接解析；逃逸仍被拒绝。 |
 | `--max-upload-size` | `256M` | 单文件流式上传上限。 |

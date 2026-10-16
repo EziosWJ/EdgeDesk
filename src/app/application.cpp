@@ -19,6 +19,7 @@
 #include <iostream>
 #include <mutex>
 #include <pthread.h>
+#include <sys/stat.h>
 #include <stdexcept>
 #include <unistd.h>
 
@@ -101,6 +102,16 @@ void Application::initialize() {
 }
 
 void Application::print_banner() const {
+#if !EDGEDESK_EMBED_ASSETS
+    // Disk mode without assets still serves the API and terminals; the warning
+    // makes the missing UI explicit instead of failing startup.
+    struct stat info {};
+    if (config_.web_root.empty() || ::stat(config_.web_root.c_str(), &info) != 0) {
+        std::cerr << "WARNING: frontend directory not found (" << config_.web_root
+                  << "); API and terminal remain available, the web UI will return 404.\\n"
+                  << "         Point --web-root at a built web/dist directory to serve the UI.\\n";
+    }
+#endif
     if (config_.auth_token_ephemeral) {
         std::cout << "EdgeDesk access token (generated for this run): " << config_.auth_token << "\n"
                   << "  Use it on the login screen, or set --auth-token-file / EDGEDESK_AUTH_TOKEN to fix it.\n";

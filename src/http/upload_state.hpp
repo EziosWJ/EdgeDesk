@@ -1,6 +1,12 @@
 #pragma once
 
 #include "file/file_service.hpp"
+#include "terminal/terminal_session.hpp"
+
+// See http_util.hpp: libhv headers need the POSIX headers first.
+#include <fcntl.h>
+#include <sys/stat.h>
+
 #include "HttpMessage.h"
 
 #include <memory>

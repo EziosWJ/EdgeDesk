@@ -43,14 +43,22 @@ bash scripts/integration_test.sh out/build/arm64-disk/bin/edgedesk 19591 "" \
 | --- | --- | --- |
 | x86_64 Linux，磁盘模式（Debug/Release） | GCC 13.3（Ubuntu 24.04 系统编译器） | 通过（`dev-disk`） |
 | x86_64 Linux，`#embed` 单二进制 | GCC 15.2.0（用户目录安装，见 docs/dev/gcc15-local-toolchain.md） | 通过（`release-embed`，26 个 `#embed` 指令） |
-| x86_64 musl **static-pie** | musl.cc `x86_64-linux-musl-cross`（GCC 11.2.1），磁盘模式 | 通过（7 个单元测试可执行文件 + 全量集成测试） |
+| x86_64 musl **static-pie** | musl.cc `x86_64-linux-musl-cross`（GCC 11.2.1）**与** Bootlin `x86-64--musl--stable-2024.05-1`（GCC 13.3），磁盘模式 | 通过（两套工具链各自：7 个单元测试可执行文件 + 全量集成测试） |
 | AArch64（ARM64）Linux，磁盘模式 | Ubuntu cross `gcc-aarch64-linux-gnu` 13 + qemu-user-static 8.2.2 | 通过（编译 + 运行 + 全量集成测试，含 ARM64 Bash PTY） |
 | AArch64 musl **static-pie** | musl.cc `aarch64-linux-musl-cross`（GCC 11.2.1），磁盘模式 | 通过（qemu 下全量集成测试） |
 | ARM32（armv7 musl） | 需要 `arm-linux-musleabihf` 工具链 | **未验证**（本机未安装该工具链） |
-| GCC 15 + musl + `#embed` 组合 | 需要 GCC 15 的 musl 交叉工具链 | **未验证**（musl.cc 当前最高 GCC 11.2；`#embed` 管线已在 glibc GCC 15.2 上验证，musl 静态链路已在 GCC 11.2 上验证，两者交集未验证） |
+| GCC 15 + musl + `#embed` 组合 | 需要 GCC 15 的 musl 交叉工具链 | **未验证**（预编译 musl 工具链当前最高 GCC 13.3；`#embed` 管线已在 glibc GCC 15.2 上验证，musl 静态链路已在 GCC 11.2 / 13.3 上验证，两者交集未验证） |
 | OpenHarmony ARM64 | 需要对应 SDK | **未验证** |
 | 真实设备（工控板/网关） | 目标硬件 | **未验证**（当前仅有 QEMU 运行证据） |
 | GitHub Actions CI | 本仓库 workflow（host / GCC15 embed / arm64-qemu 三个 job） | 已定义；**尚未在 Actions 上执行**（本地无推送权限），本地等价命令均已实际运行 |
+
+### libhv 依赖的已知构建适配
+
+libhv v1.3.4 的部分头文件依赖“隐式包含”（`struct stat`、fcntl 标志、pthread 常量、
+`environ`）。glibc 工具链隐式提供这些声明；部分 musl 工具链（如 Bootlin GCC 13）
+不提供，且 musl 仅在 `_GNU_SOURCE` 下声明 `environ`。因此 `cmake/Libhv.cmake` 在
+**非 glibc** 目标上为 `hv_static` 追加 `-D_GNU_SOURCE` 与若干个 `-include` 标志
+（不改动固定的上游源码）；glibc 构建保持原有编译参数不变。
 
 ### 已知缺口与诚实声明
 

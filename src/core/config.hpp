@@ -18,6 +18,9 @@ struct Config {
 
     // static assets (disk mode only; embed mode ignores web_root)
     std::string web_root;
+    bool web_root_explicit = false; // set by --web-root; the compile-time
+                                    // default may legitimately be absent at
+                                    // deployment time (warning, not fatal)
 
     // file service
     std::string file_root = "/";

@@ -112,6 +112,7 @@ bool apply_option(Config& config, const std::string& name, const std::string& va
         config.http_threads = static_cast<int>(number);
     } else if (name == "web-root") {
         config.web_root = value;
+        config.web_root_explicit = true;
     } else if (name == "file-root") {
         if (value.empty() || value.front() != '/') {
             error = "--file-root must be an absolute path";
@@ -413,7 +414,7 @@ Config parse_args(int argc, const char* const argv[]) {
         throw std::invalid_argument("--file-root does not exist: " + config.file_root);
     }
 
-    if (!config.web_root.empty() && !file_exists(config.web_root)) {
+    if (config.web_root_explicit && !config.web_root.empty() && !file_exists(config.web_root)) {
         throw std::invalid_argument("--web-root does not exist: " + config.web_root);
     }
 

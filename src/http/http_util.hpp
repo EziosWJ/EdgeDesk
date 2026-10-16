@@ -3,6 +3,12 @@
 #include "core/error.hpp"
 #include "file/file_types.hpp"
 
+// libhv 1.3.4 headers use stat()/fcntl() without guaranteeing the POSIX
+// headers are included (they rely on libstdc++ transitive includes on some
+// toolchains). Include them first so builds are not toolchain-dependent.
+#include <fcntl.h>
+#include <sys/stat.h>
+
 #include "HttpMessage.h"
 #include "HttpResponseWriter.h"
 
