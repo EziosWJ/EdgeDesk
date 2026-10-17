@@ -1,6 +1,6 @@
 # EdgeDesk 前端素材使用指南
 
-- 状态：设计素材 / 可用于前端，不表示 React 技术选型已批准或页面已实现
+- 状态：设计素材 / 可用于前端；React + TypeScript + Vite 已由 ADR-0001 确认，但素材本身不表示页面已实现
 - 来源：2026-10-16 的四张 EdgeDesk 原型图（仪表盘、文件管理与浮窗、终端工作区、会话/设置）
 - 原则：**可复用图形使用矢量文件；图表、表格、状态数值、浮动窗口全部使用真实 React/HTML/CSS 组件实现，绝不裁切整页截图当 UI。**
 
@@ -54,7 +54,7 @@ docs/design/
 
 完整索引：`web/public/assets/asset-manifest.json`。V1.2 静态原型页与使用方式见 [`prototypes/README.md`](prototypes/README.md)。
 
-## React / Vite 引用示例（React 目前仍是候选）
+## React / Vite 引用示例
 
 资源位于 `public/assets` 时，Vite 不需要 `import` 资源文件；运行时 URL 由 `BASE_URL` 决定，根路径部署时通常为 `/assets/...`。
 
