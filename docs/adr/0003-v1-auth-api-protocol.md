@@ -4,6 +4,8 @@
 - 日期：2026-10-16
 - 关联：[产品范围](../spec/0001-product-scope.md)、[ADR-0002](0002-architecture-security.md)、[API 文档](../api.md)
 
+> 本 ADR 仅描述 V1.0 当前实现。V1.1 已确认改为单管理员密码登录与首次初始化，目标设计见 [ADR-0008](0008-authentication-and-settings.md) 和 [SPEC-0005](../spec/0005-authentication-and-settings.md)。认证代码与测试迁移完成前，本文件仍是 V1.0 的实际行为契约。
+
 ## 背景
 
 Phase 1 只有无鉴权的 `/api/health` 与静态资源，绑定回环地址。V1.0 需要在同一进程内提供文件管理、Bash 终端（WebSocket）和设备指标，并满足 ADR-0002 的安全约束：统一认证、WS 握手校验、限流、审计、有界资源。认证方式此前“待决定”，本 ADR 将其定案为可配置的部署级密钥认证。
