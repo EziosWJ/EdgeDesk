@@ -7,9 +7,9 @@
 
 | 层级 | 入口 | 覆盖 | 何时运行 |
 | --- | --- | --- | --- |
-| L0 编辑循环 | `scripts/test-fast.sh` | `host-offline-tests` 构建 + 10 项原生单测 + 前端单测（`web/node_modules` 存在时） | 每次改动 |
-| L1 任务/PR | `scripts/test-pr.sh` | `dev-disk` 构建 + 10 项原生单测 + 全量集成 + 前端 `npm test` / `npm run build` | 提交前 |
-| L2 全矩阵 | 见下方“构建与平台矩阵” | `release-embed`、x86_64-musl、arm64-disk、arm64-musl、CI | main/nightly/release；当前 CI 对 PR 也执行全矩阵 |
+| L0 编辑循环 | `scripts/test-fast.sh` | `host-offline-tests` 构建 + 11 项原生单测 + 前端单测（`web/node_modules` 存在时） | 每次改动 |
+| L1 任务/PR | `scripts/test-pr.sh` | `dev-disk` 构建 + 11 项原生单测 + 全量集成 + 前端 `npm test` / `npm run build` | 提交前 |
+| L2 全矩阵 | 见下方“构建与平台矩阵” | `release-embed`、`release-embed-arm64`、`release-disk`、x86_64-musl、arm64-disk、arm64-musl、CI | main/nightly/release；当前 CI 对 PR 也执行全矩阵 |
 
 ```bash
 # L0（秒级）
@@ -47,7 +47,7 @@ scripts/test-pr.sh
 | `system_metrics_test` | /proc/stat、loadavg、meminfo（含旧内核回退）、net/dev 速率差分、IPv4/IPv6 地址格式化与 `getifaddrs` 枚举（排除 lo）、mounts 过滤、采样线程与环形缓冲 | GCC 13.3 host | 通过 |
 | `embed_generator_test` | `#embed` 生成器的确定性、路径校验、ETag | Python 3.12 | 通过 |
 | 前端单元测试 | windowStore（开关/层级/拖动/缩放/最大化/关闭、不可变快照）、会话持久化（仅 id/title）、metrics 窗口有界、字节/百分比/运行时间格式化、FloatingWindow DOM 交互（指针拖动、缩放把手、按钮）、Sidebar（导航选中、收起/展开与 localStorage 持久化恢复、服务状态）、仪表盘图表工具（窗口切片、变化值、速率单位、时间刻度、开机时刻）、DonutChart（可用部分绿色/已使用主色/不可用态）、DashboardView DOM 渲染（KPI 六卡、三图表面板、磁盘环形图与挂载点切换、网卡 IP 地址、在线/数据中断状态、空数据不造假）、文件管理（路径助手/视图偏好/上传名校验、按扩展名与特殊文件名解析文件类型图标、Go/C++/Markdown 渲染不同图标、目录树按需加载与缓存/祖先展开/失败重试/刷新/不跟随链接、叶子节点隐藏角标与"无子目录"文案、单击打开与仅复选框选中、选中操作在工具栏就地切换、拖拽上传确认/跳过文件夹/取消不上传、树面板收起展开与宽度调整持久化、列表↔网格共享选择、本地筛选、隐藏文件联动、分页排序、失败态与重试、批量删除确认与失败不报成功、浮动终端/编辑器窗口）、V1.1 认证页面（密码登录、初始化确认校验、提交）、设置页（系统信息、Token 状态、偏好保存）、偏好 store（加载/乐观保存/失败保留） | Node 24.14 / vitest 3.2 / happy-dom | 通过（77 项）；`npm run build`（tsc + vite，含 unplugin-icons 文件类型图标）通过 |
-| `auth_test.py` | 初始化状态门禁、首次设置密码、重复初始化 409、密码登录、Cookie 属性（含 `--cookie-secure`）、改密后旧 Cookie/旧密码失效、Bearer 不受影响、CSRF、设置白名单、系统信息脱敏、重启后旧 Cookie 失效、损坏状态失败关闭、本机恢复 | dev-disk / release-embed / x86_64-musl / arm64-disk / arm64-musl | 全部通过 |
+| `auth_test.py` | 初始化状态门禁、首次设置密码、重复初始化 409、密码登录、Cookie 属性（含 `--cookie-secure`）、改密后旧 Cookie/旧密码失效、Bearer 不受影响、CSRF、设置白名单、系统信息脱敏、重启后旧 Cookie 失效、损坏状态失败关闭、本机恢复 | dev-disk / host-embed / release-embed / release-embed-arm64 / release-disk / x86_64-musl / arm64-disk / arm64-musl | 全部通过 |
 | `api_test.py` | health 契约、密码登录/会话/Bearer、CSRF、目录浏览（含 `dirs_only` 只返回直接子目录）、文本读写、mkdir/rename/delete、流式上传字节一致、Range 206/416、路径沙箱拒绝、JSON 体积限制、系统指标（含 `network[].addresses` 字段） | 见下（三种二进制） | 通过 |
 | `ws_test.py` | 未认证/异源握手拒绝、终端 create/input/输出/resize/guard、断线重连（回放）、会话存活、显式关闭、metrics 快照+增量 | 同上 | 通过 |
 | `rate_limit_test.py` | 登录限流与通用限流在严格配置下触发 429；伪造 `X-Forwarded-For` 不能绕过 peer-IP 限流 | 同上 | 通过 |
@@ -67,7 +67,9 @@ scripts/test-pr.sh
 | 二进制 | 模式 | 结果 |
 | --- | --- | --- |
 | `dev-disk`（GCC 13.3，Debug） | 磁盘资源 + React dist | 全部通过（V1.1 初始化/登录/改密/重启/恢复/损坏状态） |
-| `release-embed`（GCC 15.2.0） | `#embed` 单二进制（13 个 `#embed` 指令） | 全部通过（V1.1 全流程 + 前端外壳与哈希资源校验） |
+| `host-embed`（GCC 15.2.0，glibc，动态） | 宿主验证用 `#embed` 单二进制 | 全部通过（V1.1 全流程） |
+| `release-embed`（Bootlin musl GCC 15.3，`-static-pie`，`#embed`） | 单二进制，无动态依赖 | 全部通过（V1.1 全流程 + 前端外壳与哈希资源校验） |
+| `release-embed-arm64`（Bootlin musl GCC 15.3，`-static-pie`，`#embed`，qemu 运行） | 单二进制，无动态依赖，AArch64 Bash PTY | 全部通过（V1.1 全流程） |
 | `x86_64-musl`（musl cross GCC 11.2，`-static-pie`） | 磁盘资源，无动态依赖 | 全部通过（V1.1 全流程） |
 | `arm64-disk`（gcc-aarch64-linux-gnu 13，qemu-user 8.2.2 运行） | 磁盘资源，AArch64 原生 Bash PTY | 全部通过（V1.1 全流程；9 个原生测试二进制在 qemu 下通过） |
 | `arm64-musl`（musl cross GCC 11.2，`-static-pie`，qemu 运行） | 磁盘资源，AArch64 Bash PTY | 全部通过（V1.1 全流程） |
@@ -76,17 +78,18 @@ scripts/test-pr.sh
 > AArch64 Release 库在 qemu-user 下约 0.62 s/次（单次登录哈希，单 worker）。
 > 这是本地测量，不是 ARM 真实硬件基准；真实设备仍需复测。
 >
-> 注：2026-10-17 V1.1.0 在上述五个目标上实际执行了 `scripts/integration_test.sh`
+> 注：2026-10-17 V1.1.0 在上述目标上实际执行了 `scripts/integration_test.sh`
 > 的完整流程（初始化、登录、改密、重启后凭据/设置保留、限速与 XFF 伪造、
-> Secure Cookie、服务运行中拒绝恢复、本机恢复、损坏状态、REST/WebSocket/审计）。`arm64-disk` 的 9 个原生物理测试通过
-> `qemu-aarch64-static -L ~/opt/arm64/root` 逐个运行；`arm64-musl` 构建目录未生成
-> 单元测试目标，运行证据来自集成测试。Argon2id 依赖在 glibc、musl、x86_64 与
-> AArch64 上均完成静态链接。
+> Secure Cookie、服务运行中拒绝恢复、本机恢复、损坏状态、REST/WebSocket/审计）。`arm64-disk` 的原生测试通过
+> `qemu-aarch64-static -L ~/opt/arm64/root` 逐个运行；`arm64-musl` 与
+> `release-embed-arm64` 构建目录未生成单元测试目标，运行证据来自集成测试。
+> Argon2id 依赖在 glibc、musl、x86_64 与 AArch64 上均完成静态链接。
 
 ```bash
 bash scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19091 web/dist
-bash scripts/integration_test.sh out/build/release-embed/bin/edgedesk 19391 web/dist
-bash scripts/integration_test.sh out/build/arm64-disk/bin/edgedesk 19591 "" \
+bash scripts/integration_test.sh out/build/host-embed/bin/edgedesk 19391 web/dist
+bash scripts/integration_test.sh out/build/release-embed/bin/edgedesk 19491 web/dist
+bash scripts/integration_test.sh out/build/release-embed-arm64/bin/edgedesk 19591 "" \
   "$HOME/opt/arm64/root/usr/bin/qemu-aarch64-static -L $HOME/opt/arm64/root"
 ```
 
@@ -94,22 +97,49 @@ bash scripts/integration_test.sh out/build/arm64-disk/bin/edgedesk 19591 "" \
 
 | 目标 | 工具链 | 结果 |
 | --- | --- | --- |
-| x86_64 Linux，磁盘模式（Debug/Release） | GCC 13.3（Ubuntu 24.04 系统编译器） | 通过（`dev-disk`，V1.1 单元测试 + 集成测试） |
-| x86_64 Linux，`#embed` 单二进制 | GCC 15.2.0（用户目录安装，见 docs/dev/gcc15-local-toolchain.md） | 通过（`release-embed`，V1.1 单元测试 + 集成测试） |
-| x86_64 musl **static-pie** | musl.cc `x86_64-linux-musl-cross`（GCC 11.2.1）**与** Bootlin `x86-64--musl--stable-2024.05-1`（GCC 13.3），磁盘模式 | 两套工具链均通过（V1.1 单元测试 + 集成测试；Argon2 静态链接） |
-| AArch64（ARM64）Linux，磁盘模式 | Ubuntu cross `gcc-aarch64-linux-gnu` 13 + qemu-user-static 8.2.2 | 通过（V1.1 单元测试 + 集成测试，含 ARM64 Bash PTY） |
-| AArch64 musl **static-pie** | musl.cc `aarch64-linux-musl-cross`（GCC 11.2.1），磁盘模式 | 通过（V1.1 集成测试；Argon2 静态链接） |
-| ARM32（armv7 musl） | 需要 `arm-linux-musleabihf` 工具链 | **未验证**（本机未安装该工具链） |
-| GCC 15 + musl + `#embed` 组合 | 需要 GCC 15 的 musl 交叉工具链 | **未验证**（预编译 musl 工具链当前最高 GCC 13.3；`#embed` 管线已在 glibc GCC 15.2 上验证，musl 静态链路已在 GCC 11.2 / 13.3 上验证，两者交集未验证） |
+| x86_64 Linux，磁盘模式（Debug） | GCC 13.3（Ubuntu 24.04 系统编译器） | 通过（`dev-disk`，V1.1 单元测试 + 集成测试） |
+| x86_64 Linux，`#embed`（宿主 glibc，动态） | GCC 15.2.0（用户目录安装，见 docs/dev/gcc15-local-toolchain.md） | 通过（`host-embed`，仅本地验证，不作为发布产物） |
+| x86_64 **musl static-pie + `#embed`** | Bootlin `x86-64--musl--stable-2026.08-1`（GCC 15.3） | 通过（`release-embed`，V1.1 单元测试 + 集成测试；构建后校验无 `INTERP`/`NEEDED`） |
+| x86_64 musl **static-pie**，磁盘模式 | musl.cc `x86_64-linux-musl-cross`（GCC 11.2.1）**与** Bootlin `x86-64--musl--stable-2024.05-1`（GCC 13.3） | 两套工具链均通过（V1.1 单元测试 + 集成测试；Argon2 静态链接） |
+| AArch64 **musl static-pie + `#embed`** | Bootlin `aarch64--musl--stable-2026.08-1`（GCC 15.3）+ qemu-user 8.2.2 | 通过（`release-embed-arm64`，V1.1 集成测试） |
+| AArch64（ARM64）Linux，磁盘模式（glibc） | Ubuntu cross `gcc-aarch64-linux-gnu` 13 + qemu-user-static 8.2.2 | 通过（V1.1 单元测试 + 集成测试，含 ARM64 Bash PTY） |
+| AArch64 musl **static-pie**，磁盘模式 | musl.cc `aarch64-linux-musl-cross`（GCC 11.2.1） | 通过（V1.1 集成测试；Argon2 静态链接） |
+| ARM32（armv7 musl） | `arm-linux-musleabihf` 工具链（Bootlin 2026.08 布局已支持） | **未验证**（本机未安装该工具链） |
+| GCC 15 + musl + `#embed` 组合 | Bootlin stable-2026.08（GCC 15.3） | 通过（x86_64 与 aarch64，见上） |
 | OpenHarmony ARM64 | 需要对应 SDK | **未验证** |
 | 真实设备（工控板/网关） | 目标硬件 | **未验证**（当前仅有 QEMU 运行证据） |
 | GitHub Actions CI | 本仓库 workflow：frontend + host-build / gcc15-embed / arm64-cross / x86_64-musl-static；npm/ccache/交叉工具链缓存，`web/dist` 通过 artifact 复用 | **新配置未验证**；旧配置于 2026-10-17 V1.1 PR #2 通过四个目标 job |
 
 > 2026-10-17 之后 CI 配置增加了 `frontend` 前置 job、npm/ccache/交叉工具链缓存和
-> `web/dist` artifact 复用；新配置需在下一个 PR 实际运行后回填结果。四个目标 job
-> 仍为 `host-build`、`gcc15-embed`、`x86_64-musl-static`、`arm64-cross`。
+> `web/dist` artifact 复用；`x86_64-musl-static` 已改为 musl + `#embed` 静态发布
+> lane，`arm64-cross` 改用 Bootlin aarch64 musl + `#embed`，`gcc15-embed` 保留为
+> 宿主 GCC 15 兼容性验证。新配置需在下一个 PR 实际运行后回填结果。
 > `frontend` 失败时依赖它的 `host-build`/`gcc15-embed` 会显式失败；仍建议把
 > `frontend` 加入 required checks。
+
+### 发布产物体积与静态校验
+
+Release/MinSizeRel 构建默认在链接期加 `-s`（`EDGEDESK_STRIP_BINARY=ON`，等价
+`strip -s`），并执行 `cmake/verify_static.cmake` 校验产物不含 `INTERP`/`NEEDED`；
+Debug 构建和单元测试可执行文件不 strip，保留符号用于调试。
+2026-10-17 在 V1.1 上实测（`file` 均报告 `stripped`，对应集成测试通过）：
+
+| 产物 | 大小 | 链接方式 |
+| --- | --- | --- |
+| `release-embed`（x86_64，musl GCC 15.3 + `#embed`） | 3.5 MiB | static-pie |
+| `release-embed-arm64`（aarch64，musl GCC 15.3 + `#embed`） | 3.2 MiB | static-pie |
+| `release-disk`（x86_64，musl，磁盘模式） | 2.8 MiB | static-pie |
+| `host-embed`（x86_64 glibc，仅本地验证） | 2.5 MiB | 动态（非发布产物） |
+| `x86_64-musl`（musl.cc GCC 11.2，磁盘模式） | 2.6 MiB | static-pie |
+| `bootlin-check`（Bootlin GCC 13.3，磁盘模式） | 2.8 MiB | static-pie |
+| `arm64-musl`（musl.cc GCC 11.2，磁盘模式） | 2.4 MiB | static-pie |
+| `arm64-disk`（aarch64 glibc，磁盘模式） | 1.4 MiB | 动态（验证用） |
+
+未 strip 的 static-pie 产物约 13 MiB，其中约 9.4 MB 来自 musl 工具链
+`libstdc++.a`/`libgcc.a` 携带的调试段，与业务代码无关。`release-*` 产物均无动态
+依赖（`ldd` 报告 `not a dynamic executable`）；磁盘资源模式仍需单独部署 `web/dist`。
+strip 只减小分发体积，静态链接与零依赖由 musl 工具链、`EDGEDESK_STATIC_PIE=ON`
+和链接后校验共同保证。
 
 ### libhv 依赖的已知构建适配
 
@@ -121,10 +151,12 @@ libhv v1.3.4 的部分头文件依赖“隐式包含”（`struct stat`、fcntl 
 
 ### 已知缺口与诚实声明
 
-- **musl/static-pie 的最终发行验证**需要匹配的 GCC 15 musl 工具链；本机与 CI 用
-  musl.cc（GCC 11.2）和 Bootlin（GCC 13.3）验证，预编译工具链当前最高 GCC 13，
-  因此 musl 目标目前只能构建磁盘模式。
-- **ARM32 与真实设备**没有运行证据；`cmake/toolchains/` 提供模板，
+- **musl + `#embed` 的发行链路**已用 Bootlin `stable-2026.08`（GCC 15.3）在
+  x86_64 与 aarch64 上完成验证；`release-*` 预设均为 static-pie，并由构建后的
+  `cmake/verify_static.cmake` 检查无 `INTERP`/`NEEDED`。`host-embed`（宿主 glibc）
+  仅用于本地验证，明确不是发布产物。
+- **ARM32 与真实设备**没有运行证据；`cmake/toolchains/arm-linux-musleabihf.cmake`
+  已支持 musl.cc 与 Bootlin 两种布局，但未安装工具链、未构建、未运行。
   不是“已成功”的声明。
 - 浏览器（Chrome/Firefox）手工交互未在本机执行；前端行为通过单元测试
   （含 happy-dom DOM 交互测试）与 WebSocket/REST 集成测试间接覆盖，

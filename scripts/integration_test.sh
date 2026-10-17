@@ -15,6 +15,13 @@
 #           "/usr/bin/qemu-aarch64-static -L /usr/aarch64-linux-gnu"
 set -euo pipefail
 
+# The suite only talks to loopback. Ignore ambient HTTP proxies: environments
+# often export http_proxy with no_proxy patterns such as "127.*", which Python
+# and curl do not match for IP literals, causing intermittent connect timeouts
+# through the proxy instead of direct loopback connections.
+export no_proxy="127.0.0.1,localhost${no_proxy:+,${no_proxy:-}}"
+export NO_PROXY="$no_proxy"
+
 BIN=${1:-out/build/dev-disk/bin/edgedesk}
 PORT=${2:-19091}
 WEB_ROOT=${3:-web/dist}

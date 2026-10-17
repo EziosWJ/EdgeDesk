@@ -145,28 +145,41 @@ jobs:
           fi
 
   x86_64-musl-static:
-    # musl static-pie release target, disk resource mode (prebuilt musl
-    # toolchains ship GCC 11-13; #embed needs GCC 15+).
+    # x86_64 release lane: musl static-pie + #embed with Bootlin GCC 15.3.
+    # Release artifacts must have no dynamic dependencies; CMake runs
+    # cmake/verify_static.cmake as a post-build check as well.
+    needs: frontend
+    if: always()
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
+      - name: Require frontend job
+        if: needs.frontend.result != 'success'
+        run: |
+          echo "frontend job result: ${{ needs.frontend.result }}" >&2
+          exit 1
       - uses: actions/checkout@v4
+      - name: Download web/dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
       - name: Cache musl toolchain
         id: musl-cache
         uses: actions/cache@v4
         with:
-          path: ~/opt/musl/x86-64--musl--stable-2024.05-1
-          key: musl-bootlin-2024.05-1
-      - name: Fetch musl cross toolchain (Bootlin stable 2024.05)
+          path: ~/opt/musl/x86-64--musl--stable-2026.08-1
+          key: musl-bootlin-2026.08-1
+      - name: Fetch musl cross toolchain (Bootlin stable 2026.08, GCC 15.3)
         if: steps.musl-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$HOME/opt/musl" && cd "$HOME/opt/musl"
           curl -fsSL --retry 3 -o toolchain.tar.xz \
-            "https://toolchains.bootlin.com/downloads/releases/toolchains/x86-64/tarballs/x86-64--musl--stable-2024.05-1.tar.xz"
+            "https://toolchains.bootlin.com/downloads/releases/toolchains/x86-64/tarballs/x86-64--musl--stable-2026.08-1.tar.xz"
           tar xJf toolchain.tar.xz
       - name: Verify musl toolchain
-        run: test -x "$HOME/opt/musl/x86-64--musl--stable-2024.05-1/bin/x86_64-linux-musl-gcc"
+        run: test -x "$HOME/opt/musl/x86-64--musl--stable-2026.08-1/bin/x86_64-linux-gcc"
       - name: Cache ccache
         uses: actions/cache@v4
         with:
@@ -183,28 +196,45 @@ jobs:
           ccache --version | head -1
       - name: Cross build (static-pie)
         run: |
-          export EDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/musl/x86-64--musl--stable-2024.05-1"
+          export EDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/musl/x86-64--musl--stable-2026.08-1"
           cmake -S . -B out/build/x86_64-musl -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DEDGEDESK_WEB_MODE=disk -DEDGEDESK_BUILD_WEB=OFF -DEDGEDESK_STATIC_PIE=ON \
+            -DEDGEDESK_WEB_MODE=embed -DEDGEDESK_BUILD_WEB=OFF -DEDGEDESK_STATIC_PIE=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/x86_64-linux-musl.cmake
           cmake --build out/build/x86_64-musl -j "$(nproc)"
           file out/build/x86_64-musl/bin/edgedesk
+          if "$HOME/opt/musl/x86-64--musl--stable-2026.08-1/bin/x86_64-linux-objdump" \
+              -p out/build/x86_64-musl/bin/edgedesk | grep -Eq 'INTERP|NEEDED'; then
+            echo "release binary is dynamically linked" >&2
+            exit 1
+          fi
       - name: Unit tests (static musl binaries)
         run: ctest --test-dir out/build/x86_64-musl -j "$(nproc)" --output-on-failure
-      - name: Integration tests
-        run: bash scripts/integration_test.sh out/build/x86_64-musl/bin/edgedesk 19093 ""
+      - name: Integration tests (embedded assets)
+        run: bash scripts/integration_test.sh out/build/x86_64-musl/bin/edgedesk 19093 web/dist
 
   arm64-cross:
-    # Real AArch64 cross build executed under qemu-user-static. Mirrors the
-    # locally verified recipe in docs/testing.md (extracted deb prefix,
-    # ARM64 bash for the PTY tests, disk resource mode).
+    # AArch64 release lane: musl static-pie + #embed with Bootlin GCC 15.3,
+    # executed under qemu-user-static. The Ubuntu ARM64 rootfs supplies bash
+    # and its runtime libraries; the server itself has no dynamic dependencies.
+    needs: frontend
+    if: always()
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
+      - name: Require frontend job
+        if: needs.frontend.result != 'success'
+        run: |
+          echo "frontend job result: ${{ needs.frontend.result }}" >&2
+          exit 1
       - uses: actions/checkout@v4
+      - name: Download web/dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
       - name: Cache ARM64 rootfs and qemu
         id: arm64-cache
         uses: actions/cache@v4
@@ -252,6 +282,21 @@ jobs:
         run: |
           "$HOME/opt/arm64/root/usr/bin/qemu-aarch64-static" -L "$HOME/opt/arm64/root" \
             "$HOME/opt/arm64/root/bin/bash" --version | head -1
+      - name: Cache aarch64 musl toolchain
+        id: musl-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/opt/musl/aarch64--musl--stable-2026.08-1
+          key: musl-bootlin-aarch64-2026.08-1
+      - name: Fetch aarch64 musl cross toolchain (Bootlin stable 2026.08, GCC 15.3)
+        if: steps.musl-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$HOME/opt/musl" && cd "$HOME/opt/musl"
+          curl -fsSL --retry 3 -o toolchain.tar.xz \
+            "https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--musl--stable-2026.08-1.tar.xz"
+          tar xJf toolchain.tar.xz
+      - name: Verify aarch64 musl toolchain
+        run: test -x "$HOME/opt/musl/aarch64--musl--stable-2026.08-1/bin/aarch64-linux-gcc"
       - name: Cache ccache
         uses: actions/cache@v4
         with:
@@ -266,18 +311,23 @@ jobs:
             sudo apt-get install -y -qq ccache
           fi
           ccache --version | head -1
-      - name: Cross build (disk resources)
+      - name: Cross build (static-pie + #embed)
         run: |
-          export LD_LIBRARY_PATH="$HOME/opt/arm64/hostlibs"
-          export EDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/arm64/root"
-          cmake -S . -B out/build/arm64-disk -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DEDGEDESK_WEB_MODE=disk -DEDGEDESK_BUILD_WEB=OFF \
+          export EDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/musl/aarch64--musl--stable-2026.08-1"
+          cmake -S . -B out/build/arm64-musl-embed -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DEDGEDESK_WEB_MODE=embed -DEDGEDESK_BUILD_WEB=OFF -DEDGEDESK_STATIC_PIE=ON \
+            -DEDGEDESK_BUILD_TESTS=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake
-          cmake --build out/build/arm64-disk -j "$(nproc)"
-          file out/build/arm64-disk/bin/edgedesk
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-musl.cmake
+          cmake --build out/build/arm64-musl-embed -j "$(nproc)"
+          file out/build/arm64-musl-embed/bin/edgedesk
+          if "$HOME/opt/musl/aarch64--musl--stable-2026.08-1/bin/aarch64-linux-objdump" \
+              -p out/build/arm64-musl-embed/bin/edgedesk | grep -Eq 'INTERP|NEEDED'; then
+            echo "release binary is dynamically linked" >&2
+            exit 1
+          fi
       - name: Run integration tests under qemu
         run: |
-          bash scripts/integration_test.sh out/build/arm64-disk/bin/edgedesk 19094 "" \
+          bash scripts/integration_test.sh out/build/arm64-musl-embed/bin/edgedesk 19094 "" \
             "$HOME/opt/arm64/root/usr/bin/qemu-aarch64-static -L $HOME/opt/arm64/root"

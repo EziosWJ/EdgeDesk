@@ -46,13 +46,13 @@ scripts/install-gcc15-local.sh
 ## 日常使用
 
 ```bash
-# 配置 + 构建 + 测试（默认预设 release-embed）
+# 配置 + 构建 + 测试（默认预设 host-embed，仅用于宿主 glibc 验证）
 scripts/with-gcc15.sh all
 
 # 分步执行
-scripts/with-gcc15.sh configure release-embed
-scripts/with-gcc15.sh build release-embed -j20
-scripts/with-gcc15.sh test release-embed
+scripts/with-gcc15.sh configure host-embed
+scripts/with-gcc15.sh build host-embed -j20
+scripts/with-gcc15.sh test host-embed
 
 # 只打印环境变量（解压树里只有 gcc-15/g++-15 这类带后缀的可执行文件，不会覆盖系统 gcc/g++）
 scripts/with-gcc15.sh env
@@ -61,14 +61,18 @@ scripts/with-gcc15.sh env
 等价的手工命令：
 
 ```bash
-cmake --preset release-embed \
+cmake --preset host-embed \
   -DCMAKE_C_COMPILER="$HOME/opt/gcc-15/root/usr/bin/gcc-15" \
   -DCMAKE_CXX_COMPILER="$HOME/opt/gcc-15/root/usr/bin/g++-15"
-cmake --build --preset release-embed -j"$(nproc)"
-ctest --test-dir out/build/release-embed --output-on-failure
+cmake --build --preset host-embed -j"$(nproc)"
+ctest --test-dir out/build/host-embed --output-on-failure
 ```
 
 `dev-disk` 与 `host-offline-tests` 预设同样可用，但它们在 GCC 13 下也能构建，是否切换到 GCC 15 由需要决定。
+
+> `release-embed` / `release-embed-arm64` / `release-disk` 是静态发布预设，使用
+> Bootlin GCC 15.3 musl 交叉工具链（`EDGEDESK_TOOLCHAIN_ROOT`），**不能**用本节的
+> 宿主编译器配置；宿主 GCC 15 的 `#embed` 验证统一走 `host-embed`。
 
 ## 验收证据（本次实测结果）
 
@@ -76,20 +80,22 @@ ctest --test-dir out/build/release-embed --output-on-failure
 | --- | --- | --- |
 | 编译器版本 | `g++-15 --version` | `g++-15 (Ubuntu 15.2.0-14ubuntu1~24~ppa1) 15.2.0` |
 | `#embed` 探针 | `g++-15 -std=c++17 -Wall -Wextra -Wpedantic` + `#embed "..." suffix(,)` | 编译、运行通过 |
-| Release 嵌入构建 | `cmake --preset release-embed` + GCC 15 | 72/72 目标成功，产出 `out/build/release-embed/bin/edgedesk` |
-| 单元测试 | `ctest --test-dir out/build/release-embed` | 2/2 通过（`core_test`、`embed_generator_test`） |
+| 宿主 `#embed` 构建（实测时预设名为 release-embed） | `cmake --preset host-embed` + GCC 15 | 72/72 目标成功，产出 `out/build/host-embed/bin/edgedesk` |
+| 单元测试 | `ctest --test-dir out/build/host-embed` | 2/2 通过（`core_test`、`embed_generator_test`；当时测试数量） |
 | 离线测试预设 | `cmake --preset host-offline-tests` + GCC 15 | 构建 0 warning，测试 2/2 通过 |
 | Phase 1 契约 | `GET /api/health` | `{"status":"ok","service":"edgedesk","phase":1}` |
 | 嵌入资源路由 | `GET /` | HTTP 200，返回嵌入的 `index.html` |
-| 运行时依赖 | `ldd out/build/release-embed/bin/edgedesk` | 使用宿主 `libstdc++.so.6`（14.2）正常启动，无需 `LD_LIBRARY_PATH` |
+| 运行时依赖 | `ldd out/build/host-embed/bin/edgedesk` | 使用宿主 `libstdc++.so.6`（14.2）正常启动；该预设按设计是动态链接，仅用于本地验证 |
 
 ## 已知警告与限制
 
 - **`-Wc++26-extensions`**：`#embed` 是 GCC 扩展，在 `-std=c++17` + `-Wpedantic` 下对每个 `#embed` 产生一条警告。
   项目未启用 `-Werror`，不影响构建。是否屏蔽属于产品/构建决策，尚未确认。
-- **musl 静态链接未覆盖**：本工具链目标是 glibc，`-DEDGEDESK_STATIC_PIE=ON` 的 musl 静态链接需要
-  单独的 musl 交叉工具链（如 `x86_64-linux-musl-cross`）与 sysroot，尚未验证。
-- **ARM32 / ARM64 未覆盖**：需要对应目标的 GCC 15+ 交叉工具链，见 ADR-0001。
+- **本工具链不用于发布**：`host-embed` 是 glibc 动态链接，仅用于本地验证 `#embed` 管线。
+  发布产物使用 Bootlin GCC 15.3 musl 静态预设（`release-embed`、`release-embed-arm64`、
+  `release-disk`），已在 x86_64 与 aarch64 上验证。
+- **ARM32 未覆盖**：需要 armv7 musl GCC 15+ 工具链；`cmake/toolchains/arm-linux-musleabihf.cmake`
+  已支持 Bootlin 布局，但本机未安装、未验证，见 ADR-0001。
 - **仅限 x86_64 宿主**：锁定的 deb 是 `_amd64`，脚本在其他架构上会直接报错退出。
 - **系统级安装（可选）**：若希望 `gcc-15` 全局可用，需要 root 执行
   `add-apt-repository ppa:ubuntu-toolchain-r/test && apt install gcc-15 g++-15`；本方案未采用。

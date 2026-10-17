@@ -12,6 +12,7 @@ option(EDGEDESK_BUILD_SERVER "Compile libhv HTTP server" ON)
 option(EDGEDESK_BUILD_TESTS "Build unit tests" ON)
 option(EDGEDESK_BUILD_WEB "Build React assets with npm" ON)
 option(EDGEDESK_STATIC_PIE "Link Linux release executable with musl static-pie" OFF)
+option(EDGEDESK_STRIP_BINARY "Strip edgedesk in Release/MinSizeRel builds (-s)" ON)
 set(EDGEDESK_WEB_ROOT "${CMAKE_SOURCE_DIR}/web/dist" CACHE PATH "Static asset directory (disk mode)")
 
 if(NOT EDGEDESK_WEB_MODE STREQUAL "embed" AND NOT EDGEDESK_WEB_MODE STREQUAL "disk")
@@ -161,6 +162,23 @@ if(EDGEDESK_BUILD_SERVER)
     "${libhv_SOURCE_DIR}/cpputil" "${libhv_SOURCE_DIR}/evpp")
   target_compile_features(edgedesk PRIVATE cxx_std_17)
   target_compile_options(edgedesk PRIVATE -Wall -Wextra -Wpedantic)
+  if(EDGEDESK_STRIP_BINARY)
+    # Link-time -s (equivalent to strip -s): release artifacts ship without
+    # .symtab/.debug_* tables. Debug builds keep symbols for tests and crash
+    # analysis; test executables are never stripped.
+    target_link_options(edgedesk PRIVATE
+      "$<$<OR:$<CONFIG:Release>,$<CONFIG:MinSizeRel>>:-s>")
+  endif()
+  if(EDGEDESK_STATIC_PIE)
+    # Guarantee that a static-pie request actually produced a static binary.
+    add_custom_command(TARGET edgedesk POST_BUILD
+      COMMAND "${CMAKE_COMMAND}"
+        "-DOBJDUMP=${CMAKE_OBJDUMP}"
+        "-DBINARY=$<TARGET_FILE:edgedesk>"
+        -P "${CMAKE_SOURCE_DIR}/cmake/verify_static.cmake"
+      COMMENT "Verify edgedesk is statically linked"
+      VERBATIM)
+  endif()
   set_target_properties(edgedesk PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
   if(EDGEDESK_BUILD_WEB AND EDGEDESK_WEB_MODE STREQUAL "disk")
     add_dependencies(edgedesk web_build)

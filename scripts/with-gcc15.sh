@@ -11,7 +11,8 @@
 #   scripts/with-gcc15.sh all       [preset] [-j N]      # configure + build + test
 #   scripts/with-gcc15.sh env                            # 打印可 source 的环境变量
 #
-# preset 默认 release-embed；可用 GCC15_PREFIX 覆盖安装前缀（默认 $HOME/opt/gcc-15）。
+# preset 默认 host-embed（宿主 glibc 验证）；release-embed 等发布预设改用 musl 交叉工具链，
+# 不能用本脚本的宿主编译器配置。GCC15_PREFIX 可覆盖安装前缀（默认 $HOME/opt/gcc-15）。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -123,10 +124,10 @@ cmd_all() {
 [ $# -ge 1 ] || usage 1
 command="${1}"; shift
 case "$command" in
-  configure) cmd_configure "${1:-release-embed}" "${@:2}" ;;
-  build)     cmd_build     "${1:-release-embed}" "${@:2}" ;;
-  test)      cmd_test      "${1:-release-embed}" "${@:2}" ;;
-  all)       cmd_all       "${1:-release-embed}" "${@:2}" ;;
+  configure) cmd_configure "${1:-host-embed}" "${@:2}" ;;
+  build)     cmd_build     "${1:-host-embed}" "${@:2}" ;;
+  test)      cmd_test      "${1:-host-embed}" "${@:2}" ;;
+  all)       cmd_all       "${1:-host-embed}" "${@:2}" ;;
   env)       cmd_env ;;
   -h|--help|help) usage 0 ;;
   *) die "未知子命令：$command（可用：configure build test all env）" ;;

@@ -41,13 +41,32 @@ ctest --preset dev-disk
 # 浏览器打开 http://127.0.0.1:8080
 ```
 
-正式发布使用 GCC 15+ 的 `#embed` 单二进制（运行期不需要 `web/`）：
+正式发布使用 **musl static-pie + GCC 15 `#embed`** 单二进制（零动态依赖，运行期不需要
+`web/`）。发布预设要求 `EDGEDESK_TOOLCHAIN_ROOT` 指向 GCC 15+ 的 musl 工具链，例如
+Bootlin `x86-64--musl--stable-2026.08-1`（GCC 15.3）：
 
 ```sh
-cmake --preset release-embed     # 需要 GCC 15+；见 scripts/with-gcc15.sh
+export EDGEDESK_TOOLCHAIN_ROOT=$HOME/opt/musl/x86-64--musl--stable-2026.08-1
+cmake --preset release-embed
 cmake --build --preset release-embed
+ctest --preset release-embed
 ./out/build/release-embed/bin/edgedesk --port 8080 --file-root /srv --data-dir /var/lib/edgedesk
 ```
+
+AArch64 使用 `release-embed-arm64` 预设和对应的 aarch64 musl 工具链；`release-disk` 是
+x86_64 的静态磁盘资源版（仍需部署 `web/dist`）。所有 `release-*` 预设都设置
+`EDGEDESK_STATIC_PIE=ON`，构建结束会执行 `cmake/verify_static.cmake`，发现
+`INTERP`/`NEEDED` 即构建失败，确保不产出动态链接。`dev-disk` 与单元测试保持动态链接，
+便于本地调试。
+
+Host-only GCC 15（glibc）验证用 `host-embed`：
+
+```sh
+scripts/with-gcc15.sh all host-embed
+```
+
+Release/MinSizeRel 构建默认在链接期加 `-s`（等价 `strip -s`），发布产物不含符号表；
+需要保留符号时用 `-DEDGEDESK_STRIP_BINARY=OFF` 重新配置。Debug 构建不受影响。
 
 完整集成测试（初始化 + 密码/设置 + REST + WebSocket + 限流 + 恢复）：
 
@@ -84,12 +103,13 @@ scripts/test-pr.sh
 | 命令 | 用途 |
 | --- | --- |
 | `cmake --preset dev-disk` | Debug，磁盘资源模式（任意 C++17 编译器） |
-| `cmake --preset release-disk` | Release，磁盘资源模式 |
-| `cmake --preset release-embed` | Release，GCC 15+ `#embed` 单二进制 |
+| `cmake --preset release-disk` | Release，musl static-pie，磁盘资源模式（需 `EDGEDESK_TOOLCHAIN_ROOT`） |
+| `cmake --preset release-embed` | Release，musl static-pie + `#embed` 单二进制（需 GCC 15+ musl 工具链） |
+| `cmake --preset release-embed-arm64` | Release，AArch64 musl static-pie + `#embed`（需 ARM64 musl 工具链） |
 | `cmake --preset host-offline-tests` | 仅核心库与单元测试（不需要 libhv / npm） |
 | `scripts/test-fast.sh` | L0：宿主核心单测 + 前端单测（秒级） |
 | `scripts/test-pr.sh` | L1：dev-disk 单测 + 全量集成 + 前端 build/test（分钟级） |
-| `scripts/with-gcc15.sh all release-embed` | 使用 `~/opt/gcc-15` 的本地 GCC 15 一键构建 |
+| `scripts/with-gcc15.sh all host-embed` | 使用 `~/opt/gcc-15` 的宿主 GCC 15 验证构建（动态，非发布产物） |
 | `scripts/integration_test.sh` | 端到端：REST + WebSocket + 限流 + 审计 |
 | `cd web && npm test` | 前端单元测试（浮窗存储 / 会话持久化 / 格式化） |
 

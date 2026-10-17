@@ -13,23 +13,53 @@
       }
     },
     {
-      "name": "release-disk",
-      "displayName": "Release (disk assets, GCC 15+)",
+      "name": "host-embed",
+      "displayName": "Host GCC 15 (glibc) #embed, local verification only",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/out/build/release-disk",
+      "binaryDir": "${sourceDir}/out/build/host-embed",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "EDGEDESK_WEB_MODE": "disk"
+        "EDGEDESK_WEB_MODE": "embed"
       }
     },
     {
       "name": "release-embed",
-      "displayName": "Release (GCC 15+ #embed)",
+      "displayName": "Release x86_64 static-pie (musl + #embed)",
+      "description": "Requires EDGEDESK_TOOLCHAIN_ROOT pointing at a GCC 15+ musl toolchain (e.g. Bootlin x86-64--musl--stable-2026.08-1).",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/out/build/release-embed",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/x86_64-linux-musl.cmake",
+        "EDGEDESK_STATIC_PIE": "ON",
         "EDGEDESK_WEB_MODE": "embed"
+      }
+    },
+    {
+      "name": "release-embed-arm64",
+      "displayName": "Release aarch64 static-pie (musl + #embed)",
+      "description": "Requires EDGEDESK_TOOLCHAIN_ROOT pointing at a GCC 15+ aarch64 musl toolchain (e.g. Bootlin aarch64--musl--stable-2026.08-1). Unit tests are not built; verify with qemu.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/release-embed-arm64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/aarch64-linux-musl.cmake",
+        "EDGEDESK_STATIC_PIE": "ON",
+        "EDGEDESK_WEB_MODE": "embed",
+        "EDGEDESK_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "release-disk",
+      "displayName": "Release x86_64 static-pie (musl, disk assets)",
+      "description": "Requires EDGEDESK_TOOLCHAIN_ROOT pointing at a musl toolchain (GCC 15+ for consistency with release-embed).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/release-disk",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/x86_64-linux-musl.cmake",
+        "EDGEDESK_STATIC_PIE": "ON",
+        "EDGEDESK_WEB_MODE": "disk"
       }
     },
     {
@@ -47,14 +77,17 @@
   ],
   "buildPresets": [
     {"name": "dev-disk", "configurePreset": "dev-disk"},
-    {"name": "release-disk", "configurePreset": "release-disk"},
+    {"name": "host-embed", "configurePreset": "host-embed"},
     {"name": "release-embed", "configurePreset": "release-embed"},
+    {"name": "release-embed-arm64", "configurePreset": "release-embed-arm64"},
+    {"name": "release-disk", "configurePreset": "release-disk"},
     {"name": "host-offline-tests", "configurePreset": "host-offline-tests"}
   ],
   "testPresets": [
     {"name": "dev-disk", "configurePreset": "dev-disk", "output": {"outputOnFailure": true}},
-    {"name": "release-disk", "configurePreset": "release-disk", "output": {"outputOnFailure": true}},
+    {"name": "host-embed", "configurePreset": "host-embed", "output": {"outputOnFailure": true}},
     {"name": "release-embed", "configurePreset": "release-embed", "output": {"outputOnFailure": true}},
+    {"name": "release-disk", "configurePreset": "release-disk", "output": {"outputOnFailure": true}},
     {"name": "host-offline-tests", "configurePreset": "host-offline-tests", "output": {"outputOnFailure": true}}
   ]
 }
