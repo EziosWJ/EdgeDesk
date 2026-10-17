@@ -48,6 +48,17 @@
 
 **退出条件：** 桌面图标、Dock 和启动器交互通过前端测试及浏览器目视检查。
 
+### Phase 2.5 — NAS 风格设备概览小组件
+
+**目标：** 将现有设备概览整理为可复用、数据可信的资源小组件，视觉参考 `docs/design/prototypes/dashboard.html` 与 `components.html`。
+
+- 实现 CPU、内存、存储、网卡等资源卡片和短时趋势图；字段只使用现有 API/WebSocket 实际提供的数据。
+- 多挂载点和多网卡按真实实体分别展示；服务状态只显示后端能够确认的状态，不虚构 Docker/systemd 管理能力。
+- 加载、数据缺失、采集断开和部分不可用状态清晰可辨；演示数值不得进入生产代码。
+- 复用 `web/src/styles/edgedesk-tokens.css`、`web/public/assets/desktop/app-icons.svg` 和现有 Icon 封装，不引入新的图标库。
+
+**退出条件：** 组件状态、单位、缺失值与趋势图有测试；视觉按原型目视验收。
+
 ### Phase 3 — 桌面持久化与恢复
 
 **目标：** 刷新后恢复完整工作区。
@@ -91,11 +102,12 @@
 | 1 | [#4 DesktopShell 与 AppRegistry](https://github.com/EziosWJ/EdgeDesk/issues/4) | 桌面壳层和应用注册基础 | 无 |
 | 2 | [#5 WindowManager 与窗口生命周期](https://github.com/EziosWJ/EdgeDesk/issues/5) | 窗口操作、实例策略、最小化不卸载 | #4 |
 | 3 | [#6 桌面图标与 Dock](https://github.com/EziosWJ/EdgeDesk/issues/6) | 桌面入口、固定应用、运行状态、恢复最小化窗口 | #4、#5 |
-| 4 | [#7 应用启动器与快捷键](https://github.com/EziosWJ/EdgeDesk/issues/7) | 搜索、应用说明、菜单和窗口快捷操作 | #4、#5、#6 |
-| 5 | [#8 DesktopPersistence 与工作区恢复](https://github.com/EziosWJ/EdgeDesk/issues/8) | 本地布局 schema、恢复、回退 | #4、#5、#6 |
-| 6 | [#9 终端会话与编辑器生命周期](https://github.com/EziosWJ/EdgeDesk/issues/9) | 保留 Bash 会话、多 Tab、编辑器状态和关闭语义 | #5、#8 |
-| 7 | [#10 窄屏、快捷键边界与可访问性](https://github.com/EziosWJ/EdgeDesk/issues/10) | 响应式和键盘交互 | #5、#6、#7 |
-| 8 | [#11 回归测试、文档与目视验收](https://github.com/EziosWJ/EdgeDesk/issues/11) | 发布门槛与回归证据 | #4–#10 |
+| 4 | [#12 NAS 风格设备资源小组件](https://github.com/EziosWJ/EdgeDesk/issues/12) | CPU、内存、存储、网卡和系统信息卡片 | #4、#5 |
+| 5 | [#7 应用启动器与快捷键](https://github.com/EziosWJ/EdgeDesk/issues/7) | 搜索、应用说明、菜单和窗口快捷操作 | #4、#5、#6 |
+| 6 | [#8 DesktopPersistence 与工作区恢复](https://github.com/EziosWJ/EdgeDesk/issues/8) | 本地布局 schema、恢复、回退 | #4、#5、#6 |
+| 7 | [#9 终端会话与编辑器生命周期](https://github.com/EziosWJ/EdgeDesk/issues/9) | 保留 Bash 会话、多 Tab、编辑器状态和关闭语义 | #5、#8 |
+| 8 | [#10 窄屏、快捷键边界与可访问性](https://github.com/EziosWJ/EdgeDesk/issues/10) | 响应式和键盘交互 | #5、#6、#7 |
+| 9 | [#11 回归测试、文档与目视验收](https://github.com/EziosWJ/EdgeDesk/issues/11) | 发布门槛与回归证据 | #4–#10、#12 |
 
 ## 4. 通用完成定义
 
@@ -109,7 +121,8 @@
 ## 5. 发布门槛
 
 1. SPEC-0006 的功能验收全部完成，或明确记录经产品批准的延期项。
-2. 现有 V1.1 功能回归通过，尤其是认证、文件路径沙箱、上传/下载、终端 PTY 生命周期和实时指标。
-3. localStorage 数据损坏/升级、会话过期、服务重启、文件路径失效、窄屏和键盘焦点场景有验证结果。
-4. scripts/test-pr.sh 通过；发布前按 AGENTS.md 和 docs/testing.md 执行适用的 L2 构建/平台验证。
-5. docs/README.md 中 SPEC/ADR/实施计划索引更新；人工目视验收记录可追溯。
+2. 设备概览 NAS 风格小组件按真实 API 字段显示 CPU、内存、挂载点、网卡和系统信息；演示数据不进入生产 UI。
+3. 现有 V1.1 功能回归通过，尤其是认证、文件路径沙箱、上传/下载、终端 PTY 生命周期和实时指标。
+4. localStorage 数据损坏/升级、会话过期、服务重启、文件路径失效、窄屏和键盘焦点场景有验证结果。
+5. scripts/test-pr.sh 通过；发布前按 AGENTS.md 和 docs/testing.md 执行适用的 L2 构建/平台验证。
+6. docs/README.md 中 SPEC/ADR/实施计划索引更新；人工目视验收记录可追溯。
