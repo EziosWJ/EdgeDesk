@@ -110,6 +110,29 @@ describe('DirectoryTree', () => {
     expect(paths).toHaveLength(3); // exactly one request per level
   });
 
+  it('turns confirmed-empty directories into leaves without a caret or empty label', async () => {
+    const mock = install();
+    await render('/opt/app');
+
+    const before = rowFor('src');
+    expect(before.querySelector('button.ed-tree-caret')).not.toBeNull();
+    act(() => before.querySelector<HTMLElement>('button.ed-tree-caret')!.click());
+    await flush();
+
+    const leaf = rowFor('src');
+    expect(leaf.querySelector('button.ed-tree-caret')).toBeNull();
+    expect(leaf.querySelector('.ed-tree-caret.placeholder')).not.toBeNull();
+    expect(leaf.getAttribute('aria-expanded')).toBeNull();
+    expect(container.querySelector('.ed-tree-empty')).toBeNull();
+
+    const requests = () => listingCalls(mock).filter((call) => call.dirsOnly && call.path === '/opt/app/src');
+    expect(requests()).toHaveLength(1);
+    act(() => leaf.click());
+    await flush();
+    // Clicking a leaf only navigates; it never issues another listing.
+    expect(requests()).toHaveLength(1);
+  });
+
   it('reports load failures per node and retries on demand', async () => {
     const mock = install();
     mock.failListing('/docs', 'mock failure');

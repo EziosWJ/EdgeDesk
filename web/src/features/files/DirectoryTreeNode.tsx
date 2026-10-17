@@ -1,4 +1,5 @@
-import { iconStyle } from '../../services/assets';
+import { ChevronDown, ChevronRight, Folder, FolderOpen } from 'lucide-react';
+import { Icon } from '../../components/Icon';
 import type { FileEntry } from '../../types';
 
 /** Per-directory children cache of the tree: on-demand, never recursive. */
@@ -36,48 +37,60 @@ export function DirectoryTreeNode({
   // Only real subdirectories make it here: the backend `dirs_only` listing and
   // this filter both exclude symlinks, so the tree never follows links.
   const dirs = (state?.dirs ?? []).filter((entry) => entry.type === 'dir');
-  const hasChildren = !(state?.status === 'loaded' && dirs.length === 0);
+  // Confirmed-empty directories are leaves: no caret, no "无子目录" row, and
+  // clicking them only navigates. Unloaded directories keep the caret — hiding
+  // it before the first listing would make them impossible to expand.
+  const isLeaf = state?.status === 'loaded' && dirs.length === 0;
+  const expandIfPossible = () => {
+    if (isLeaf || isExpanded) return;
+    onToggle(path);
+  };
 
   return (
-    <div className="ed-tree-node" role="treeitem" aria-expanded={isExpanded} aria-selected={isCurrent}>
+    <div
+      className="ed-tree-node"
+      role="treeitem"
+      aria-expanded={isLeaf ? undefined : isExpanded}
+      aria-selected={isCurrent}
+    >
       <div
         className={`ed-tree-row${isCurrent ? ' current' : ''}`}
         style={{ paddingLeft: 6 + depth * 14 }}
         title={path}
         tabIndex={0}
         onClick={() => {
-          if (!isExpanded) onToggle(path);
+          expandIfPossible();
           onSelect(path);
         }}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            if (!isExpanded) onToggle(path);
+            expandIfPossible();
             onSelect(path);
-          } else if (event.key === 'ArrowRight' && !isExpanded) {
-            onToggle(path);
-          } else if (event.key === 'ArrowLeft' && isExpanded) {
+          } else if (event.key === 'ArrowRight') {
+            expandIfPossible();
+          } else if (event.key === 'ArrowLeft' && isExpanded && !isLeaf) {
             onToggle(path);
           }
         }}
       >
-        <button
-          type="button"
-          tabIndex={-1}
-          className={`ed-tree-caret${hasChildren ? '' : ' placeholder'}`}
-          aria-label={isExpanded ? '折叠目录' : '展开目录'}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggle(path);
-          }}
-        >
-          {isExpanded ? '▾' : '▸'}
-        </button>
-        <span
-          className="ed-icon-mask ed-tree-icon"
-          style={iconStyle('files')}
-          aria-hidden="true"
-        />
+        {isLeaf ? (
+          <span className="ed-tree-caret placeholder" aria-hidden="true" />
+        ) : (
+          <button
+            type="button"
+            tabIndex={-1}
+            className="ed-tree-caret"
+            aria-label={isExpanded ? '折叠目录' : '展开目录'}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggle(path);
+            }}
+          >
+            <Icon icon={isExpanded ? ChevronDown : ChevronRight} size={14} />
+          </button>
+        )}
+        <Icon icon={isExpanded ? FolderOpen : Folder} size={16} className="ed-tree-icon" />
         <span className="ed-tree-label">{name}</span>
         {state?.status === 'loading' && <span className="ed-spinner" role="status" aria-label="加载中" />}
         {state?.status === 'loaded' && state.truncated && (
@@ -86,7 +99,7 @@ export function DirectoryTreeNode({
           </span>
         )}
       </div>
-      {isExpanded && (
+      {isExpanded && !isLeaf && (
         <div role="group">
           {state?.status === 'error' && (
             <div className="ed-tree-error">
@@ -96,7 +109,6 @@ export function DirectoryTreeNode({
               </button>
             </div>
           )}
-          {state?.status === 'loaded' && dirs.length === 0 && <div className="ed-tree-empty">无子目录</div>}
           {dirs.map((child) => (
             <DirectoryTreeNode
               key={child.path}

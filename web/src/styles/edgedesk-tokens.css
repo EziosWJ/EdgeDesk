@@ -41,14 +41,6 @@
 .ed-status-offline { color: var(--ed-muted); }
 .ed-status-warning { color: var(--ed-warning); }
 .ed-status-error { color: var(--ed-danger); }
-.ed-icon-mask {
-  width: 1.5rem;
-  height: 1.5rem;
-  display: inline-block;
-  background-color: currentColor;
-  -webkit-mask: var(--ed-icon-url) center / contain no-repeat;
-  mask: var(--ed-icon-url) center / contain no-repeat;
-}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; }
 }

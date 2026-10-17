@@ -1,3 +1,16 @@
+import {
+  File,
+  FileArchive,
+  FileAudio,
+  FileCode,
+  FileImage,
+  FileSpreadsheet,
+  FileText,
+  FileVideo,
+  Folder,
+  Link2,
+  type LucideIcon,
+} from 'lucide-react';
 import { formatBytes, formatTime } from '../../services/api';
 import type { FileEntry } from '../../types';
 
@@ -65,21 +78,48 @@ export function filterEntries(entries: FileEntry[], query: string): FileEntry[] 
   return entries.filter((entry) => entry.name.toLowerCase().includes(needle));
 }
 
-/** SVG icon name from `web/public/assets/icons` for a listing entry. */
-export function iconName(entry: FileEntry): string {
-  if (entry.type === 'dir') return 'files';
-  if (entry.type === 'symlink') return 'link';
-  if (entry.mime.startsWith('image/')) return 'image';
-  if (entry.text_editable) return 'edit';
-  if (entry.type === 'file') return 'file';
-  return 'file';
+const CODE_EXTENSIONS = new Set([
+  'c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hh', 'rs', 'go', 'java', 'kt', 'py', 'rb', 'php', 'pl', 'lua',
+  'swift', 'cs', 'sh', 'bash', 'zsh', 'fish', 'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'vue', 'svelte',
+  'css', 'scss', 'less', 'html', 'htm', 'xml', 'yaml', 'yml', 'toml', 'ini', 'conf', 'cfg', 'sql',
+  'gradle', 'cmake', 'mk', 'proto', 'patch',
+]);
+const ARCHIVE_EXTENSIONS = new Set(['zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', 'zst', '7z', 'rar', 'deb', 'rpm', 'apk', 'jar']);
+const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'flac', 'ogg', 'oga', 'm4a', 'aac', 'opus', 'wma', 'mid']);
+const VIDEO_EXTENSIONS = new Set(['mp4', 'mkv', 'avi', 'mov', 'webm', 'wmv', 'flv', 'm4v', 'mpg', 'mpeg']);
+const SHEET_EXTENSIONS = new Set(['csv', 'tsv', 'xls', 'xlsx', 'ods', 'numbers']);
+
+function fileExtension(name: string): string {
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0 || dot === name.length - 1) return '';
+  return name.slice(dot + 1).toLowerCase();
+}
+
+/** Lucide icon for a listing entry; falls back to the generic file/ folder pair. */
+export function entryIcon(entry: FileEntry): LucideIcon {
+  if (entry.type === 'dir') return Folder;
+  if (entry.type === 'symlink') return Link2;
+  if (entry.mime.startsWith('image/')) return FileImage;
+  const extension = fileExtension(entry.name);
+  if (ARCHIVE_EXTENSIONS.has(extension)) return FileArchive;
+  if (AUDIO_EXTENSIONS.has(extension)) return FileAudio;
+  if (VIDEO_EXTENSIONS.has(extension)) return FileVideo;
+  if (SHEET_EXTENSIONS.has(extension)) return FileSpreadsheet;
+  if (!entry.text_editable) return File;
+  if (CODE_EXTENSIONS.has(extension)) return FileCode;
+  return FileText;
 }
 
 export function entryKindLabel(entry: FileEntry): string {
   if (entry.type === 'dir') return '目录';
   if (entry.type === 'symlink') return '符号链接';
   if (entry.mime.startsWith('image/')) return '图片';
-  if (entry.text_editable) return '文本';
+  const extension = fileExtension(entry.name);
+  if (ARCHIVE_EXTENSIONS.has(extension)) return '压缩包';
+  if (AUDIO_EXTENSIONS.has(extension)) return '音频';
+  if (VIDEO_EXTENSIONS.has(extension)) return '视频';
+  if (SHEET_EXTENSIONS.has(extension)) return '表格';
+  if (entry.text_editable) return CODE_EXTENSIONS.has(extension) ? '代码' : '文本';
   return '文件';
 }
 
@@ -90,9 +130,18 @@ export function entryMeta(entry: FileEntry): string {
   return `${formatBytes(entry.size)} · ${time}`;
 }
 
-/** Double click behaviour: text opens the editor, everything else previews. */
+/** Open behaviour: text opens the editor, everything else previews. */
 export function opensInEditor(entry: FileEntry): boolean {
   return entry.type === 'file' && entry.text_editable;
+}
+
+/**
+ * Client-side guard for browser-provided file names before they are joined to
+ * the current path; the backend sandbox remains the authority.
+ */
+export function isSafeUploadName(name: string): boolean {
+  if (!name || name === '.' || name === '..') return false;
+  return !name.includes('/') && !name.includes('\\') && !name.includes('\0');
 }
 
 export function clampTreeWidth(value: number): number {

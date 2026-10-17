@@ -1,5 +1,30 @@
-import { iconStyle } from '../../services/assets';
+import {
+  ArrowDown,
+  ArrowUp,
+  Download,
+  LayoutGrid,
+  List,
+  PenLine,
+  RefreshCw,
+  SquareTerminal,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react';
+import { Icon } from '../../components/Icon';
+import { api } from '../../services/api';
+import type { FileEntry } from '../../types';
 import type { SortKey, ViewMode } from './fileUtils';
+
+/** Selection mode: the action row is replaced in place, never a new panel. */
+export type ToolbarSelection = {
+  count: number;
+  /** Set when exactly one entry is selected (rename always, download for files). */
+  single: FileEntry | null;
+  onRename: (entry: FileEntry) => void;
+  onDelete: () => void;
+  onClear: () => void;
+};
 
 type Props = {
   path: string;
@@ -18,9 +43,7 @@ type Props = {
   onToggleHidden: () => void;
   loading: boolean;
   onRefresh: () => void;
-  selectionCount: number;
-  downloadHref: string | null;
-  onDeleteSelected: () => void;
+  selection: ToolbarSelection | null;
   onNewFolder: () => void;
   onUpload: () => void;
   onOpenTerminal: () => void;
@@ -43,9 +66,7 @@ export function FileToolbar({
   onToggleHidden,
   loading,
   onRefresh,
-  selectionCount,
-  downloadHref,
-  onDeleteSelected,
+  selection,
   onNewFolder,
   onUpload,
   onOpenTerminal,
@@ -60,7 +81,8 @@ export function FileToolbar({
           disabled={path === '/'}
           title="上级目录"
         >
-          ↑ 上级
+          <Icon icon={ArrowUp} size={14} />
+          上级
         </button>
         <nav className="ed-breadcrumbs" aria-label="当前路径">
           {breadcrumbs.map((crumb, index) => (
@@ -94,7 +116,7 @@ export function FileToolbar({
             aria-label="列表视图"
             onClick={() => onViewChange('list')}
           >
-            <span className="ed-icon-mask" style={iconStyle('list')} aria-hidden="true" />
+            <Icon icon={List} size={16} />
           </button>
           <button
             type="button"
@@ -103,7 +125,7 @@ export function FileToolbar({
             aria-label="网格视图"
             onClick={() => onViewChange('grid')}
           >
-            <span className="ed-icon-mask" style={iconStyle('grid')} aria-hidden="true" />
+            <Icon icon={LayoutGrid} size={16} />
           </button>
         </div>
         <button
@@ -114,56 +136,78 @@ export function FileToolbar({
           onClick={onRefresh}
           disabled={loading}
         >
-          <span className="ed-icon-mask" style={iconStyle('refresh')} aria-hidden="true" />
+          <Icon icon={RefreshCw} size={16} />
         </button>
       </div>
 
       <div className="ed-action-row">
-        <button type="button" className="ed-button primary" onClick={onUpload}>
-          <span className="ed-icon-mask" style={iconStyle('upload')} aria-hidden="true" />
-          上传文件
-        </button>
-        <button type="button" className="ed-button" onClick={onNewFolder}>
-          新建文件夹
-        </button>
-        {downloadHref ? (
-          <a className="ed-button" href={downloadHref}>
-            <span className="ed-icon-mask" style={iconStyle('download')} aria-hidden="true" />
-            下载
-          </a>
-        ) : (
-          <button type="button" className="ed-button" disabled title="请在列表中选择一个文件">
-            下载
-          </button>
-        )}
-        <button
-          type="button"
-          className="ed-button danger"
-          disabled={selectionCount === 0}
-          onClick={onDeleteSelected}
-        >
-          删除{selectionCount > 0 ? ` (${selectionCount})` : ''}
-        </button>
-        <button type="button" className="ed-button" onClick={onOpenTerminal} title="在浮动窗口中打开 Bash">
-          <span className="ed-icon-mask" style={iconStyle('terminal')} aria-hidden="true" />
-          在当前目录打开终端
-        </button>
-        {view === 'grid' && (
-          <span className="ed-sort-control">
-            <label htmlFor="ed-files-sort">排序</label>
-            <select
-              id="ed-files-sort"
-              value={sort}
-              onChange={(event) => onSortChange(event.target.value as SortKey)}
-            >
-              <option value="name">名称</option>
-              <option value="size">大小</option>
-              <option value="mtime">修改时间</option>
-            </select>
-            <button type="button" className="ed-icon-button" onClick={onToggleDesc} title={desc ? '降序' : '升序'}>
-              {desc ? '▼' : '▲'}
+        {selection ? (
+          <>
+            <span className="ed-selection-count" role="status">
+              已选 {selection.count} 项
+            </span>
+            {selection.single?.type === 'file' && (
+              <a className="ed-button" href={api.downloadUrl(selection.single.path)}>
+                <Icon icon={Download} size={15} />
+                下载
+              </a>
+            )}
+            {selection.single && (
+              <button type="button" className="ed-button" onClick={() => selection.onRename(selection.single!)}>
+                <Icon icon={PenLine} size={15} />
+                重命名
+              </button>
+            )}
+            <button type="button" className="ed-button danger" onClick={selection.onDelete}>
+              <Icon icon={Trash2} size={15} />
+              删除
             </button>
-          </span>
+            <button type="button" className="ed-button" onClick={selection.onClear}>
+              <Icon icon={X} size={15} />
+              取消选择
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" className="ed-button primary" onClick={onUpload}>
+              <Icon icon={Upload} size={15} />
+              上传文件
+            </button>
+            <button type="button" className="ed-button" onClick={onNewFolder}>
+              新建文件夹
+            </button>
+            <button
+              type="button"
+              className="ed-button"
+              onClick={onOpenTerminal}
+              title="在浮动窗口中打开 Bash"
+            >
+              <Icon icon={SquareTerminal} size={15} />
+              在当前目录打开终端
+            </button>
+            {view === 'grid' && (
+              <span className="ed-sort-control">
+                <label htmlFor="ed-files-sort">排序</label>
+                <select
+                  id="ed-files-sort"
+                  value={sort}
+                  onChange={(event) => onSortChange(event.target.value as SortKey)}
+                >
+                  <option value="name">名称</option>
+                  <option value="size">大小</option>
+                  <option value="mtime">修改时间</option>
+                </select>
+                <button
+                  type="button"
+                  className="ed-icon-button"
+                  onClick={onToggleDesc}
+                  title={desc ? '降序' : '升序'}
+                >
+                  <Icon icon={desc ? ArrowDown : ArrowUp} size={14} />
+                </button>
+              </span>
+            )}
+          </>
         )}
         <label className="ed-toggle" title="同时作用于目录树和文件列表">
           <input type="checkbox" checked={showHidden} onChange={onToggleHidden} />

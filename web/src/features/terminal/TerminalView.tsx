@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { Plus, RefreshCw, SquareArrowOutUpRight, X } from 'lucide-react';
 import { TerminalPane } from './TerminalPane';
+import { Icon } from '../../components/Icon';
 import { api, formatTime } from '../../services/api';
 import { sessionStore, useTerminals } from '../../stores/sessionStore';
 import { loadStoredTerminals, storeTerminals } from '../../services/terminalSocket';
@@ -72,9 +74,11 @@ export function TerminalView() {
         </div>
         <div className="ed-toolbar">
           <button type="button" className="ed-button" onClick={() => void refresh()} disabled={busy}>
+            <Icon icon={RefreshCw} size={14} />
             刷新
           </button>
           <button type="button" className="ed-button primary" onClick={() => void createSession()} disabled={busy || !sessionStore.shellInfo.available}>
+            <Icon icon={Plus} size={14} />
             新建终端
           </button>
         </div>
@@ -120,7 +124,7 @@ export function TerminalView() {
                     });
                   }}
                 >
-                  ⧉
+                  <Icon icon={SquareArrowOutUpRight} size={14} />
                 </button>
                 <button
                   type="button"
@@ -130,12 +134,12 @@ export function TerminalView() {
                     void closeSession(session.id);
                   }}
                 >
-                  ×
+                  <Icon icon={X} size={14} />
                 </button>
               </div>
             ))}
             <button type="button" className="ed-tab-add" onClick={() => void createSession()} title="新建终端">
-              +
+              <Icon icon={Plus} size={16} />
             </button>
           </div>
           <div className="ed-terminal-surface ed-panel">

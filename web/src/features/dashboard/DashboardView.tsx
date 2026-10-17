@@ -1,4 +1,7 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import type { LucideIcon } from 'lucide-react';
+import { Activity, CircuitBoard, Cpu, HardDrive, MemoryStick, Timer } from 'lucide-react';
+import { Icon } from '../../components/Icon';
 import { DonutChart } from '../../components/DonutChart';
 import { MetricChart } from '../../components/MetricChart';
 import { Sparkline } from '../../components/Sparkline';
@@ -7,7 +10,6 @@ import { sessionStore, useMetricsSamples } from '../../stores/sessionStore';
 import { bootMoment, deltaTone, formatDelta, formatDateTime, kpiPercent, rateScale, sliceWindow, usageDelta } from './chartUtils';
 
 const asset = (path: string) => `${import.meta.env.BASE_URL}assets/${path}`;
-const iconMask = (path: string): CSSProperties => ({ '--ed-icon-url': `url(${asset(path)})` }) as CSSProperties;
 
 /** Wall clock for the page header (real time, not sample time). */
 function useClock(): Date {
@@ -24,12 +26,12 @@ function clockText(now: Date): string {
   return `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${two(now.getHours())}:${two(now.getMinutes())}:${two(now.getSeconds())}`;
 }
 
-function KpiCard({ icon, title, badge, children }: { icon: string; title: string; badge?: ReactNode; children: ReactNode }) {
+function KpiCard({ icon, title, badge, children }: { icon: LucideIcon; title: string; badge?: ReactNode; children: ReactNode }) {
   return (
     <article className="ed-panel ed-kpi">
       <header>
         <span className="ed-icon-tile">
-          <span className="ed-icon-mask" style={iconMask(`icons/${icon}.svg`)} aria-hidden="true" />
+          <Icon icon={icon} size={19} />
         </span>
         <h2>{title}</h2>
         {badge && <span className="ed-kpi-badge">{badge}</span>}
@@ -163,7 +165,7 @@ export function DashboardView() {
         <>
           <section className="ed-kpi-grid">
             <KpiCard
-              icon="cpu"
+              icon={Cpu}
               title="CPU 使用率"
               badge={unavailable.has('cpu_usage') ? <span className="ed-badge warning">不可用</span> : undefined}
             >
@@ -185,7 +187,7 @@ export function DashboardView() {
             </KpiCard>
 
             <KpiCard
-              icon="memory"
+              icon={MemoryStick}
               title="内存使用率"
               badge={!latest.memory || unavailable.has('memory') ? <span className="ed-badge warning">不可用</span> : undefined}
             >
@@ -211,7 +213,7 @@ export function DashboardView() {
             </KpiCard>
 
             <KpiCard
-              icon="disk"
+              icon={HardDrive}
               title="磁盘使用率"
               badge={!primaryDisk ? <span className="ed-badge warning">不可用</span> : undefined}
             >
@@ -233,7 +235,7 @@ export function DashboardView() {
             </KpiCard>
 
             <KpiCard
-              icon="network"
+              icon={Activity}
               title="网络吞吐"
               badge={unavailable.has('network_rate_initial') ? <span className="ed-badge">采样中…</span> : undefined}
             >
@@ -255,7 +257,7 @@ export function DashboardView() {
               </div>
             </KpiCard>
 
-            <KpiCard icon="uptime" title="系统运行时间">
+            <KpiCard icon={Timer} title="系统运行时间">
               <div className="ed-kpi-value-row">
                 <strong className="ed-kpi-value ed-kpi-value-sm">{formatUptime(latest.uptime_seconds)}</strong>
               </div>
@@ -271,7 +273,7 @@ export function DashboardView() {
               </div>
             </KpiCard>
 
-            <KpiCard icon="cpu" title="CPU 架构 / 内核">
+            <KpiCard icon={CircuitBoard} title="CPU 架构 / 内核">
               <div className="ed-kpi-value-row">
                 <strong className="ed-kpi-value ed-kpi-value-sm">{latest.arch || '—'}</strong>
               </div>

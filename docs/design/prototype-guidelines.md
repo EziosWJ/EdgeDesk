@@ -8,10 +8,13 @@
 
 | 原型页 | 核心 UI | 复用素材 | 必须实现为真实组件 |
 | --- | --- | --- | --- |
-| ① 仪表盘 | 设备资源总览 | `edge-device.svg`、`cpu/memory/disk/network/uptime.svg` | 指标卡、折线图、环形图、自动刷新、采集失败提示 |
-| ② 文件管理 | 目录树 + 面包屑 + 文件表格 + 多浮窗 | `files.svg`、`empty-files.svg`、`edit.svg` | 上传下载、文件表格、浮动终端、浮动编辑器、拖拽与缩放 |
-| ③ 终端工作区 | 多标签 Bash 终端 + 会话列表 | `terminal.svg`、`empty-terminal.svg`、`session-disconnected.svg` | PTY/WebSocket 终端、Tab 切换、导航/刷新后会话恢复 |
-| ④ 会话/设置 | 会话状态列表和系统配置 | `sessions.svg`、`settings.svg` | 会话列表、只读状态、受保护的配置表单 |
+| ① 仪表盘 | 设备资源总览 | `edge-device.svg`、`monitor-unavailable.svg` | 指标卡、折线图、环形图、自动刷新、采集失败提示 |
+| ② 文件管理 | 目录树 + 面包屑 + 文件表格 + 多浮窗 | `empty-files.svg` | 上传下载、文件表格、浮动终端、浮动编辑器、拖拽与缩放 |
+| ③ 终端工作区 | 多标签 Bash 终端 + 会话列表 | `empty-terminal.svg`、`session-disconnected.svg` | PTY/WebSocket 终端、Tab 切换、导航/刷新后会话恢复 |
+| ④ 会话/设置 | 会话状态列表和系统配置 | 品牌与面板素材 | 会话列表、只读状态、受保护的配置表单 |
+
+界面图标（导航、指标、工具栏、文件类型、窗口控制）统一使用 `lucide-react` 组件，
+见 [ADR-0007](../adr/0007-frontend-icon-library.md) 与 [素材使用指南](asset-usage.md)。
 
 ## 视觉规则（从原型提炼）
 

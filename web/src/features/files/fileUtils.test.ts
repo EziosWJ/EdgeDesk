@@ -1,14 +1,25 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  File,
+  FileArchive,
+  FileCode,
+  FileImage,
+  FileSpreadsheet,
+  FileText,
+  Folder,
+  Link2,
+} from 'lucide-react';
 import type { FileEntry } from '../../types';
 import {
   ancestorChain,
   baseName,
   breadcrumbsFor,
   clampTreeWidth,
+  entryIcon,
   entryKindLabel,
   entryMeta,
   filterEntries,
-  iconName,
+  isSafeUploadName,
   joinPath,
   normalizePath,
   opensInEditor,
@@ -73,18 +84,35 @@ describe('fileUtils entries', () => {
     expect(filterEntries(entries, 'no-match')).toHaveLength(0);
   });
 
-  it('derives icons and labels from the entry type and mime', () => {
-    expect(iconName(entry({ name: 'docs', type: 'dir', mime: 'inode/directory' }))).toBe('files');
-    expect(iconName(entry({ name: 'link', type: 'symlink', mime: 'inode/symlink' }))).toBe('link');
-    expect(iconName(entry({ name: 'photo.png', mime: 'image/png' }))).toBe('image');
-    expect(iconName(entry({ name: 'note.md' }))).toBe('edit');
-    expect(iconName(entry({ name: 'blob.bin', text_editable: false, mime: 'application/octet-stream' }))).toBe('file');
+  it('derives icons and labels from the entry type, mime and extension', () => {
+    expect(entryIcon(entry({ name: 'docs', type: 'dir', mime: 'inode/directory' }))).toBe(Folder);
+    expect(entryIcon(entry({ name: 'link', type: 'symlink', mime: 'inode/symlink' }))).toBe(Link2);
+    expect(entryIcon(entry({ name: 'photo.png', mime: 'image/png' }))).toBe(FileImage);
+    expect(entryIcon(entry({ name: 'note.md' }))).toBe(FileText);
+    expect(entryIcon(entry({ name: 'app.ts' }))).toBe(FileCode);
+    expect(entryIcon(entry({ name: 'backup.tar.gz', text_editable: false }))).toBe(FileArchive);
+    expect(entryIcon(entry({ name: 'report.csv', text_editable: false }))).toBe(FileSpreadsheet);
+    expect(entryIcon(entry({ name: 'blob.bin', text_editable: false, mime: 'application/octet-stream' }))).toBe(File);
     expect(entryKindLabel(entry({ name: 'docs', type: 'dir' }))).toBe('目录');
     expect(entryKindLabel(entry({ name: 'link', type: 'symlink' }))).toBe('符号链接');
+    expect(entryKindLabel(entry({ name: 'app.ts' }))).toBe('代码');
+    expect(entryKindLabel(entry({ name: 'backup.tar.gz', text_editable: false }))).toBe('压缩包');
     expect(opensInEditor(entry({ name: 'note.md' }))).toBe(true);
     expect(opensInEditor(entry({ name: 'photo.png', text_editable: false }))).toBe(false);
     expect(opensInEditor(entry({ name: 'docs', type: 'dir' }))).toBe(false);
     expect(entryMeta(entry({ name: 'photo.png', size: 2048, text_editable: false }))).toContain('2.0 KiB');
+  });
+
+  it('refuses upload names that could escape the current directory', () => {
+    expect(isSafeUploadName('notes.txt')).toBe(true);
+    expect(isSafeUploadName('.env')).toBe(true);
+    expect(isSafeUploadName('')).toBe(false);
+    expect(isSafeUploadName('.')).toBe(false);
+    expect(isSafeUploadName('..')).toBe(false);
+    expect(isSafeUploadName('../etc/passwd')).toBe(false);
+    expect(isSafeUploadName('a/b.txt')).toBe(false);
+    expect(isSafeUploadName('a\\b.txt')).toBe(false);
+    expect(isSafeUploadName('a\0b')).toBe(false);
   });
 });
 

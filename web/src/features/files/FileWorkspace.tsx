@@ -5,10 +5,12 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type MouseEvent,
+  type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
+import { PanelLeftOpen, Upload } from 'lucide-react';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { Icon } from '../../components/Icon';
 import { PromptDialog } from '../../components/PromptDialog';
 import { api, formatBytes } from '../../services/api';
 import { asset } from '../../services/assets';
@@ -17,11 +19,12 @@ import type { FileEntry } from '../../types';
 import { DirectoryTree } from './DirectoryTree';
 import { FileGridView } from './FileGridView';
 import { FileListView } from './FileListView';
-import { FileToolbar } from './FileToolbar';
+import { FileToolbar, type ToolbarSelection } from './FileToolbar';
 import {
   breadcrumbsFor,
   clampTreeWidth,
   filterEntries,
+  isSafeUploadName,
   joinPath,
   normalizePath,
   opensInEditor,
@@ -41,16 +44,84 @@ type DialogState =
   | { type: 'delete'; entries: FileEntry[] }
   | null;
 
+/** Files collected from one drop, with the items that were refused. */
+type DroppedFiles = {
+  files: File[];
+  skippedDirs: number;
+  skippedInvalid: number;
+};
+
+/** Pending drag-and-drop upload shown in the confirmation dialog. */
+type DropConfirm = DroppedFiles & { conflicts: string[] };
+
 const EMPTY_ENTRIES: FileEntry[] = [];
 
 function describeError(caught: unknown): string {
   return caught instanceof Error ? caught.message : String(caught);
 }
 
+function hasFilePayload(types: readonly string[] | undefined): boolean {
+  return Array.from(types ?? []).includes('Files');
+}
+
+/**
+ * Browser drag payloads only expose directory entries through
+ * `webkitGetAsEntry`; when it is unavailable every file is treated as flat.
+ */
+function extractDroppedFiles(transfer: DataTransfer): DroppedFiles {
+  const items = Array.from(transfer.items ?? []);
+  const files: File[] = [];
+  let skippedDirs = 0;
+  let skippedInvalid = 0;
+  if (items.length > 0 && typeof items[0].webkitGetAsEntry === 'function') {
+    for (const item of items) {
+      if (item.kind !== 'file') continue;
+      const entry = item.webkitGetAsEntry();
+      if (entry?.isDirectory) {
+        skippedDirs += 1;
+        continue;
+      }
+      const file = item.getAsFile();
+      if (!file || !isSafeUploadName(file.name)) {
+        skippedInvalid += 1;
+        continue;
+      }
+      files.push(file);
+    }
+  } else {
+    for (const file of Array.from(transfer.files ?? [])) {
+      if (!isSafeUploadName(file.name)) {
+        skippedInvalid += 1;
+        continue;
+      }
+      files.push(file);
+    }
+  }
+  return { files, skippedDirs, skippedInvalid };
+}
+
+function dropSummary(drop: DropConfirm): string {
+  const parts = ['文件将流式写入当前目录，成功后原子替换。'];
+  if (drop.conflicts.length > 0) parts.push(`${drop.conflicts.length} 个文件与当前页同名，将被覆盖。`);
+  if (drop.skippedDirs > 0) parts.push(`已跳过 ${drop.skippedDirs} 个文件夹（暂不支持目录上传）。`);
+  if (drop.skippedInvalid > 0) parts.push(`跳过 ${drop.skippedInvalid} 个名称不合法的文件。`);
+  return parts.join(' ');
+}
+
+function dropDetails(drop: DropConfirm): string[] {
+  const names = drop.files.map(
+    (file) => `${file.name}（${formatBytes(file.size)}）${drop.conflicts.includes(file.name) ? ' · 将覆盖' : ''}`,
+  );
+  const details = names.slice(0, 5);
+  if (names.length > 5) details.push(`…还有 ${names.length - 5} 个文件`);
+  return details;
+}
+
 /**
  * File workspace: directory tree + breadcrumb + toolbar + list/grid views over
- * one shared listing and one shared selection. The tree keeps its own state
- * (on-demand children cache); neither view owns the data.
+ * one shared listing and one shared selection. Selection is checkbox-only;
+ * clicking an entry opens it. The toolbar swaps in selection actions in place
+ * so the content below never shifts.
  */
 export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
   const [path, setPath] = useState(() => normalizePath(initialPath));
@@ -69,6 +140,8 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
   const [treeWidth, setTreeWidth] = useState(readTreeWidthPreference);
   const [revision, setRevision] = useState(0);
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [dropConfirm, setDropConfirm] = useState<DropConfirm | null>(null);
+  const [dropActive, setDropActive] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [uploadPercent, setUploadPercent] = useState<number | null>(null);
@@ -76,6 +149,7 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const treeWidthRef = useRef(treeWidth);
+  const dragDepthRef = useRef(0);
 
   const listing = useDirectoryListing(path, { showHidden, sort, desc, page });
   const { reload, loading: listingLoading } = listing;
@@ -105,6 +179,19 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
       return next.size === prev.size ? prev : next;
     });
   }, [entries]);
+
+  // Dropping files outside the workspace must not make the browser open them.
+  useEffect(() => {
+    const preventBrowserOpen = (event: DragEvent) => {
+      if (hasFilePayload(event.dataTransfer?.types)) event.preventDefault();
+    };
+    window.addEventListener('dragover', preventBrowserOpen);
+    window.addEventListener('drop', preventBrowserOpen);
+    return () => {
+      window.removeEventListener('dragover', preventBrowserOpen);
+      window.removeEventListener('drop', preventBrowserOpen);
+    };
+  }, []);
 
   const navigate = useCallback(
     (target: string) => {
@@ -156,25 +243,84 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
     }
   };
 
-  const handleUpload = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
+  const uploadFiles = async (files: File[]) => {
+    if (files.length === 0) return;
     setUploadPercent(0);
     setActionError(null);
     setNotice(null);
+    let uploaded = 0;
+    let totalBytes = 0;
     try {
-      for (const file of Array.from(files)) {
+      for (const file of files) {
         await api.upload(joinPath(path, file.name), file, (percent) => setUploadPercent(percent));
-        setNotice(`已上传 ${file.name}（${formatBytes(file.size)}，原子替换完成）`);
+        uploaded += 1;
+        totalBytes += file.size;
       }
+      setNotice(
+        files.length === 1
+          ? `已上传 ${files[0].name}（${formatBytes(files[0].size)}，原子替换完成）`
+          : `已上传 ${files.length} 个文件（共 ${formatBytes(totalBytes)}，原子替换完成）`,
+      );
       reload();
       setRevision((value) => value + 1);
     } catch (caught) {
       setNotice(null);
-      setActionError(describeError(caught));
+      const message = describeError(caught);
+      setActionError(uploaded > 0 ? `${message}（前 ${uploaded} 个文件已上传成功）` : message);
     } finally {
       setUploadPercent(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  const handleUpload = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    void uploadFiles(Array.from(files));
+  };
+
+  const onDragEnter = (event: ReactDragEvent<HTMLElement>) => {
+    if (!hasFilePayload(event.dataTransfer?.types)) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setDropActive(true);
+  };
+
+  const onDragOver = (event: ReactDragEvent<HTMLElement>) => {
+    if (!hasFilePayload(event.dataTransfer?.types)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  };
+
+  const onDragLeave = (event: ReactDragEvent<HTMLElement>) => {
+    if (!hasFilePayload(event.dataTransfer?.types)) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDropActive(false);
+  };
+
+  const onDrop = (event: ReactDragEvent<HTMLElement>) => {
+    const transfer = event.dataTransfer;
+    if (!transfer || !hasFilePayload(transfer.types)) return;
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setDropActive(false);
+    if (uploadPercent !== null) {
+      setNotice('正在上传，请等待当前任务完成后再拖入文件。');
+      return;
+    }
+    const dropped = extractDroppedFiles(transfer);
+    if (dropped.files.length === 0) {
+      setNotice(
+        dropped.skippedDirs > 0
+          ? `未检测到可上传的文件（已跳过 ${dropped.skippedDirs} 个文件夹，暂不支持目录上传）。`
+          : '未检测到可上传的文件。',
+      );
+      return;
+    }
+    const existing = new Set(entries.map((entry) => entry.name));
+    const conflicts = dropped.files.map((file) => file.name).filter((name) => existing.has(name));
+    setActionError(null);
+    setNotice(null);
+    setDropConfirm({ ...dropped, conflicts });
   };
 
   const handleMkdir = async (name: string) => {
@@ -241,19 +387,6 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
     });
   };
 
-  const handleEntryClick = (entry: FileEntry, event: MouseEvent<HTMLElement>) => {
-    const additive = event.metaKey || event.ctrlKey || event.shiftKey;
-    setSelected((prev) => {
-      if (additive) {
-        const next = new Set(prev);
-        if (next.has(entry.path)) next.delete(entry.path);
-        else next.add(entry.path);
-        return next;
-      }
-      return new Set([entry.path]);
-    });
-  };
-
   const toggleAll = (checked: boolean) => {
     setSelected(checked ? new Set(visibleEntries.map((entry) => entry.path)) : new Set());
   };
@@ -281,8 +414,17 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
     writeTreeWidthPreference(treeWidthRef.current);
   };
 
-  const singleFileSelection =
-    selectedEntries.length === 1 && selectedEntries[0].type === 'file' ? selectedEntries[0] : null;
+  const selection: ToolbarSelection | null =
+    selectedEntries.length > 0
+      ? {
+          count: selectedEntries.length,
+          single: selectedEntries.length === 1 ? selectedEntries[0] : null,
+          onRename: (entry) => setDialog({ type: 'rename', entry }),
+          onDelete: () => setDialog({ type: 'delete', entries: selectedEntries }),
+          onClear: () => setSelected(new Set()),
+        }
+      : null;
+
   const contentState: 'loading' | 'error' | 'empty' | 'filtered' | 'ready' = listingError
     ? 'error'
     : loading && entries.length === 0
@@ -302,7 +444,6 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
     onNavigateUp: () => navigate(parentPath(path)),
     onToggleAll: toggleAll,
     onToggleEntry: toggleEntry,
-    onEntryClick: handleEntryClick,
     onOpen: openEntry,
     onPreview: openInPreview,
     onEdit: openInEditor,
@@ -350,11 +491,24 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
           title="展开目录树"
           aria-label="展开目录树"
         >
-          »
+          <Icon icon={PanelLeftOpen} size={16} />
         </button>
       )}
 
-      <section className="ed-files-main">
+      <section
+        className={`ed-files-main${dropActive ? ' drop-active' : ''}`}
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        {dropActive && (
+          <div className="ed-drop-hint" aria-hidden="true">
+            <Icon icon={Upload} size={28} />
+            <strong>释放以上传到当前目录</strong>
+            <span>{path}</span>
+          </div>
+        )}
         <FileToolbar
           path={path}
           breadcrumbs={breadcrumbs}
@@ -375,9 +529,7 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
           }}
           loading={loading}
           onRefresh={refresh}
-          selectionCount={selected.size}
-          downloadHref={singleFileSelection ? api.downloadUrl(singleFileSelection.path) : null}
-          onDeleteSelected={() => setDialog({ type: 'delete', entries: selectedEntries })}
+          selection={selection}
           onNewFolder={() => setDialog({ type: 'mkdir' })}
           onUpload={() => fileInputRef.current?.click()}
           onOpenTerminal={() => void openTerminalHere()}
@@ -404,37 +556,6 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
             正在上传… <progress max={100} value={uploadPercent} /> {uploadPercent}%
           </div>
         )}
-        {selected.size > 0 && (
-          <div className="ed-selection-bar" role="status">
-            <span>已选 {selected.size} 项</span>
-            <div className="ed-toolbar">
-              {singleFileSelection && (
-                <a className="ed-button small" href={api.downloadUrl(singleFileSelection.path)}>
-                  下载
-                </a>
-              )}
-              {selectedEntries.length === 1 && (
-                <button
-                  type="button"
-                  className="ed-button small"
-                  onClick={() => setDialog({ type: 'rename', entry: selectedEntries[0] })}
-                >
-                  重命名
-                </button>
-              )}
-              <button
-                type="button"
-                className="ed-button small danger"
-                onClick={() => setDialog({ type: 'delete', entries: selectedEntries })}
-              >
-                删除
-              </button>
-              <button type="button" className="ed-button small" onClick={() => setSelected(new Set())}>
-                取消选择
-              </button>
-            </div>
-          </div>
-        )}
 
         {contentState === 'error' && (
           <div className="ed-files-state ed-panel" role="alert">
@@ -458,7 +579,7 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
           <div className="ed-files-state ed-panel">
             <img src={asset('illustrations/empty-files.svg')} alt="" />
             <strong>当前目录为空</strong>
-            <p>这里还没有文件或子目录，可以上传文件或新建文件夹。</p>
+            <p>这里还没有文件或子目录，可以上传文件、拖入文件或新建文件夹。</p>
             <div className="ed-toolbar">
               <button type="button" className="ed-button primary" onClick={() => fileInputRef.current?.click()}>
                 上传文件
@@ -521,7 +642,7 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
         type="file"
         multiple
         hidden
-        onChange={(event) => void handleUpload(event.target.files)}
+        onChange={(event) => handleUpload(event.target.files)}
       />
 
       {dialog?.type === 'mkdir' && (
@@ -561,6 +682,20 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
           busy={deleting}
           onCancel={() => setDialog(null)}
           onConfirm={() => void confirmDelete()}
+        />
+      )}
+      {dropConfirm && (
+        <ConfirmDialog
+          title={`上传 ${dropConfirm.files.length} 个文件到 ${path}`}
+          message={dropSummary(dropConfirm)}
+          details={dropDetails(dropConfirm)}
+          confirmText="上传"
+          onCancel={() => setDropConfirm(null)}
+          onConfirm={() => {
+            const files = dropConfirm.files;
+            setDropConfirm(null);
+            void uploadFiles(files);
+          }}
         />
       )}
     </div>

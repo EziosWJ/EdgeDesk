@@ -1,4 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Download,
+  Eye,
+  FolderOpen,
+  Link2,
+  MoreVertical,
+  PenLine,
+  TextCursorInput,
+  Trash2,
+} from 'lucide-react';
+import { Icon } from '../../components/Icon';
 import { api } from '../../services/api';
 import type { FileEntry } from '../../types';
 
@@ -70,7 +81,12 @@ export function FileEntryActions({
   };
 
   return (
-    <div className={`ed-actions${className ? ` ${className}` : ''}`} ref={rootRef}>
+    // Clicks inside the menu must never reach the card/row open handler.
+    <div
+      className={`ed-actions${className ? ` ${className}` : ''}`}
+      ref={rootRef}
+      onClick={(event) => event.stopPropagation()}
+    >
       <button
         ref={triggerRef}
         type="button"
@@ -81,7 +97,7 @@ export function FileEntryActions({
         aria-expanded={open}
         onClick={toggle}
       >
-        ⋮
+        <Icon icon={MoreVertical} size={15} />
       </button>
       {open && position && (
         <div
@@ -92,34 +108,41 @@ export function FileEntryActions({
         >
           {entry.type === 'dir' && (
             <button type="button" role="menuitem" onClick={run(() => onOpen(entry))}>
+              <Icon icon={FolderOpen} size={14} />
               打开
             </button>
           )}
           {entry.type === 'file' && (
             <a role="menuitem" href={api.downloadUrl(entry.path)} onClick={close}>
+              <Icon icon={Download} size={14} />
               下载
             </a>
           )}
           {entry.type === 'file' && (
             <button type="button" role="menuitem" onClick={run(() => onPreview(entry))}>
+              <Icon icon={Eye} size={14} />
               预览
             </button>
           )}
           {entry.type === 'file' && entry.text_editable && (
             <button type="button" role="menuitem" onClick={run(() => onEdit(entry))}>
+              <Icon icon={PenLine} size={14} />
               编辑
             </button>
           )}
           {entry.type === 'symlink' && (
             <button type="button" role="menuitem" onClick={run(() => onOpen(entry))}>
+              <Icon icon={Link2} size={14} />
               查看链接目标
             </button>
           )}
           <div className="ed-menu-sep" />
           <button type="button" role="menuitem" onClick={run(() => onRename(entry))}>
+            <Icon icon={TextCursorInput} size={14} />
             重命名
           </button>
           <button type="button" role="menuitem" className="danger" onClick={run(() => onDelete(entry))}>
+            <Icon icon={Trash2} size={14} />
             删除
           </button>
         </div>

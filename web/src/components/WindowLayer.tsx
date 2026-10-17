@@ -1,4 +1,6 @@
+import { Eye, PenLine, SquareTerminal } from 'lucide-react';
 import { FloatingWindow } from './FloatingWindow';
+import { Icon } from './Icon';
 import { EditorPane } from '../features/files/EditorPane';
 import { PreviewPane } from '../features/files/PreviewPane';
 import { TerminalPane } from '../features/terminal/TerminalPane';
@@ -28,7 +30,8 @@ export function WindowLayer() {
         <div className="ed-taskbar" role="toolbar" aria-label="最小化的窗口">
           {minimized.map((item) => (
             <button key={item.id} type="button" onClick={() => windowStore.focus(item.id)} title="恢复窗口">
-              {item.kind === 'terminal' ? '⌨' : item.kind === 'editor' ? '✎' : '👁'} {item.title}
+              <Icon icon={item.kind === 'terminal' ? SquareTerminal : item.kind === 'editor' ? PenLine : Eye} size={13} />
+              {item.title}
             </button>
           ))}
         </div>

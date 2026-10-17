@@ -96,8 +96,10 @@ describe('FileWorkspace', () => {
     const box = rowFor(name).querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     act(() => box.click());
   };
-  const doubleClick = (element: Element) => {
-    act(() => element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+  const dropEvent = (type: string, transfer: unknown): Event => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: transfer });
+    return event;
   };
   const typeInto = (input: HTMLInputElement, value: string) => {
     act(() => {
@@ -134,29 +136,58 @@ describe('FileWorkspace', () => {
     expect(listings[0].path).toBe('/opt/app');
   });
 
-  it('navigates only on double click and keeps single clicks for selection', async () => {
+  it('opens on a single click and selects only through checkboxes', async () => {
     const mock = install();
     await render('/');
 
     const before = listingCalls(mock).length;
     act(() => rowFor('README.md').querySelector<HTMLElement>('.ed-entry')!.click());
     await flush();
-    expect(listingCalls(mock)).toHaveLength(before); // single click never navigates
-    expect(rowFor('README.md').className).toContain('selected');
-    expect(breadcrumbs()).toEqual(['/']);
+    // The name opens the editor; it never selects and never refetches.
+    expect(windowStore.getSnapshot().map((item) => item.kind)).toEqual(['editor']);
+    expect(rowFor('README.md').className).not.toContain('selected');
+    expect(rowFor('README.md').querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(false);
+    expect(container.querySelector('.ed-selection-count')).toBeNull();
+    expect(listingCalls(mock)).toHaveLength(before);
 
-    doubleClick(rowFor('opt').querySelector<HTMLElement>('.ed-entry')!);
+    checkRow('README.md');
+    await flush();
+    expect(rowFor('README.md').className).toContain('selected');
+    expect(container.querySelector('.ed-selection-count')?.textContent).toContain('已选 1 项');
+
+    // A single click on a directory navigates into it.
+    act(() => rowFor('opt').querySelector<HTMLElement>('.ed-entry')!.click());
     await flush();
     expect(breadcrumbs()).toEqual(['/', 'opt']);
     expect(listingCalls(mock).filter((call) => !call.dirsOnly && call.path === '/opt')).toHaveLength(1);
-    expect(tableRows()).toEqual(['..', 'app']);
     expect(container.querySelector('.ed-tree-row.current .ed-tree-label')?.textContent).toBe('opt');
+  });
+
+  it('keeps selection actions in the toolbar without inserting a panel', async () => {
+    install();
+    await render('/');
+    const toolbar = container.querySelector<HTMLElement>('.ed-files-toolbar')!;
+
+    checkRow('README.md');
+    await flush();
+    expect(container.querySelector('.ed-selection-bar')).toBeNull();
+    expect(toolbar.querySelector('.ed-selection-count')?.textContent).toContain('已选 1 项');
+    expect(toolbar.textContent).toContain('重命名');
+    expect(toolbar.textContent).toContain('取消选择');
+    expect(toolbar.querySelector('a[href^="/api/files/download"]')).not.toBeNull();
+    // The regular actions swap back when the selection is cleared.
+    expect(toolbar.textContent).not.toContain('上传文件');
+
+    act(() => buttonByText('取消选择').click());
+    await flush();
+    expect(toolbar.querySelector('.ed-selection-count')).toBeNull();
+    expect(toolbar.textContent).toContain('上传文件');
   });
 
   it('keeps one selection across the list and grid views', async () => {
     const mock = install();
     await render('/');
-    act(() => rowFor('README.md').querySelector<HTMLElement>('.ed-entry')!.click());
+    checkRow('README.md');
     await flush();
     const before = listingCalls(mock).length;
 
@@ -232,9 +263,9 @@ describe('FileWorkspace', () => {
     checkRow('README.md');
     checkRow('.env');
     await flush();
-    expect(container.querySelector('.ed-selection-bar')?.textContent).toContain('已选 2 项');
+    expect(container.querySelector('.ed-selection-count')?.textContent).toContain('已选 2 项');
 
-    act(() => buttonByText('删除 (2)').click());
+    act(() => buttonByText('删除').click());
     const dialog = container.querySelector('[role="alertdialog"]')!;
     expect(dialog.textContent).toContain('/README.md');
     expect(dialog.textContent).toContain('/.env');
@@ -243,7 +274,7 @@ describe('FileWorkspace', () => {
     await flush();
     expect([...mock.deleted].sort()).toEqual(['/.env', '/README.md']);
     expect(container.textContent).toContain('已删除 2 个文件、0 个目录');
-    expect(container.querySelector('.ed-selection-bar')).toBeNull();
+    expect(container.querySelector('.ed-selection-count')).toBeNull();
     expect(tableRows()).not.toContain('README.md');
   });
 
@@ -254,7 +285,7 @@ describe('FileWorkspace', () => {
     await flush();
     mock.failNextDelete('mock delete failure');
 
-    act(() => buttonByText('删除 (1)').click());
+    act(() => buttonByText('删除').click());
     act(() => container.querySelector<HTMLElement>('[role="alertdialog"] .ed-modal-actions .danger')!.click());
     await flush();
 
@@ -263,12 +294,83 @@ describe('FileWorkspace', () => {
     expect(tableRows()).toContain('README.md');
   });
 
+  it('confirms before uploading dropped files, skips folders and reports the result', async () => {
+    const mock = install();
+    const uploads: { url: string; name: string }[] = [];
+    class FakeXHR {
+      upload: { onprogress: ((event: { lengthComputable: boolean; loaded: number; total: number }) => void) | null } = {
+        onprogress: null,
+      };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      status = 201;
+      responseText = JSON.stringify({ ok: true, size: 5 });
+      withCredentials = false;
+      private url = '';
+      open(_method: string, url: string) {
+        this.url = url;
+      }
+      send(body: unknown) {
+        uploads.push({ url: this.url, name: (body as File).name });
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 5, total: 5 });
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', FakeXHR as unknown as typeof XMLHttpRequest);
+
+    await render('/');
+    const section = container.querySelector<HTMLElement>('.ed-files-main')!;
+    const notes = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+    const readme = new File(['# readme'], 'README.md', { type: 'text/markdown' });
+    const transfer = {
+      types: ['Files'],
+      dropEffect: '',
+      files: [notes, readme],
+      items: [
+        { kind: 'file', webkitGetAsEntry: () => ({ isDirectory: false, isFile: true }), getAsFile: () => notes },
+        { kind: 'file', webkitGetAsEntry: () => ({ isDirectory: true, isFile: false }), getAsFile: () => null },
+        { kind: 'file', webkitGetAsEntry: () => ({ isDirectory: false, isFile: true }), getAsFile: () => readme },
+      ],
+    };
+
+    act(() => {
+      section.dispatchEvent(dropEvent('dragenter', transfer));
+      section.dispatchEvent(dropEvent('dragover', transfer));
+      section.dispatchEvent(dropEvent('drop', transfer));
+    });
+    await flush();
+
+    let dialog = container.querySelector<HTMLElement>('[role="alertdialog"]')!;
+    expect(dialog.textContent).toContain('上传 2 个文件到 /');
+    expect(dialog.textContent).toContain('notes.txt');
+    expect(dialog.textContent).toContain('README.md');
+    expect(dialog.textContent).toContain('将覆盖');
+    expect(dialog.textContent).toContain('已跳过 1 个文件夹');
+
+    // Cancel keeps the directory untouched.
+    act(() => dialog.querySelectorAll<HTMLButtonElement>('.ed-modal-actions button')[0].click());
+    await flush();
+    expect(uploads).toHaveLength(0);
+    expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+
+    // Dropping again and confirming uploads every file to the current directory.
+    act(() => section.dispatchEvent(dropEvent('drop', transfer)));
+    await flush();
+    dialog = container.querySelector<HTMLElement>('[role="alertdialog"]')!;
+    act(() => dialog.querySelector<HTMLElement>('.ed-modal-actions .primary')!.click());
+    await flush();
+    expect(uploads.map((item) => item.name)).toEqual(['notes.txt', 'README.md']);
+    expect(uploads[0].url).toBe('/api/files/content?path=%2Fnotes.txt');
+    expect(container.textContent).toContain('已上传 2 个文件');
+    expect(mock.calls.some((call) => call.method === 'GET' && call.url.startsWith('/api/files?'))).toBe(true);
+  });
+
   it('opens editor, preview and terminal floating windows and keeps them across navigation', async () => {
     const mock = install();
     await render('/');
 
-    doubleClick(rowFor('README.md').querySelector<HTMLElement>('.ed-entry')!);
-    doubleClick(rowFor('archive.bin').querySelector<HTMLElement>('.ed-entry')!);
+    act(() => rowFor('README.md').querySelector<HTMLElement>('.ed-entry')!.click());
+    act(() => rowFor('archive.bin').querySelector<HTMLElement>('.ed-entry')!.click());
     await flush();
     expect(windowStore.getSnapshot().map((item) => item.kind).sort()).toEqual(['editor', 'preview']);
 
@@ -278,7 +380,7 @@ describe('FileWorkspace', () => {
     expect(terminal?.title).toBe('/ · Bash');
     expect(mock.calls.some((call) => call.url === '/api/terminal/sessions' && call.method === 'POST')).toBe(true);
 
-    doubleClick(rowFor('opt').querySelector<HTMLElement>('.ed-entry')!);
+    act(() => rowFor('opt').querySelector<HTMLElement>('.ed-entry')!.click());
     await flush();
     expect(breadcrumbs()).toEqual(['/', 'opt']);
     expect(windowStore.getSnapshot()).toHaveLength(3);

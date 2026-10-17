@@ -22,6 +22,7 @@
 | [ADR-0004](adr/0004-path-sandbox.md) | 目录 FD + openat 路径沙箱、符号链接策略 | 已确认 |
 | [ADR-0005](adr/0005-terminal-architecture.md) | PTY、线程边界、会话生命周期与重连 | 已确认 |
 | [ADR-0006](adr/0006-system-metrics.md) | 指标采集、内存窗口与增量推送 | 已确认 |
+| [ADR-0007](adr/0007-frontend-icon-library.md) | 前端图标库：lucide-react（ISC，版本锁定，全站迁移） | 已确认（2026-10-17） |
 
 ## Spec（要做什么）
 

@@ -1,10 +1,11 @@
 import type { MouseEvent } from 'react';
-import { iconStyle } from '../../services/assets';
+import { ArrowDown, ArrowUp, CornerLeftUp } from 'lucide-react';
+import { Icon } from '../../components/Icon';
 import { formatBytes, formatTime } from '../../services/api';
 import type { FileEntry } from '../../types';
 import { FileEntryActions } from './FileEntryActions';
 import { SelectionCheckbox, SelectionHeaderCheckbox } from './SelectionCheckbox';
-import { iconName, type SortKey } from './fileUtils';
+import { entryIcon, type SortKey } from './fileUtils';
 
 type Props = {
   path: string;
@@ -17,7 +18,6 @@ type Props = {
   onNavigateUp: () => void;
   onToggleAll: (checked: boolean) => void;
   onToggleEntry: (entry: FileEntry, checked: boolean) => void;
-  onEntryClick: (entry: FileEntry, event: MouseEvent<HTMLElement>) => void;
   onOpen: (entry: FileEntry) => void;
   onPreview: (entry: FileEntry) => void;
   onEdit: (entry: FileEntry) => void;
@@ -25,9 +25,9 @@ type Props = {
   onDelete: (entry: FileEntry) => void;
 };
 
-function sortMark(active: boolean, desc: boolean): string {
-  if (!active) return '';
-  return desc ? '▼' : '▲';
+function SortMark({ active, desc }: { active: boolean; desc: boolean }) {
+  if (!active) return null;
+  return <Icon icon={desc ? ArrowDown : ArrowUp} size={12} className="ed-sort-mark" />;
 }
 
 export function FileListView({
@@ -41,7 +41,6 @@ export function FileListView({
   onNavigateUp,
   onToggleAll,
   onToggleEntry,
-  onEntryClick,
   onOpen,
   onPreview,
   onEdit,
@@ -50,6 +49,13 @@ export function FileListView({
 }: Props) {
   const allSelected = entries.length > 0 && entries.every((entry) => selected.has(entry.path));
   const someSelected = entries.some((entry) => selected.has(entry.path));
+
+  // Single click opens (GitHub-style); selection is checkbox-only. The second
+  // click of a double click (`detail > 1`) must not re-open or navigate again.
+  const openOnClick = (entry: FileEntry) => (event: MouseEvent<HTMLElement>) => {
+    if (event.detail > 1) return;
+    onOpen(entry);
+  };
 
   return (
     <div className="ed-table-wrap ed-panel" aria-busy={loading}>
@@ -69,21 +75,21 @@ export function FileListView({
               className="sortable ed-col-name"
               aria-sort={sort === 'name' ? (desc ? 'descending' : 'ascending') : 'none'}
             >
-              名称 {sortMark(sort === 'name', desc)}
+              名称 <SortMark active={sort === 'name'} desc={desc} />
             </th>
             <th
               onClick={() => onToggleSort('size')}
               className="sortable ed-col-size"
               aria-sort={sort === 'size' ? (desc ? 'descending' : 'ascending') : 'none'}
             >
-              大小 {sortMark(sort === 'size', desc)}
+              大小 <SortMark active={sort === 'size'} desc={desc} />
             </th>
             <th
               onClick={() => onToggleSort('mtime')}
               className="sortable ed-col-time"
               aria-sort={sort === 'mtime' ? (desc ? 'descending' : 'ascending') : 'none'}
             >
-              修改时间 {sortMark(sort === 'mtime', desc)}
+              修改时间 <SortMark active={sort === 'mtime'} desc={desc} />
             </th>
             <th className="ed-col-perm">权限</th>
             <th className="ed-col-owner">uid/gid</th>
@@ -95,8 +101,8 @@ export function FileListView({
             <tr className="ed-parent-row">
               <td />
               <td colSpan={6}>
-                <button type="button" className="ed-entry" onClick={onNavigateUp} title="上级目录" onDoubleClick={onNavigateUp}>
-                  <span className="ed-icon-mask ed-entry-icon" style={iconStyle('files')} aria-hidden="true" />
+                <button type="button" className="ed-entry" onClick={onNavigateUp} title="上级目录">
+                  <Icon icon={CornerLeftUp} size={16} className="ed-entry-icon" />
                   <span className="ed-entry-name">..</span>
                   <span className="ed-badge subtle">上级</span>
                 </button>
@@ -104,14 +110,7 @@ export function FileListView({
             </tr>
           )}
           {entries.map((entry) => (
-            <tr
-              key={entry.path}
-              className={selected.has(entry.path) ? 'selected' : ''}
-              onDoubleClick={(event) => {
-                if ((event.target as HTMLElement).closest('input, .ed-actions, a')) return;
-                onOpen(entry);
-              }}
-            >
+            <tr key={entry.path} className={selected.has(entry.path) ? 'selected' : ''}>
               <td>
                 <SelectionCheckbox
                   checked={selected.has(entry.path)}
@@ -124,9 +123,9 @@ export function FileListView({
                   type="button"
                   className="ed-entry"
                   title={entry.path}
-                  onClick={(event) => onEntryClick(entry, event)}
+                  onClick={openOnClick(entry)}
                 >
-                  <span className="ed-icon-mask ed-entry-icon" style={iconStyle(iconName(entry))} aria-hidden="true" />
+                  <Icon icon={entryIcon(entry)} size={16} className="ed-entry-icon" />
                   <span className="ed-entry-name">{entry.name}</span>
                   {entry.type === 'symlink' && <span className="ed-badge">链接</span>}
                   {entry.hidden && <span className="ed-badge subtle">隐藏</span>}

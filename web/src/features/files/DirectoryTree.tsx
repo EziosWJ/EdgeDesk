@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { PanelLeftClose, RefreshCw } from 'lucide-react';
+import { Icon } from '../../components/Icon';
 import { api } from '../../services/api';
-import { iconStyle } from '../../services/assets';
 import { DirectoryTreeNode, type TreeChildrenState } from './DirectoryTreeNode';
 import { ancestorChain } from './fileUtils';
 
@@ -140,7 +141,7 @@ export function DirectoryTree({ currentPath, showHidden, revision, onSelect, onC
             aria-label="刷新目录树"
             onClick={() => reloadVisible(showHidden)}
           >
-            <span className="ed-icon-mask" style={iconStyle('refresh')} aria-hidden="true" />
+            <Icon icon={RefreshCw} size={16} />
           </button>
           {onCollapse && (
             <button
@@ -150,7 +151,7 @@ export function DirectoryTree({ currentPath, showHidden, revision, onSelect, onC
               aria-label="收起目录树"
               onClick={onCollapse}
             >
-              «
+              <Icon icon={PanelLeftClose} size={16} />
             </button>
           )}
         </div>

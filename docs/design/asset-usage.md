@@ -14,10 +14,11 @@ web/
       illustrations/   edge-device.svg / empty-files.svg /
                        empty-terminal.svg / monitor-unavailable.svg /
                        session-disconnected.svg
-      icons/           20 个 24x24 导航、监控、操作、布局与文件类型图标
       decorations/     panel-grid.svg / dot-grid.svg
       asset-manifest.json
   src/
+    components/
+      Icon.tsx         lucide-react 统一封装（尺寸 / 线宽 / 无障碍）
     styles/
       edgedesk-tokens.css
 
@@ -25,6 +26,9 @@ docs/design/
   asset-usage.md
   prototype-guidelines.md
 ```
+
+界面图标不再来自 `web/public`，而是通过 `lucide-react`（ISC，精确版本见
+[ADR-0007](../adr/0007-frontend-icon-library.md)）以 React 组件导入、由 Vite 打包进 JS。
 
 ## 资产表
 
@@ -37,11 +41,10 @@ docs/design/
 | `illustrations/empty-terminal.svg` | 无终端会话占位图 | 160–240px 宽 |
 | `illustrations/monitor-unavailable.svg` | 采集失败/指标不可用 | 160–240px 宽 |
 | `illustrations/session-disconnected.svg` | 会话已断开占位图 | 160–240px 宽 |
-| `icons/*.svg` | 导航、指标、工具栏 | 20x20 或 24x24 |
-| `icons/list.svg` / `icons/grid.svg` | 文件管理视图切换（列表 / 网格） | 16x16（按钮内） |
-| `icons/refresh.svg` | 列表与目录树刷新按钮 | 16x16（按钮内） |
-| `icons/file.svg` / `icons/link.svg` / `icons/image.svg` | 文件类型图标（普通文件 / 符号链接 / 图片） | 16x16（列表）、22x22（网格） |
 | `decorations/*.svg` | 指标卡/侧栏微弱纹理 | CSS background，平铺 |
+
+界面图标使用 `lucide-react` 组件（导航、指标、工具栏、文件类型、操作与窗口控制），
+不在此表中列出；图标名与用法见各组件源码和 ADR-0007。
 
 完整索引：`web/public/assets/asset-manifest.json`。
 
@@ -77,22 +80,42 @@ export function SidebarLogo() {
   background: var(--ed-surface)
     url("/assets/decorations/panel-grid.svg") repeat;
 }
+```
 
-/* SVG 通过 mask 做 CSS 动态着色（普通 <img> 的 currentColor 不继承） */
-.icon-files {
-  --ed-icon-url: url("/assets/icons/files.svg");
-  color: var(--ed-primary);
+```tsx
+import { Folder, RefreshCw } from "lucide-react";
+import { Icon } from "./Icon";
+
+// 装饰性图标默认 aria-hidden；有含义的图标传 label。
+export function RefreshButton({ onRefresh }: { onRefresh: () => void }) {
+  return (
+    <button type="button" aria-label="刷新" onClick={onRefresh}>
+      <Icon icon={RefreshCw} size={16} />
+    </button>
+  );
+}
+
+export function FolderLabel({ name }: { name: string }) {
+  return (
+    <span>
+      <Icon icon={Folder} size={16} className="ed-tree-icon" />
+      {name}
+    </span>
+  );
 }
 ```
 
-如果部署在子路径，CSS 中的绝对 `/assets/` 需要改为与应用 `base` 匹配的路径或从组件内联设置 `--ed-icon-url`；不要假设永远部署在域名根目录。
+图标颜色继承 `currentColor`，不再需要 mask + `--ed-icon-url`；尺寸由 `Icon` 的
+`size`（默认 18）控制，与按钮、列表、卡片的既有 CSS 类配合。
+
+如果部署在子路径，CSS 中的绝对 `/assets/` 需要改为与应用 `base` 匹配的路径或从组件内联设置；不要假设永远部署在域名根目录。
 
 ## 单二进制发布
 
 ```text
 前端源码
   → 前端构建（如 React + Vite）
-  → dist/assets/*（包含优化后的 SVG）
+  → dist/assets/*（优化后的插画/品牌 SVG 与内联图标的 JS bundle）
   → GCC 15+ #embed 生成资源表
   → EdgeDesk C++ / libhv 可执行文件
 ```
@@ -102,11 +125,13 @@ export function SidebarLogo() {
 - 构建后的资源路径要与 React 的 `base`、C++ 静态资源路由保持一致。
 - 不要对不可信的任意上传 SVG 在同源环境以内联脚本方式呈现；本目录是开发时可信的静态素材。
 - 静态插画在不同 DPI 下可以无损缩放，不需要一批 1x/2x PNG；未来确需特殊硬件兼容可另导出 PNG/WebP。
+- 界面图标（lucide-react）随 JS bundle 分发，不占用 `dist/assets` 静态文件；离线部署不依赖 CDN。
 
 ## 验收清单
 
 - 资源全部可通过浏览器独立访问；无外部图片、字体或 CDN 依赖。
 - SVG 透明底、可缩放；图标提供明确名称和用途。
 - 装饰性图片使用 `alt=""`；有含义的图标需要可访问标签。
+- 图标库版本锁定、许可证（ISC）与来源记录在 ADR-0007 与 `asset-manifest.json`。
 - UI 实时数据必须来自设备 API，不能用原型图内的演示数值冒充真实状态。
 - 资源新增/删除时同步 `asset-manifest.json`、本指南和设计规范。

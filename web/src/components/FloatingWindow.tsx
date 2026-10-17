@@ -1,4 +1,6 @@
 import { useCallback, useRef, type ReactNode } from 'react';
+import { Maximize2, Minimize2, Minus, X } from 'lucide-react';
+import { Icon } from './Icon';
 import type { WindowState } from '../types';
 import { windowStore } from '../stores/windowStore';
 
@@ -88,13 +90,13 @@ export function FloatingWindow({ window: state, children }: Props) {
         </span>
         <div className="ed-window-actions">
           <button type="button" title="最小化" onClick={() => windowStore.minimize(state.id)}>
-            &#8211;
+            <Icon icon={Minus} size={14} />
           </button>
           <button type="button" title={maximized ? '还原' : '最大化'} onClick={() => windowStore.toggleMaximize(state.id)}>
-            {maximized ? '❐' : '□'}
+            <Icon icon={maximized ? Minimize2 : Maximize2} size={14} />
           </button>
           <button type="button" className="danger" title="关闭" onClick={() => windowStore.close(state.id)}>
-            ×
+            <Icon icon={X} size={14} />
           </button>
         </div>
       </header>

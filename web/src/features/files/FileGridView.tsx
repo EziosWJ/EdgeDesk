@@ -1,9 +1,9 @@
 import type { MouseEvent } from 'react';
-import { iconStyle } from '../../services/assets';
+import { Icon } from '../../components/Icon';
 import type { FileEntry } from '../../types';
 import { FileEntryActions } from './FileEntryActions';
 import { SelectionHeaderCheckbox } from './SelectionCheckbox';
-import { entryKindLabel, entryMeta, iconName } from './fileUtils';
+import { entryIcon, entryKindLabel, entryMeta } from './fileUtils';
 
 type Props = {
   entries: FileEntry[];
@@ -11,7 +11,6 @@ type Props = {
   loading: boolean;
   onToggleAll: (checked: boolean) => void;
   onToggleEntry: (entry: FileEntry, checked: boolean) => void;
-  onEntryClick: (entry: FileEntry, event: MouseEvent<HTMLElement>) => void;
   onOpen: (entry: FileEntry) => void;
   onPreview: (entry: FileEntry) => void;
   onEdit: (entry: FileEntry) => void;
@@ -26,7 +25,6 @@ export function FileGridView({
   loading,
   onToggleAll,
   onToggleEntry,
-  onEntryClick,
   onOpen,
   onPreview,
   onEdit,
@@ -35,6 +33,13 @@ export function FileGridView({
 }: Props) {
   const allSelected = entries.length > 0 && entries.every((entry) => selected.has(entry.path));
   const someSelected = entries.some((entry) => selected.has(entry.path));
+
+  // Single click opens; selection is checkbox-only. `detail > 1` ignores the
+  // second click of a double click so an entry never opens twice.
+  const openOnClick = (entry: FileEntry) => (event: MouseEvent<HTMLElement>) => {
+    if (event.detail > 1) return;
+    onOpen(entry);
+  };
 
   return (
     <section className="ed-file-grid-wrap ed-panel" aria-busy={loading}>
@@ -45,7 +50,7 @@ export function FileGridView({
           onChange={onToggleAll}
           label="全选当前页"
         />
-        <span>网格视图 · 双击打开</span>
+        <span>网格视图 · 单击打开</span>
       </header>
       <div className="ed-file-grid">
         {entries.map((entry) => (
@@ -53,11 +58,7 @@ export function FileGridView({
             key={entry.path}
             className={`ed-file-card is-${entry.type}${selected.has(entry.path) ? ' selected' : ''}`}
             tabIndex={0}
-            onDoubleClick={(event) => {
-              if ((event.target as HTMLElement).closest('input, .ed-actions, a')) return;
-              onOpen(entry);
-            }}
-            onClick={(event) => onEntryClick(entry, event)}
+            onClick={openOnClick(entry)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault();
@@ -86,7 +87,7 @@ export function FileGridView({
               />
             </div>
             <div className="ed-file-card-icon">
-              <span className="ed-icon-mask" style={iconStyle(iconName(entry))} aria-hidden="true" />
+              <Icon icon={entryIcon(entry)} size={22} />
             </div>
             <div className="ed-file-card-name" title={entry.path}>
               {entry.name}

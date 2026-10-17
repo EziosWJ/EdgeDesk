@@ -1,19 +1,28 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useState } from 'react';
+import type { LucideIcon } from 'lucide-react';
+import {
+  FolderTree,
+  LayoutDashboard,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Settings,
+  SquareTerminal,
+} from 'lucide-react';
+import { Icon } from './Icon';
 
 export type ModuleId = 'dashboard' | 'files' | 'terminal' | 'settings';
 export type HealthState = 'checking' | 'online' | 'offline';
 
-const modules: { id: ModuleId; label: string; icon: string }[] = [
-  { id: 'dashboard', label: '仪表盘', icon: 'dashboard' },
-  { id: 'files', label: '文件管理', icon: 'files' },
-  { id: 'terminal', label: '终端工作区', icon: 'terminal' },
-  { id: 'settings', label: '设置', icon: 'settings' },
+const modules: { id: ModuleId; label: string; icon: LucideIcon }[] = [
+  { id: 'dashboard', label: '仪表盘', icon: LayoutDashboard },
+  { id: 'files', label: '文件管理', icon: FolderTree },
+  { id: 'terminal', label: '终端工作区', icon: SquareTerminal },
+  { id: 'settings', label: '设置', icon: Settings },
 ];
 
 const STORAGE_KEY = 'edgedesk.nav.collapsed.v1';
 
 const asset = (path: string) => `${import.meta.env.BASE_URL}assets/${path}`;
-const iconMask = (path: string): CSSProperties => ({ '--ed-icon-url': `url(${asset(path)})` }) as CSSProperties;
 
 /** Collapsed state is a desktop-only preference; on narrow screens the layout wins. */
 function loadCollapsed(): boolean {
@@ -55,7 +64,7 @@ export function Sidebar({ active, health, onSelect }: SidebarProps) {
           <small>嵌入式 Linux 运维工作台</small>
         </div>
         <button type="button" className="sidebar-toggle" onClick={() => setCollapsed((value) => !value)} title={toggleLabel} aria-label={toggleLabel}>
-          <span className="ed-icon-mask toggle-icon" style={iconMask('icons/panel-left.svg')} aria-hidden="true" />
+          <Icon icon={collapsed ? PanelLeftOpen : PanelLeftClose} size={17} />
         </button>
       </div>
 
@@ -70,7 +79,7 @@ export function Sidebar({ active, health, onSelect }: SidebarProps) {
             title={collapsed ? item.label : undefined}
             onClick={() => onSelect(item.id)}
           >
-            <span className="ed-icon-mask nav-icon" style={iconMask(`icons/${item.icon}.svg`)} aria-hidden="true" />
+            <Icon icon={item.icon} size={18} className="nav-icon" />
             <span className="nav-label">{item.label}</span>
           </button>
         ))}
