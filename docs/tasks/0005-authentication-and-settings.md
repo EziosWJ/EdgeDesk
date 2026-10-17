@@ -1,13 +1,13 @@
 # SPEC-0005 开发任务拆分：V1.1 管理员认证与系统设置
 
-- 状态：**Proposed（2026-10-17；待实现决策确认后进入开发）**
+- 状态：**Implemented（V1.1.0，2026-10-17）**
 - 依据：[SPEC-0005](../spec/0005-authentication-and-settings.md)、[ADR-0008](../adr/0008-authentication-and-settings.md)、[ADR-0003](../adr/0003-v1-auth-api-protocol.md)、[ADR-0002](../adr/0002-architecture-security.md)
 - 目标版本：V1.1.0
 - 关联实现：`src/security/`、`src/http/`、`src/app/`、`src/core/`、`web/src/`、`tests/`、`scripts/`
 
 > 本文把 SPEC-0005 的 P0 范围拆成可独立实现、独立验证的任务。
 > 任务编号用于提交信息、PR 标题和测试报告引用，例如 `auth(T04): ...`。
-> 第 2 节是开工前必须确认的实现决策；未确认前不应开始对应的持久化/API/前端任务。
+> 第 2 节的实现决策已随 V1.1.0 实施确认；实际验证结果见 [验证矩阵](../testing.md)。
 
 ## 1. 完成定义（Definition of Done）
 

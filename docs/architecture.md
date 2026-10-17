@@ -1,6 +1,6 @@
-# EdgeDesk V1.0 架构
+# EdgeDesk V1.1 架构
 
-> 状态：**已实现**（2026-10-16）。描述当前代码的真实结构；行为契约见 `docs/spec`，
+> 状态：**已实现**（V1.1.0）。描述当前代码的真实结构；行为契约见 `docs/spec`，
 > 技术决策见 `docs/adr`，接口见 `docs/api.md`，配置见 `docs/config.md`。
 
 ## 目录与职责
@@ -8,10 +8,12 @@
 ```text
 src/
 ├── app/
-│   ├── main.cpp               入口、参数解析、帮助/版本
+│   ├── main.cpp               入口、参数解析、帮助/版本、恢复命令分派
+│   ├── recovery.*             --reset-admin-password 的本机恢复流程
 │   └── application.{hpp,cpp}  进程级装配：创建服务、信号处理、维护线程、优雅退出
 ├── core/
 │   ├── config.*               CLI / 配置文件 / 环境变量解析（无 libhv 类型）
+│   ├── atomic_file.*          目录 FD + 原子文件写入
 │   ├── error.*                统一错误码与 HTTP 状态映射
 │   ├── types.*               基础类型与工具（字节大小、路径名判断等）
 │   ├── util.*                随机数、SHA-256/HMAC、时间、URL 编解码
@@ -39,7 +41,10 @@ src/
 │   ├── network_metrics.*     /proc/net/dev、getifaddrs 与速率差分
 │   └── system_metrics.*      采样线程 + 定长环形缓冲 + 订阅推送
 ├── security/
-│   ├── auth.*                访问密钥 + 签名会话 Cookie（HMAC-SHA256）
+│   ├── auth.*                密码登录、可选 Bearer、签名会话 Cookie（HMAC-SHA256）
+│   ├── auth_store.*          auth.json / init-code / .lock 状态机与原子持久化
+│   ├── password_hash.*       Argon2id + 有界 worker 队列
+│   ├── settings_store.*      settings.json 白名单偏好
 │   ├── rate_limiter.*        per-IP 令牌桶 + 并发闸门
 │   └── audit.*               JSON Lines 审计日志与轮转
 └── web/
@@ -49,6 +54,17 @@ src/
 
 分层规则：`Route → Service → Platform(POSIX)`。路由只做协议适配与错误映射，
 不实现路径校验、PTY 管理或指标采集。`src/core` 不包含 libhv 类型。
+
+## 认证与持久化边界
+
+- `--data-dir`（0700）保存 `auth.json`、`init-code` 和 `settings.json`；`--state-dir`
+  只保存运行期数据与审计日志。两者不互相回退。
+- 启动时 `AuthStore` 读取 `auth.json`：缺失 → `uninitialized`；有效 → `initialized`；
+  存在但无效 → `corrupt`（失败关闭，不自动重新初始化）。
+- 密码哈希通过有界 worker 执行 Argon2id，libhv 事件循环只做协议适配；改密在
+  互斥保护下轮换会话签名密钥，使全部旧 Cookie 失效。
+- `.lock` 由服务进程持有；`--reset-admin-password` 用非阻塞 `flock` 证明服务已停止。
+- 所有认证/设置文件写入使用目录 FD、临时文件、`fsync`、`renameat` 和目录 `fsync`。
 
 ## 线程模型
 

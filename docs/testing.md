@@ -7,18 +7,22 @@
 
 | 测试 | 覆盖内容 | 环境 | 结果 |
 | --- | --- | --- | --- |
-| `core_test` | CLI/配置文件/环境变量解析、非法参数、SHA-256/HMAC 向量、会话签名与过期、限流桶、审计轮转 | GCC 13.3 host | 通过 |
+| `core_test` | CLI/配置文件/环境变量解析（含 data-dir/cookie-secure/trusted-proxy）、非法参数、SHA-256/HMAC 向量、会话签名与过期、限流桶、审计轮转 | GCC 13.3 host | 通过 |
+| `auth_store_test` | 未初始化/已初始化/损坏状态、init-code 校验与删除、原子写入、0600/0700、flock、恢复重置 | GCC 13.3 host | 通过 |
+| `password_hash_test` | 密码策略、Argon2id hash/verify、盐独立、参数升级、有界 worker 队列 | GCC 13.3 host | 通过 |
+| `settings_store_test` | 默认值、白名单保存、非法枚举/越界拒绝、损坏文件回退、持久化 | GCC 13.3 host | 通过 |
 | `path_sandbox_test` | `..` 穿越、URL 编码、绝对路径、前缀欺骗目录、符号链接逃逸/循环（含 follow 模式）、lstat 语义 | GCC 13.3 host | 通过 |
 | `file_service_test` | 列表/排序/分页/隐藏文件、`dirs_only` 直接子目录（符号链接不跟随）、文本读写与原子保存保留权限、二进制拒绝、上传/中止/超限、递归删除计数、Range 解析、MIME 判定 | GCC 13.3 host | 通过 |
 | `command_guard_test` | 危险命令命中（rm -rf 根、块设备写入、fork 炸弹、关机…）与安全命令不误报 | GCC 13.3 host | 通过 |
 | `terminal_session_test` | 真实 Bash 登录 Shell、`~/.profile` 加载、UTF-8/ANSI、TIOCSWINSZ resize、CommandGuard 拦截不执行、回放缓冲有界、订阅断开不杀会话、会话上限/空闲回收、缺 Bash 报错而非回退 sh | GCC 13.3 host + /bin/bash 5.2 | 通过 |
 | `system_metrics_test` | /proc/stat、loadavg、meminfo（含旧内核回退）、net/dev 速率差分、IPv4/IPv6 地址格式化与 `getifaddrs` 枚举（排除 lo）、mounts 过滤、采样线程与环形缓冲 | GCC 13.3 host | 通过 |
 | `embed_generator_test` | `#embed` 生成器的确定性、路径校验、ETag | Python 3.12 | 通过 |
-| 前端单元测试 | windowStore（开关/层级/拖动/缩放/最大化/关闭、不可变快照）、会话持久化（仅 id/title）、metrics 窗口有界、字节/百分比/运行时间格式化、FloatingWindow DOM 交互（指针拖动、缩放把手、按钮）、Sidebar（导航选中、收起/展开与 localStorage 持久化恢复、服务状态）、仪表盘图表工具（窗口切片、变化值、速率单位、时间刻度、开机时刻）、DonutChart（可用部分绿色/已使用主色/不可用态）、DashboardView DOM 渲染（KPI 六卡、三图表面板、磁盘环形图与挂载点切换、网卡 IP 地址、在线/数据中断状态、空数据不造假）、文件管理（路径助手/视图偏好/上传名校验、按扩展名与特殊文件名解析文件类型图标、Go/C++/Markdown 渲染不同图标、目录树按需加载与缓存/祖先展开/失败重试/刷新/不跟随链接、叶子节点隐藏角标与"无子目录"文案、单击打开与仅复选框选中、选中操作在工具栏就地切换、拖拽上传确认/跳过文件夹/取消不上传、树面板收起展开与宽度调整持久化、列表↔网格共享选择、本地筛选、隐藏文件联动、分页排序、失败态与重试、批量删除确认与失败不报成功、浮动终端/编辑器窗口） | Node 24.14 / vitest 3.2 / happy-dom | 通过（70 项）；`npm run build`（tsc + vite，含 unplugin-icons 文件类型图标）通过 |
-| `api_test.py` | health 契约、认证/会话/Bearer、CSRF、目录浏览（含 `dirs_only` 只返回直接子目录）、文本读写、mkdir/rename/delete、流式上传字节一致、Range 206/416、路径沙箱拒绝、JSON 体积限制、系统指标（含 `network[].addresses` 字段） | 见下（三种二进制） | 通过 |
+| 前端单元测试 | windowStore（开关/层级/拖动/缩放/最大化/关闭、不可变快照）、会话持久化（仅 id/title）、metrics 窗口有界、字节/百分比/运行时间格式化、FloatingWindow DOM 交互（指针拖动、缩放把手、按钮）、Sidebar（导航选中、收起/展开与 localStorage 持久化恢复、服务状态）、仪表盘图表工具（窗口切片、变化值、速率单位、时间刻度、开机时刻）、DonutChart（可用部分绿色/已使用主色/不可用态）、DashboardView DOM 渲染（KPI 六卡、三图表面板、磁盘环形图与挂载点切换、网卡 IP 地址、在线/数据中断状态、空数据不造假）、文件管理（路径助手/视图偏好/上传名校验、按扩展名与特殊文件名解析文件类型图标、Go/C++/Markdown 渲染不同图标、目录树按需加载与缓存/祖先展开/失败重试/刷新/不跟随链接、叶子节点隐藏角标与"无子目录"文案、单击打开与仅复选框选中、选中操作在工具栏就地切换、拖拽上传确认/跳过文件夹/取消不上传、树面板收起展开与宽度调整持久化、列表↔网格共享选择、本地筛选、隐藏文件联动、分页排序、失败态与重试、批量删除确认与失败不报成功、浮动终端/编辑器窗口）、V1.1 认证页面（密码登录、初始化确认校验、提交）、设置页（系统信息、Token 状态、偏好保存）、偏好 store（加载/乐观保存/失败保留） | Node 24.14 / vitest 3.2 / happy-dom | 通过（77 项）；`npm run build`（tsc + vite，含 unplugin-icons 文件类型图标）通过 |
+| `auth_test.py` | 初始化状态门禁、错误/正确初始化码、重复初始化 409、密码登录、Cookie 属性（含 `--cookie-secure`）、改密后旧 Cookie/旧密码失效、Bearer 不受影响、CSRF、设置白名单、系统信息脱敏、重启后旧 Cookie 失效、损坏状态失败关闭、本机恢复 | dev-disk / release-embed / x86_64-musl / arm64-disk / arm64-musl | 全部通过 |
+| `api_test.py` | health 契约、密码登录/会话/Bearer、CSRF、目录浏览（含 `dirs_only` 只返回直接子目录）、文本读写、mkdir/rename/delete、流式上传字节一致、Range 206/416、路径沙箱拒绝、JSON 体积限制、系统指标（含 `network[].addresses` 字段） | 见下（三种二进制） | 通过 |
 | `ws_test.py` | 未认证/异源握手拒绝、终端 create/input/输出/resize/guard、断线重连（回放）、会话存活、显式关闭、metrics 快照+增量 | 同上 | 通过 |
-| `rate_limit_test.py` | 登录限流与通用限流在严格配置下触发 429 | 同上 | 通过 |
-| 审计校验 | `login`、`file.upload`、`terminal.create` 事件落盘 | 同上 | 通过 |
+| `rate_limit_test.py` | 登录限流与通用限流在严格配置下触发 429；伪造 `X-Forwarded-For` 不能绕过 peer-IP 限流 | 同上 | 通过 |
+| 审计校验 | `auth.setup`、`login`、`auth.password_change`、`auth.reset`、`file.upload`、`terminal.create` 事件落盘且不含秘密 | 同上 | 通过 |
 
 ### 原型还原度（视觉）验收
 
@@ -33,17 +37,22 @@
 
 | 二进制 | 模式 | 结果 |
 | --- | --- | --- |
-| `dev-disk`（GCC 13.3，Debug） | 磁盘资源 + React dist | 全部通过 |
-| `release-embed`（GCC 15.2.0） | `#embed` 单二进制（13 个 `#embed` 指令，图标迁移后 dist 不再包含静态图标 SVG） | 全部通过（含前端外壳与哈希资源校验） |
-| `x86_64-musl`（musl cross GCC 11.2，`-static-pie`） | 磁盘资源，无动态依赖 | 全部通过 |
-| `arm64-disk`（gcc-aarch64-linux-gnu 13，qemu-user 8.2.2 运行） | 磁盘资源，AArch64 原生 Bash PTY | 全部通过 |
-| `arm64-musl`（musl cross GCC 11.2，`-static-pie`，qemu 运行） | 磁盘资源，AArch64 Bash PTY | 全部通过 |
+| `dev-disk`（GCC 13.3，Debug） | 磁盘资源 + React dist | 全部通过（V1.1 初始化/登录/改密/重启/恢复/损坏状态） |
+| `release-embed`（GCC 15.2.0） | `#embed` 单二进制（13 个 `#embed` 指令） | 全部通过（V1.1 全流程 + 前端外壳与哈希资源校验） |
+| `x86_64-musl`（musl cross GCC 11.2，`-static-pie`） | 磁盘资源，无动态依赖 | 全部通过（V1.1 全流程） |
+| `arm64-disk`（gcc-aarch64-linux-gnu 13，qemu-user 8.2.2 运行） | 磁盘资源，AArch64 原生 Bash PTY | 全部通过（V1.1 全流程；9 个原生测试二进制在 qemu 下通过） |
+| `arm64-musl`（musl cross GCC 11.2，`-static-pie`，qemu 运行） | 磁盘资源，AArch64 Bash PTY | 全部通过（V1.1 全流程） |
 
-> 注：上述条目为实际执行记录。2026-10-17 新增仪表盘圆环可用部分绿色显示与
-> `network[].addresses`（网卡 IP）后，已在宿主 `dev-disk`（磁盘模式）与
-> `release-embed`（`#embed` 单二进制，13 个指令）上重新执行单元测试与集成测试；
-> `x86_64-musl` 与 `arm64-*` 行为本次未重跑（本次原生改动仅使用 POSIX
-> `getifaddrs()`，但尚未在新提交上验证交叉/静态链接）。
+> Argon2id 基线参数 `m=64 MiB, t=3, p=1` 的实测：宿主 Debug 库约 0.77 s/次；
+> AArch64 Release 库在 qemu-user 下约 0.62 s/次（单次登录哈希，单 worker）。
+> 这是本地测量，不是 ARM 真实硬件基准；真实设备仍需复测。
+>
+> 注：2026-10-17 V1.1.0 在上述五个目标上实际执行了 `scripts/integration_test.sh`
+> 的完整流程（初始化、登录、改密、重启后凭据/设置保留、限速与 XFF 伪造、
+> Secure Cookie、服务运行中拒绝恢复、本机恢复、损坏状态、REST/WebSocket/审计）。`arm64-disk` 的 9 个原生物理测试通过
+> `qemu-aarch64-static -L ~/opt/arm64/root` 逐个运行；`arm64-musl` 构建目录未生成
+> 单元测试目标，运行证据来自集成测试。Argon2id 依赖在 glibc、musl、x86_64 与
+> AArch64 上均完成静态链接。
 
 ```bash
 bash scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19091 web/dist
@@ -56,11 +65,11 @@ bash scripts/integration_test.sh out/build/arm64-disk/bin/edgedesk 19591 "" \
 
 | 目标 | 工具链 | 结果 |
 | --- | --- | --- |
-| x86_64 Linux，磁盘模式（Debug/Release） | GCC 13.3（Ubuntu 24.04 系统编译器） | 通过（`dev-disk`） |
-| x86_64 Linux，`#embed` 单二进制 | GCC 15.2.0（用户目录安装，见 docs/dev/gcc15-local-toolchain.md） | 通过（`release-embed`，13 个 `#embed` 指令；2026-10-17 图标迁移后重建） |
-| x86_64 musl **static-pie** | musl.cc `x86_64-linux-musl-cross`（GCC 11.2.1）**与** Bootlin `x86-64--musl--stable-2024.05-1`（GCC 13.3），磁盘模式 | 通过（两套工具链各自：7 个单元测试可执行文件 + 全量集成测试） |
-| AArch64（ARM64）Linux，磁盘模式 | Ubuntu cross `gcc-aarch64-linux-gnu` 13 + qemu-user-static 8.2.2 | 通过（编译 + 运行 + 全量集成测试，含 ARM64 Bash PTY） |
-| AArch64 musl **static-pie** | musl.cc `aarch64-linux-musl-cross`（GCC 11.2.1），磁盘模式 | 通过（qemu 下全量集成测试） |
+| x86_64 Linux，磁盘模式（Debug/Release） | GCC 13.3（Ubuntu 24.04 系统编译器） | 通过（`dev-disk`，V1.1 单元测试 + 集成测试） |
+| x86_64 Linux，`#embed` 单二进制 | GCC 15.2.0（用户目录安装，见 docs/dev/gcc15-local-toolchain.md） | 通过（`release-embed`，V1.1 单元测试 + 集成测试） |
+| x86_64 musl **static-pie** | musl.cc `x86_64-linux-musl-cross`（GCC 11.2.1）**与** Bootlin `x86-64--musl--stable-2024.05-1`（GCC 13.3），磁盘模式 | 两套工具链均通过（V1.1 单元测试 + 集成测试；Argon2 静态链接） |
+| AArch64（ARM64）Linux，磁盘模式 | Ubuntu cross `gcc-aarch64-linux-gnu` 13 + qemu-user-static 8.2.2 | 通过（V1.1 单元测试 + 集成测试，含 ARM64 Bash PTY） |
+| AArch64 musl **static-pie** | musl.cc `aarch64-linux-musl-cross`（GCC 11.2.1），磁盘模式 | 通过（V1.1 集成测试；Argon2 静态链接） |
 | ARM32（armv7 musl） | 需要 `arm-linux-musleabihf` 工具链 | **未验证**（本机未安装该工具链） |
 | GCC 15 + musl + `#embed` 组合 | 需要 GCC 15 的 musl 交叉工具链 | **未验证**（预编译 musl 工具链当前最高 GCC 13.3；`#embed` 管线已在 glibc GCC 15.2 上验证，musl 静态链路已在 GCC 11.2 / 13.3 上验证，两者交集未验证） |
 | OpenHarmony ARM64 | 需要对应 SDK | **未验证** |
