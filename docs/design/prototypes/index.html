@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EdgeDesk V1.2 · 原型总览</title>
+  <link rel="stylesheet" href="./prototype.css">
+  <script defer src="./prototype.js"></script>
+</head>
+<body class="proto-page">
+  <header class="sitebar">
+    <a class="brand" href="./index.html"><img src="../../../web/public/assets/brand/edgedesk-mark.svg" alt=""><strong>EdgeDesk</strong><span class="muted">V1.2 Design</span></a>
+    <nav><a class="active" href="./index.html">原型总览</a><a href="./components.html">组件素材</a><a href="../README.md">设计文档</a></nav>
+    <span class="demo-badge">静态原型 · 示例数据</span>
+  </header>
+  <main class="page-wrap">
+    <section class="intro">
+      <p class="eyebrow">DESKTOP WORKSPACE / DESIGN KIT</p>
+      <h1>桌面工作区与设备监控组件</h1>
+      <p>独立页面原型与可复用 SVG 素材。桌面采用山湖壁纸、轻玻璃窗口与底部 Dock；设备概览借鉴 NAS 管理界面的资源卡片、趋势图和服务状态组织方式。</p>
+      <div class="intro-actions"><a class="button primary" href="./desktop.html">查看桌面原型</a><a class="button" href="./components.html">查看可复用组件</a></div>
+    </section>
+    <section class="prototype-grid">
+      <a class="prototype-card" href="./desktop.html"><div class="preview desktop-preview"><div class="mini-rail"><i></i><i></i><i></i><i></i></div><div class="mini-dock"><i></i><i></i><i></i><i></i></div></div><div class="card-body"><span class="eyebrow">01 / DESKTOP</span><h2>桌面与 Dock</h2><p>桌面图标、状态栏、浮动窗口与底部居中 Dock。</p></div></a>
+      <a class="prototype-card" href="./launcher.html"><div class="preview launcher-preview"><div class="mini-search"></div><div class="mini-apps"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div><div class="card-body"><span class="eyebrow">02 / LAUNCHER</span><h2>应用启动器</h2><p>应用网格、搜索、图标与简短应用说明。</p></div></a>
+      <a class="prototype-card" href="./dashboard.html"><div class="preview dashboard-preview"><div class="mini-kpis"><i></i><i></i><i></i><i></i></div><div class="mini-charts"><i></i><i></i><i></i></div></div><div class="card-body"><span class="eyebrow">03 / MONITORING</span><h2>设备概览</h2><p>CPU、内存、存储、网卡、服务状态和系统信息。</p></div></a>
+      <a class="prototype-card" href="./files.html"><div class="preview files-preview"><div class="mini-tree"></div><div class="mini-table"><i></i><i></i><i></i><i></i><i></i></div></div><div class="card-body"><span class="eyebrow">04 / FILES</span><h2>文件管理</h2><p>目录树、路径导航、列表、操作工具栏与存储摘要。</p></div></a>
+      <a class="prototype-card" href="./terminal.html"><div class="preview terminal-preview"><div class="mini-term-tabs"></div><div class="mini-terminal-lines"><i></i><i></i><i></i><i></i><i></i></div></div><div class="card-body"><span class="eyebrow">05 / TERMINAL</span><h2>终端工作区</h2><p>多会话标签、主机列表、终端输出和状态栏。</p></div></a>
+      <a class="prototype-card" href="./settings.html"><div class="preview settings-preview"><div class="mini-tree"></div><div class="mini-settings"><i></i><i></i><i></i><i></i></div></div><div class="card-body"><span class="eyebrow">06 / SETTINGS</span><h2>系统设置</h2><p>外观、桌面偏好、系统信息与安全相关入口。</p></div></a>
+      <a class="prototype-card" href="./components.html"><div class="preview components-preview"><div class="mini-icons"><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="mini-kpis"><i></i><i></i><i></i></div></div><div class="card-body"><span class="eyebrow">07 / COMPONENTS</span><h2>可复用组件与素材</h2><p>应用图标、指标卡、趋势图、状态徽标、按钮与窗口控件。</p></div></a>
+    </section>
+    <section class="note-panel"><strong>数据边界</strong><p>页面中的百分比、速率、服务名和目录内容均为演示数据。正式实现必须使用真实 API/WebSocket 数据；缺失值显示“—”或不可用状态，不得显示为 0 或伪造在线状态。</p></section>
+  </main>
+</body>
+</html>
