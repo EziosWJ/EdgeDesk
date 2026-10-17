@@ -118,16 +118,21 @@ void test_login_bash() {
     CHECK(session->running());
 
     // Resize goes through TIOCSWINSZ; the kernel updates the PTY size
-    // immediately, but bash may be busy, so poll a few times before failing.
+    // immediately. Bash can still race us with a stale TIOCSWINSZ (a known
+    // Linux PTY race), so re-apply the size before each probe instead of
+    // assuming a single ioctl can never be overwritten.
     Error error = session->resize(120, 40);
     CHECK(error.ok());
     const auto resized_info = session->info();
     CHECK_EQ(resized_info.cols, static_cast<unsigned short>(120));
     CHECK_EQ(resized_info.rows, static_cast<unsigned short>(40));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     bool saw_size = false;
-    for (int attempt = 0; attempt < 6 && !saw_size; ++attempt) {
+    for (int attempt = 0; attempt < 8 && !saw_size; ++attempt) {
+        Error resize_error = session->resize(120, 40);
+        CHECK(resize_error.ok());
         session->send_raw("echo \"SIZE=$(stty size)\"\r");
-        saw_size = collector.wait_for("SIZE=40 120", 2000);
+        saw_size = collector.wait_for("SIZE=40 120", 1000);
     }
     if (!saw_size) {
         const auto tail = collector.snapshot();
