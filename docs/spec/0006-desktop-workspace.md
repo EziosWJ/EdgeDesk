@@ -5,6 +5,7 @@
 - 日期：2026-10-18
 - 前置基线：[SPEC-0001 产品范围](0001-product-scope.md)、[SPEC-0002 文件管理](0002-file-management.md)、[SPEC-0003 终端工作区](0003-terminal-workspace.md)、[SPEC-0004 设备仪表盘](0004-device-dashboard.md)、[SPEC-0005 认证与设置](0005-authentication-and-settings.md)
 - 技术决策：[ADR-0009 桌面架构](../adr/0009-desktop-workspace-architecture.md)、[ADR-0010 桌面状态与会话恢复](../adr/0010-desktop-persistence-and-recovery.md)
+- 视觉参考：[V1.2 原型总览](../design/prototypes/index.html)、[设备概览小组件](../design/prototypes/dashboard.html)、[可复用组件素材](../design/prototypes/components.html)
 
 ## 1. 目标与定位
 
@@ -95,6 +96,27 @@ EdgeDesk V1.2 从以页面切换为主的 Web 运维工作台，演进为以桌�
 - 具体按键映射在实现阶段选择并记录在 UI 帮助/设计文档中；不得拦截浏览器刷新、地址栏、浏览器标签切换等保留组合。
 - 当焦点位于 input、textarea、文本编辑器或终端中时，不得抢占会破坏文本输入或终端操作的快捷键。
 - 快捷键操作必须复用 WindowManager 命令，不能形成第二套独立窗口状态逻辑。
+
+### 4.5 设备概览与 NAS 风格资源小组件
+
+设备概览作为独立窗口应用，沿用现有真实指标 API/WebSocket；视觉参考 [设备概览原型](../design/prototypes/dashboard.html) 和 [可复用组件素材](../design/prototypes/components.html)。组件组织参考飞牛/群晖 NAS 管理界面的信息层次与紧凑卡片，不复制其品牌资产。
+
+V1.2 使用固定响应式网格，不提供用户拖拽编排小组件或自定义仪表盘布局的能力。
+
+- **CPU 小组件：** 总体使用率、短时趋势；核心数、频率、负载等仅在现有 API 提供时展示。
+- **内存小组件：** 已用/总量、使用率和趋势；可用内存、缓存、Swap 仅在现有采样字段提供时展示。
+- **存储小组件：** 按真实挂载点显示文件系统、已用/总量、使用率进度条；多挂载点应分行展示，不能只假设一个磁盘。
+- **网卡小组件：** 按真实网络接口显示地址、接收/发送速率和短时趋势；RX/TX 方向定义保持一致，不将环回接口重复计入总速率。
+- **系统信息小组件：** 仅显示现有 API 可提供的主机名、架构、内核版本、运行时间等字段。
+- **服务状态小组件：** 仅展示后端确实能够确认的 EdgeDesk 服务/状态；当前 API 未提供的 Docker 或任意 systemd 服务状态不纳入 V1.2，不新增服务管理能力。
+- **统一状态：** 加载、正常、部分指标不可用、采集断开、空数据等状态必须可区分。字段缺失显示“—”或不可用提示，不得显示成 0，也不得用原型演示数据替代真实值。
+- **交互：** 小组件标题、数值、单位和图例清晰；需要更详细信息时可以跳转至相应详情区域，但不能引入本版本未确认的后端 API。
+
+### 4.6 原型页与可复用素材
+
+静态原型位于 [docs/design/prototypes](../design/prototypes/README.md)，包括桌面、启动器、设备概览、文件管理、终端、设置和组件素材页面。可复用 SVG 位于 `web/public/assets/desktop/`，并通过 `asset-manifest.json` 登记。
+
+原型中的所有目录、时间、百分比、速率、主机名和服务状态都是演示数据。原型仅作为布局与交互参考，不能把整页截图裁切成生产 UI；生产图表、表格、窗口和指标卡必须使用实际 React/HTML/CSS 组件实现。
 
 ## 5. 桌面状态持久化与恢复
 
