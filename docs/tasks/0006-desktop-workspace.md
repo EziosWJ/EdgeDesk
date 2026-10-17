@@ -88,14 +88,14 @@
 
 | 顺序 | Issue | 目标 | 依赖 |
 | --- | --- | --- | --- |
-| 1 | V1.2 P0：建立 DesktopShell、AppRegistry 与窗口应用入口 | 桌面壳层和应用注册基础 | 无 |
-| 2 | V1.2 P0：统一 WindowManager 与窗口生命周期 | 窗口操作、实例策略、最小化不卸载 | #1 |
-| 3 | V1.2 P1：实现桌面图标网格与 Dock | 桌面入口、固定应用、运行状态、恢复最小化窗口 | #1、#2 |
-| 4 | V1.2 P1：实现应用启动器与基础快捷键 | 搜索、应用说明、菜单和窗口快捷操作 | #1、#2、#3 |
-| 5 | V1.2 P1：实现 DesktopPersistence 与完整工作区恢复 | 本地布局 schema、恢复、回退 | #1、#2、#3 |
-| 6 | V1.2 P0：兼容终端会话与编辑器生命周期 | 保留 Bash 会话、多 Tab、编辑器状态和关闭语义 | #2、#5 |
-| 7 | V1.2 P1：实现窄屏最大化与桌面可访问性 | 响应式和键盘交互 | #2、#3、#4 |
-| 8 | V1.2 P0：完成桌面化回归测试、文档和目视验收 | 发布门槛与回归证据 | #1–#7 |
+| 1 | [#4 DesktopShell 与 AppRegistry](https://github.com/EziosWJ/EdgeDesk/issues/4) | 桌面壳层和应用注册基础 | 无 |
+| 2 | [#5 WindowManager 与窗口生命周期](https://github.com/EziosWJ/EdgeDesk/issues/5) | 窗口操作、实例策略、最小化不卸载 | #4 |
+| 3 | [#6 桌面图标与 Dock](https://github.com/EziosWJ/EdgeDesk/issues/6) | 桌面入口、固定应用、运行状态、恢复最小化窗口 | #4、#5 |
+| 4 | [#7 应用启动器与快捷键](https://github.com/EziosWJ/EdgeDesk/issues/7) | 搜索、应用说明、菜单和窗口快捷操作 | #4、#5、#6 |
+| 5 | [#8 DesktopPersistence 与工作区恢复](https://github.com/EziosWJ/EdgeDesk/issues/8) | 本地布局 schema、恢复、回退 | #4、#5、#6 |
+| 6 | [#9 终端会话与编辑器生命周期](https://github.com/EziosWJ/EdgeDesk/issues/9) | 保留 Bash 会话、多 Tab、编辑器状态和关闭语义 | #5、#8 |
+| 7 | [#10 窄屏、快捷键边界与可访问性](https://github.com/EziosWJ/EdgeDesk/issues/10) | 响应式和键盘交互 | #5、#6、#7 |
+| 8 | [#11 回归测试、文档与目视验收](https://github.com/EziosWJ/EdgeDesk/issues/11) | 发布门槛与回归证据 | #4–#10 |
 
 ## 4. 通用完成定义
 
