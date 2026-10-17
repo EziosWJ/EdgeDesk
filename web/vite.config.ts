@@ -1,8 +1,14 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import Icons from 'unplugin-icons/vite';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    // File-type icons are compiled on demand from the local icon collection:
+    // no runtime CDN, no auto-install, only used icons end up in the bundle.
+    Icons({ compiler: 'jsx', jsx: 'react', autoInstall: false }),
+  ],
   base: '/',
   build: {
     outDir: 'dist',

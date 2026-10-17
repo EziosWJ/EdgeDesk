@@ -1,9 +1,9 @@
 import type { MouseEvent } from 'react';
-import { Icon } from '../../components/Icon';
 import type { FileEntry } from '../../types';
 import { FileEntryActions } from './FileEntryActions';
+import { EntryIcon } from './FileTypeIcon';
 import { SelectionHeaderCheckbox } from './SelectionCheckbox';
-import { entryIcon, entryKindLabel, entryMeta } from './fileUtils';
+import { entryKindLabel, entryMeta } from './fileUtils';
 
 type Props = {
   entries: FileEntry[];
@@ -87,7 +87,7 @@ export function FileGridView({
               />
             </div>
             <div className="ed-file-card-icon">
-              <Icon icon={entryIcon(entry)} size={22} />
+              <EntryIcon entry={entry} size={22} />
             </div>
             <div className="ed-file-card-name" title={entry.path}>
               {entry.name}

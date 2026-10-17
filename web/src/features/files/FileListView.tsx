@@ -4,8 +4,9 @@ import { Icon } from '../../components/Icon';
 import { formatBytes, formatTime } from '../../services/api';
 import type { FileEntry } from '../../types';
 import { FileEntryActions } from './FileEntryActions';
+import { EntryIcon } from './FileTypeIcon';
 import { SelectionCheckbox, SelectionHeaderCheckbox } from './SelectionCheckbox';
-import { entryIcon, type SortKey } from './fileUtils';
+import { type SortKey } from './fileUtils';
 
 type Props = {
   path: string;
@@ -125,7 +126,7 @@ export function FileListView({
                   title={entry.path}
                   onClick={openOnClick(entry)}
                 >
-                  <Icon icon={entryIcon(entry)} size={16} className="ed-entry-icon" />
+                  <EntryIcon entry={entry} size={16} className="ed-entry-icon" />
                   <span className="ed-entry-name">{entry.name}</span>
                   {entry.type === 'symlink' && <span className="ed-badge">链接</span>}
                   {entry.hidden && <span className="ed-badge subtle">隐藏</span>}

@@ -13,8 +13,10 @@
 | ③ 终端工作区 | 多标签 Bash 终端 + 会话列表 | `empty-terminal.svg`、`session-disconnected.svg` | PTY/WebSocket 终端、Tab 切换、导航/刷新后会话恢复 |
 | ④ 会话/设置 | 会话状态列表和系统配置 | 品牌与面板素材 | 会话列表、只读状态、受保护的配置表单 |
 
-界面图标（导航、指标、工具栏、文件类型、窗口控制）统一使用 `lucide-react` 组件，
-见 [ADR-0007](../adr/0007-frontend-icon-library.md) 与 [素材使用指南](asset-usage.md)。
+界面图标统一由组件提供：通用 UI/操作图标使用 `lucide-react`（ISC），文件类型图标使用
+`@iconify-json/vscode-icons`（MIT，通过 `unplugin-icons` 构建期按需编译）。目录与符号链接
+使用通用图标，普通文件按扩展名/特殊文件名显示对应格式图标。决策见
+[ADR-0007](../adr/0007-frontend-icon-library.md)。
 
 ## 视觉规则（从原型提炼）
 

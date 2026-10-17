@@ -1,23 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import {
-  File,
-  FileArchive,
-  FileCode,
-  FileImage,
-  FileSpreadsheet,
-  FileText,
-  Folder,
-  Link2,
-} from 'lucide-react';
 import type { FileEntry } from '../../types';
 import {
   ancestorChain,
   baseName,
   breadcrumbsFor,
   clampTreeWidth,
-  entryIcon,
   entryKindLabel,
   entryMeta,
+  fileIconKey,
   filterEntries,
   isSafeUploadName,
   joinPath,
@@ -84,18 +74,36 @@ describe('fileUtils entries', () => {
     expect(filterEntries(entries, 'no-match')).toHaveLength(0);
   });
 
-  it('derives icons and labels from the entry type, mime and extension', () => {
-    expect(entryIcon(entry({ name: 'docs', type: 'dir', mime: 'inode/directory' }))).toBe(Folder);
-    expect(entryIcon(entry({ name: 'link', type: 'symlink', mime: 'inode/symlink' }))).toBe(Link2);
-    expect(entryIcon(entry({ name: 'photo.png', mime: 'image/png' }))).toBe(FileImage);
-    expect(entryIcon(entry({ name: 'note.md' }))).toBe(FileText);
-    expect(entryIcon(entry({ name: 'app.ts' }))).toBe(FileCode);
-    expect(entryIcon(entry({ name: 'backup.tar.gz', text_editable: false }))).toBe(FileArchive);
-    expect(entryIcon(entry({ name: 'report.csv', text_editable: false }))).toBe(FileSpreadsheet);
-    expect(entryIcon(entry({ name: 'blob.bin', text_editable: false, mime: 'application/octet-stream' }))).toBe(File);
+  it('maps file names to per-format icon keys and labels', () => {
+    expect(fileIconKey(entry({ name: 'main.go' }))).toBe('go');
+    expect(fileIconKey(entry({ name: 'main.cpp' }))).toBe('cpp');
+    expect(fileIconKey(entry({ name: 'header.hpp' }))).toBe('cpp');
+    expect(fileIconKey(entry({ name: 'README.md' }))).toBe('markdown');
+    expect(fileIconKey(entry({ name: 'app.ts' }))).toBe('typescript');
+    expect(fileIconKey(entry({ name: 'App.tsx' }))).toBe('reactts');
+    expect(fileIconKey(entry({ name: 'data.json' }))).toBe('json');
+    expect(fileIconKey(entry({ name: 'config.yaml' }))).toBe('yaml');
+    expect(fileIconKey(entry({ name: 'script.sh' }))).toBe('shell');
+    expect(fileIconKey(entry({ name: 'Dockerfile' }))).toBe('docker');
+    expect(fileIconKey(entry({ name: 'Makefile' }))).toBe('makefile');
+    expect(fileIconKey(entry({ name: 'CMakeLists.txt' }))).toBe('cmake');
+    expect(fileIconKey(entry({ name: 'LICENSE' }))).toBe('license');
+    expect(fileIconKey(entry({ name: 'photo.png', mime: 'image/png', text_editable: false }))).toBe('image');
+    expect(fileIconKey(entry({ name: 'report.xlsx', text_editable: false }))).toBe('excel');
+    expect(fileIconKey(entry({ name: 'archive.tar.gz', text_editable: false }))).toBe('zip');
+    expect(fileIconKey(entry({ name: 'blob.bin', text_editable: false, mime: 'application/octet-stream' }))).toBe(
+      'binary',
+    );
+    expect(fileIconKey(entry({ name: 'blob.unknownext', text_editable: false, mime: 'application/octet-stream' }))).toBe(
+      'default',
+    );
+    expect(fileIconKey(entry({ name: 'unknown.xyz' }))).toBe('text');
     expect(entryKindLabel(entry({ name: 'docs', type: 'dir' }))).toBe('目录');
     expect(entryKindLabel(entry({ name: 'link', type: 'symlink' }))).toBe('符号链接');
-    expect(entryKindLabel(entry({ name: 'app.ts' }))).toBe('代码');
+    expect(entryKindLabel(entry({ name: 'main.go' }))).toBe('代码');
+    expect(entryKindLabel(entry({ name: 'README.md' }))).toBe('文本');
+    expect(entryKindLabel(entry({ name: 'config.yaml' }))).toBe('配置');
+    expect(entryKindLabel(entry({ name: 'script.sh' }))).toBe('脚本');
     expect(entryKindLabel(entry({ name: 'backup.tar.gz', text_editable: false }))).toBe('压缩包');
     expect(opensInEditor(entry({ name: 'note.md' }))).toBe(true);
     expect(opensInEditor(entry({ name: 'photo.png', text_editable: false }))).toBe(false);

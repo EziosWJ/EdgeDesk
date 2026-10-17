@@ -19,6 +19,8 @@ web/
   src/
     components/
       Icon.tsx         lucide-react 统一封装（尺寸 / 线宽 / 无障碍）
+    features/files/
+      FileTypeIcon.tsx VS Code 文件类型图标按需编译与映射
     styles/
       edgedesk-tokens.css
 
@@ -27,8 +29,9 @@ docs/design/
   prototype-guidelines.md
 ```
 
-界面图标不再来自 `web/public`，而是通过 `lucide-react`（ISC，精确版本见
-[ADR-0007](../adr/0007-frontend-icon-library.md)）以 React 组件导入、由 Vite 打包进 JS。
+界面图标不再来自 `web/public`：通用 UI 与操作图标通过 `lucide-react`（ISC），
+文件类型图标通过 `unplugin-icons` 从 `@iconify-json/vscode-icons`（MIT）按需编译，
+最终都由 Vite 打包进 JS。版本与许可证见 [ADR-0007](../adr/0007-frontend-icon-library.md)。
 
 ## 资产表
 
@@ -105,8 +108,8 @@ export function FolderLabel({ name }: { name: string }) {
 }
 ```
 
-图标颜色继承 `currentColor`，不再需要 mask + `--ed-icon-url`；尺寸由 `Icon` 的
-`size`（默认 18）控制，与按钮、列表、卡片的既有 CSS 类配合。
+Lucide 图标的颜色继承 `currentColor`，尺寸由 `Icon` 的 `size`（默认 18）控制；
+文件类型图标（VS Code Icons）自带多色配色，由 `FileTypeIcon` 的 `size` 控制宽高。
 
 如果部署在子路径，CSS 中的绝对 `/assets/` 需要改为与应用 `base` 匹配的路径或从组件内联设置；不要假设永远部署在域名根目录。
 
@@ -132,6 +135,6 @@ export function FolderLabel({ name }: { name: string }) {
 - 资源全部可通过浏览器独立访问；无外部图片、字体或 CDN 依赖。
 - SVG 透明底、可缩放；图标提供明确名称和用途。
 - 装饰性图片使用 `alt=""`；有含义的图标需要可访问标签。
-- 图标库版本锁定、许可证（ISC）与来源记录在 ADR-0007 与 `asset-manifest.json`。
+- 图标库版本锁定、许可证（Lucide ISC；VS Code Icons MIT）与来源记录在 ADR-0007 与 `asset-manifest.json`。
 - UI 实时数据必须来自设备 API，不能用原型图内的演示数值冒充真实状态。
 - 资源新增/删除时同步 `asset-manifest.json`、本指南和设计规范。

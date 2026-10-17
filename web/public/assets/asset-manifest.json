@@ -2,13 +2,21 @@
   "schemaVersion": 1,
   "product": "EdgeDesk",
   "designSource": "2026-10-16 4 prototype screens",
-  "licenseNote": "Project-specific derivative vector artwork. Do not assume third-party icon licensing for these files. UI icons come from lucide-react (ISC); see iconLibrary.",
-  "iconLibrary": {
-    "name": "lucide-react",
-    "version": "1.58.0",
-    "license": "ISC",
-    "note": "React icon components bundled into dist by Vite; not static files under web/public. Decision record: docs/adr/0007-frontend-icon-library.md"
-  },
+  "licenseNote": "Project-specific derivative vector artwork. Do not assume third-party icon licensing for these files. UI icons come from lucide-react (ISC) and file-type icons from vscode-icons (MIT); see iconLibraries.",
+  "iconLibraries": [
+    {
+      "name": "lucide-react",
+      "version": "1.58.0",
+      "license": "ISC",
+      "note": "UI and action icons via src/components/Icon.tsx, bundled into dist by Vite."
+    },
+    {
+      "name": "@iconify-json/vscode-icons",
+      "version": "1.2.90",
+      "license": "MIT",
+      "note": "File-type icons compiled on demand by unplugin-icons 24.0.0 via src/features/files/FileTypeIcon.tsx; no runtime CDN or auto-install."
+    }
+  ],
   "paths": {
     "base": "/assets/",
     "logos": [
@@ -27,5 +35,5 @@
       "decorations/dot-grid.svg"
     ]
   },
-  "usage": "Treat these files as static assets under web/public; with Vite, refer to import.meta.env.BASE_URL + 'assets/...' (or /assets/... for root deployment). Icons are imported from lucide-react via src/components/Icon.tsx."
+  "usage": "Treat these files as static assets under web/public; with Vite, refer to import.meta.env.BASE_URL + 'assets/...' (or /assets/... for root deployment). UI icons are imported from lucide-react via src/components/Icon.tsx; file-type icons are compiled from @iconify-json/vscode-icons via src/features/files/FileTypeIcon.tsx."
 }
