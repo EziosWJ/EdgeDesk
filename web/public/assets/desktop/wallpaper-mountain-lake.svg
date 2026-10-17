@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+  <title id="title">EdgeDesk Mountain Lake</title>
+  <desc id="desc">A blue twilight sky, layered mountains, and a calm lake designed as a low-contrast desktop wallpaper.</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12365c"/>
+      <stop offset=".42" stop-color="#477aa2"/>
+      <stop offset=".68" stop-color="#e18c83"/>
+      <stop offset="1" stop-color="#f6b38b"/>
+    </linearGradient>
+    <linearGradient id="lake" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#244e70"/>
+      <stop offset=".6" stop-color="#102c47"/>
+      <stop offset="1" stop-color="#071a2d"/>
+    </linearGradient>
+    <linearGradient id="reflection" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f2a18c" stop-opacity=".48"/>
+      <stop offset="1" stop-color="#f2a18c" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="60%" r="48%">
+      <stop offset="0" stop-color="#ffbc98" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#ffbc98" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft"><feGaussianBlur stdDeviation="36"/></filter>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#sky)"/>
+  <ellipse cx="960" cy="560" rx="700" ry="230" fill="url(#glow)" filter="url(#soft)"/>
+  <path d="M0 600 190 478 320 548 505 345 650 493 824 286 1004 478 1188 326 1354 500 1538 360 1698 500 1835 422 1920 470V700H0Z" fill="#233f60" opacity=".82"/>
+  <path d="M0 632 205 520 337 565 520 385 644 500 832 300 945 436 1010 400 1180 518 1350 365 1502 515 1660 428 1825 545 1920 500V720H0Z" fill="#172f4c"/>
+  <path d="m520 385 58 63-38-14-30 18-18-12-31 30 59-85Zm312-85 65 136-55-57-26 10-32-27-29 15 77-77Zm350 65 57 74-53-27-32 28-28-8 56-67Zm318 63 61 75-55-32-26 17-28-13 48-47Z" fill="#d7dce2" opacity=".74"/>
+  <path d="M0 640 205 562 337 601 520 434 644 534 832 350 945 470 1010 435 1180 548 1350 408 1502 552 1660 466 1825 576 1920 535V750H0Z" fill="#0e2944"/>
+  <path d="M0 700Q300 660 550 710T1020 698T1450 708T1920 688V1080H0Z" fill="url(#lake)"/>
+  <path d="M0 720Q340 700 600 722T1120 716T1600 730T1920 712V805Q1450 820 1110 790T480 810T0 800Z" fill="url(#reflection)"/>
+  <g fill="none" stroke-linecap="round" opacity=".24">
+    <path d="M80 758q190 8 340 0t280 3" stroke="#d8a9a0" stroke-width="3"/>
+    <path d="M1120 765q150-8 310 2t330-4" stroke="#d8a9a0" stroke-width="3"/>
+    <path d="M230 836q220-10 410 3" stroke="#76a1bc" stroke-width="4"/>
+    <path d="M990 860q250-14 450 4" stroke="#76a1bc" stroke-width="4"/>
+    <path d="M80 942q280-12 500 2" stroke="#507895" stroke-width="3"/>
+    <path d="M1290 966q230-10 450 2" stroke="#507895" stroke-width="3"/>
+  </g>
+  <rect width="1920" height="1080" fill="#061425" opacity=".14"/>
+</svg>
