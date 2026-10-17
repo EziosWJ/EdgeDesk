@@ -3,6 +3,34 @@
 > 只记录**实际执行过**的验证。未运行的环境一律标注“未验证”，不得以文档目标代替结果。
 > 复现命令附在每节末尾。
 
+## 测试分层（本地入口）
+
+| 层级 | 入口 | 覆盖 | 何时运行 |
+| --- | --- | --- | --- |
+| L0 编辑循环 | `scripts/test-fast.sh` | `host-offline-tests` 构建 + 10 项原生单测 + 前端单测（`web/node_modules` 存在时） | 每次改动 |
+| L1 任务/PR | `scripts/test-pr.sh` | `dev-disk` 构建 + 10 项原生单测 + 全量集成 + 前端 `npm test` / `npm run build` | 提交前 |
+| L2 全矩阵 | 见下方“构建与平台矩阵” | `release-embed`、x86_64-musl、arm64-disk、arm64-musl、CI | main/nightly/release；当前 CI 对 PR 也执行全矩阵 |
+
+```bash
+# L0（秒级）
+scripts/test-fast.sh
+
+# L1（默认集成端口 19091；冲突时用 --port N）
+scripts/test-pr.sh
+```
+
+- L0/L1 不替代 L2；发布前必须完成 L2。
+- `test-fast.sh` 在 `web/node_modules` 缺失时会跳过前端测试并提示 `npm ci`；
+  `test-pr.sh` 会自动安装前端依赖。
+- `test-pr.sh` 会临时把 `dev-disk` 的 `EDGEDESK_BUILD_WEB` 设为 `OFF`，避免
+  CMake 重复调用 npm；退出时恢复原值（需要手动恢复时执行
+  `cmake --preset dev-disk -DEDGEDESK_BUILD_WEB=ON`）。
+- 集成测试使用 `N..N+5`；默认 `19091`，冲突时用 `--port N` 换一组端口。
+
+> 2026-10-17 本机实际执行：`scripts/test-fast.sh` 通过（10/10 原生 + 77 项前端，
+> 首次含重建约 15 s，热缓存约 6 s）；`scripts/test-pr.sh` 通过（10/10 原生 +
+> 全量集成，约 2 分钟，含一次 dev-disk 重建）。CI 新配置尚未在 GitHub Actions 上运行。
+
 ## 自动化测试清单
 
 | 测试 | 覆盖内容 | 环境 | 结果 |
@@ -74,7 +102,13 @@ bash scripts/integration_test.sh out/build/arm64-disk/bin/edgedesk 19591 "" \
 | GCC 15 + musl + `#embed` 组合 | 需要 GCC 15 的 musl 交叉工具链 | **未验证**（预编译 musl 工具链当前最高 GCC 13.3；`#embed` 管线已在 glibc GCC 15.2 上验证，musl 静态链路已在 GCC 11.2 / 13.3 上验证，两者交集未验证） |
 | OpenHarmony ARM64 | 需要对应 SDK | **未验证** |
 | 真实设备（工控板/网关） | 目标硬件 | **未验证**（当前仅有 QEMU 运行证据） |
-| GitHub Actions CI | 本仓库 workflow：host-build / gcc15-embed / arm64-cross / x86_64-musl-static 四个 job | **已执行并通过**（2026-10-17，V1.1 PR #2；见仓库 Actions） |
+| GitHub Actions CI | 本仓库 workflow：frontend + host-build / gcc15-embed / arm64-cross / x86_64-musl-static；npm/ccache/交叉工具链缓存，`web/dist` 通过 artifact 复用 | **新配置未验证**；旧配置于 2026-10-17 V1.1 PR #2 通过四个目标 job |
+
+> 2026-10-17 之后 CI 配置增加了 `frontend` 前置 job、npm/ccache/交叉工具链缓存和
+> `web/dist` artifact 复用；新配置需在下一个 PR 实际运行后回填结果。四个目标 job
+> 仍为 `host-build`、`gcc15-embed`、`x86_64-musl-static`、`arm64-cross`。
+> `frontend` 失败时依赖它的 `host-build`/`gcc15-embed` 会显式失败；仍建议把
+> `frontend` 加入 required checks。
 
 ### libhv 依赖的已知构建适配
 

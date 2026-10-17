@@ -2,6 +2,7 @@
 out/
 build/
 compile_commands.json
+.ccache/
 # Web
 web/node_modules/
 web/dist/

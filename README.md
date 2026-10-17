@@ -55,6 +55,15 @@ cmake --build --preset release-embed
 bash scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19091 web/dist
 ```
 
+日常提交前用 L1 封装脚本（前端 build/test + dev-disk 单测 + 全量集成）：
+
+```sh
+scripts/test-pr.sh
+```
+
+编辑循环可用秒级的 `scripts/test-fast.sh`；交叉/embed 全矩阵见
+[测试与验证矩阵](docs/testing.md)。
+
 ### 认证与安全默认值
 
 - 认证始终开启；默认只监听 `127.0.0.1`。远程部署必须显式配置 `--host`，并置于
@@ -78,6 +87,8 @@ bash scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19091 web/dist
 | `cmake --preset release-disk` | Release，磁盘资源模式 |
 | `cmake --preset release-embed` | Release，GCC 15+ `#embed` 单二进制 |
 | `cmake --preset host-offline-tests` | 仅核心库与单元测试（不需要 libhv / npm） |
+| `scripts/test-fast.sh` | L0：宿主核心单测 + 前端单测（秒级） |
+| `scripts/test-pr.sh` | L1：dev-disk 单测 + 全量集成 + 前端 build/test（分钟级） |
 | `scripts/with-gcc15.sh all release-embed` | 使用 `~/opt/gcc-15` 的本地 GCC 15 一键构建 |
 | `scripts/integration_test.sh` | 端到端：REST + WebSocket + 限流 + 审计 |
 | `cd web && npm test` | 前端单元测试（浮窗存储 / 会话持久化 / 格式化） |

@@ -5,8 +5,19 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPILERCHECK: content
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_MAXSIZE: 500M
+  CCACHE_NOHASHDIR: "true"
+
 jobs:
-  host-build:
+  frontend:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -15,45 +26,123 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Frontend install (lockfile) and unit tests
-        run: |
-          npm ci --no-audit --no-fund
-          npm test
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Frontend install (lockfile)
+        run: npm ci --no-audit --no-fund
+        working-directory: web
+      - name: Frontend unit tests
+        run: npm test
         working-directory: web
       - name: Build React frontend
         run: npm run build
         working-directory: web
-      - name: Configure C++ host build (disk resources)
-        run: cmake --preset dev-disk -DEDGEDESK_BUILD_WEB=OFF
-      - name: Build C++ and libhv
-        run: cmake --build --preset dev-disk
-      - name: Native unit tests
-        run: ctest --preset dev-disk
-      - name: HTTP smoke + end-to-end integration (REST, WebSocket, rate limit, audit)
-        run: bash scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19091 web/dist
+      - name: Upload web/dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist/
+          if-no-files-found: error
+          retention-days: 1
 
-  gcc15-embed:
+  host-build:
+    needs: frontend
+    if: always()
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Build React dist for embedding
-        run: npm ci --no-audit --no-fund && npm run build
-        working-directory: web
-      - name: GCC 15 #embed compile, tests and smoke test
+      - name: Require frontend job
+        if: needs.frontend.result != 'success'
         run: |
-          docker run --rm -v "$PWD:/work" -w /work gcc:15 bash -euc '
-            apt-get update -qq
-            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake ninja-build python3 git curl >/dev/null
-            cmake -S . -B out/build/ci-gcc15-embed -G Ninja -DCMAKE_BUILD_TYPE=Release -DEDGEDESK_WEB_MODE=embed -DEDGEDESK_BUILD_WEB=OFF
-            cmake --build out/build/ci-gcc15-embed --parallel 3
-            ctest --test-dir out/build/ci-gcc15-embed --output-on-failure
-            bash scripts/integration_test.sh out/build/ci-gcc15-embed/bin/edgedesk 19092 web/dist
-          '
+          echo "frontend job result: ${{ needs.frontend.result }}" >&2
+          exit 1
+      - uses: actions/checkout@v4
+      - name: Download web/dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ runner.os }}-${{ github.job }}-ccache-${{ hashFiles('src/**', 'tests/**', 'third_party/**', 'cmake/**', 'CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ github.job }}-ccache-
+      - name: Install ccache
+        run: |
+          if ! command -v ccache >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ccache
+          fi
+          ccache --version | head -1
+      - name: Configure C++ host build (disk resources)
+        run: |
+          cmake --preset dev-disk -DEDGEDESK_BUILD_WEB=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build C++ and libhv
+        run: cmake --build --preset dev-disk -j "$(nproc)"
+      - name: Native unit tests
+        run: ctest --preset dev-disk -j "$(nproc)" --output-on-failure
+      - name: HTTP smoke + end-to-end integration (REST, WebSocket, rate limit, audit)
+        run: bash scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19091 web/dist
+
+  gcc15-embed:
+    needs: frontend
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Require frontend job
+        if: needs.frontend.result != 'success'
+        run: |
+          echo "frontend job result: ${{ needs.frontend.result }}" >&2
+          exit 1
+      - uses: actions/checkout@v4
+      - name: Download web/dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ runner.os }}-${{ github.job }}-ccache-${{ hashFiles('src/**', 'tests/**', 'third_party/**', 'cmake/**', 'CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ github.job }}-ccache-
+      - name: "GCC 15 #embed compile, tests and smoke test"
+        run: |
+          mkdir -p "$PWD/.ccache"
+          docker run --rm \
+            -v "$PWD:/work" \
+            -v "$PWD/.ccache:/work/.ccache" \
+            -e CCACHE_BASEDIR=/work \
+            -e CCACHE_COMPILERCHECK=content \
+            -e CCACHE_DIR=/work/.ccache \
+            -e CCACHE_MAXSIZE=500M \
+            -e CCACHE_NOHASHDIR=true \
+            -w /work gcc:15 bash -euc '
+              apt-get update -qq
+              DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake ninja-build python3 git curl ccache >/dev/null
+              ccache --version | head -1
+              cmake -S . -B out/build/ci-gcc15-embed -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DEDGEDESK_WEB_MODE=embed -DEDGEDESK_BUILD_WEB=OFF \
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+              cmake --build out/build/ci-gcc15-embed -j "$(nproc)"
+              ctest --test-dir out/build/ci-gcc15-embed -j "$(nproc)" --output-on-failure
+              bash scripts/integration_test.sh out/build/ci-gcc15-embed/bin/edgedesk 19092 web/dist
+            '
+      - name: Fix ccache ownership
+        if: always()
+        run: |
+          if [ -d "$PWD/.ccache" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "$PWD/.ccache"
+          fi
 
   x86_64-musl-static:
     # musl static-pie release target, disk resource mode (prebuilt musl
@@ -63,22 +152,47 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - name: Cache musl toolchain
+        id: musl-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/opt/musl/x86-64--musl--stable-2024.05-1
+          key: musl-bootlin-2024.05-1
       - name: Fetch musl cross toolchain (Bootlin stable 2024.05)
+        if: steps.musl-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$HOME/opt/musl" && cd "$HOME/opt/musl"
           curl -fsSL --retry 3 -o toolchain.tar.xz \
             "https://toolchains.bootlin.com/downloads/releases/toolchains/x86-64/tarballs/x86-64--musl--stable-2024.05-1.tar.xz"
           tar xJf toolchain.tar.xz
+      - name: Verify musl toolchain
+        run: test -x "$HOME/opt/musl/x86-64--musl--stable-2024.05-1/bin/x86_64-linux-musl-gcc"
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ runner.os }}-${{ github.job }}-ccache-${{ hashFiles('src/**', 'tests/**', 'third_party/**', 'cmake/**', 'CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ github.job }}-ccache-
+      - name: Install ccache
+        run: |
+          if ! command -v ccache >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ccache
+          fi
+          ccache --version | head -1
       - name: Cross build (static-pie)
         run: |
           export EDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/musl/x86-64--musl--stable-2024.05-1"
           cmake -S . -B out/build/x86_64-musl -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DEDGEDESK_WEB_MODE=disk -DEDGEDESK_BUILD_WEB=OFF -DEDGEDESK_STATIC_PIE=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/x86_64-linux-musl.cmake
-          cmake --build out/build/x86_64-musl --parallel 3
+          cmake --build out/build/x86_64-musl -j "$(nproc)"
           file out/build/x86_64-musl/bin/edgedesk
       - name: Unit tests (static musl binaries)
-        run: ctest --test-dir out/build/x86_64-musl --output-on-failure
+        run: ctest --test-dir out/build/x86_64-musl -j "$(nproc)" --output-on-failure
       - name: Integration tests
         run: bash scripts/integration_test.sh out/build/x86_64-musl/bin/edgedesk 19093 ""
 
@@ -91,21 +205,22 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - name: Cache ARM64 rootfs and qemu
+        id: arm64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/opt/arm64/root
+          # Bump the key when the runner image or the extraction recipe changes.
+          key: arm64-root-v1
       - name: Fetch cross toolchain, qemu and ARM64 bash (no root)
+        if: steps.arm64-cache.outputs.cache-hit != 'true'
         run: |
-          mkdir -p "$HOME/opt/arm64/debs" "$HOME/opt/arm64/root" "$HOME/opt/arm64/hostlibs"
+          mkdir -p "$HOME/opt/arm64/debs" "$HOME/opt/arm64/root"
           cd "$HOME/opt/arm64/debs"
           apt-get download $(apt-cache depends --recurse --no-recommends --no-suggests \
             --no-conflicts --no-breaks --no-replaces --no-enhances g++-aarch64-linux-gnu qemu-user-static \
             | grep '^\w' | sort -u)
           for d in *.deb; do dpkg -x "$d" "$HOME/opt/arm64/root"; done
-          cd "$HOME/opt/arm64/hostlibs"
-          ln -sf "$HOME"/opt/arm64/root/usr/lib/x86_64-linux-gnu/libopcodes-2.42-arm64.so .
-          ln -sf "$HOME"/opt/arm64/root/usr/lib/x86_64-linux-gnu/libbfd-2.42-arm64.so .
-          ln -sf "$HOME"/opt/arm64/root/usr/lib/x86_64-linux-gnu/libctf-arm64.so.0.0.0 .
-          ln -sf "$HOME"/opt/arm64/root/usr/lib/x86_64-linux-gnu/libctf-nobfd-arm64.so.0.0.0 .
-          ln -sf libctf-arm64.so.0.0.0 libctf-arm64.so.0
-          ln -sf libctf-nobfd-arm64.so.0.0.0 libctf-nobfd-arm64.so.0
           cd "$HOME/opt/arm64/root"
           mkdir -p lib usr/lib
           ln -sfn ../usr/aarch64-linux-gnu/lib lib/aarch64-linux-gnu
@@ -113,6 +228,7 @@ jobs:
           ln -sf ../usr/aarch64-linux-gnu/lib/ld-linux-aarch64.so.1 lib/ld-linux-aarch64.so.1
           ln -sfn usr/bin bin
       - name: Install ARM64 bash for the terminal tests
+        if: steps.arm64-cache.outputs.cache-hit != 'true'
         run: |
           bash_url=$(curl -fsSL http://ports.ubuntu.com/ubuntu-ports/pool/main/b/bash/ \
             | grep -o 'bash_[0-9][^"]*_arm64\.deb' | sort -V | tail -1)
@@ -122,16 +238,44 @@ jobs:
           curl -fsSL -o /tmp/libtinfo6.deb "http://ports.ubuntu.com/ubuntu-ports/pool/main/n/ncurses/$tinfo_url"
           dpkg -x /tmp/bash.deb "$HOME/opt/arm64/root"
           dpkg -x /tmp/libtinfo6.deb "$HOME/opt/arm64/root"
+      - name: Prepare ARM64 host libs
+        run: |
+          mkdir -p "$HOME/opt/arm64/hostlibs"
+          cd "$HOME/opt/arm64/hostlibs"
+          ln -sf "$HOME"/opt/arm64/root/usr/lib/x86_64-linux-gnu/libopcodes-2.42-arm64.so .
+          ln -sf "$HOME"/opt/arm64/root/usr/lib/x86_64-linux-gnu/libbfd-2.42-arm64.so .
+          ln -sf "$HOME"/opt/arm64/root/usr/lib/x86_64-linux-gnu/libctf-arm64.so.0.0.0 .
+          ln -sf "$HOME"/opt/arm64/root/usr/lib/x86_64-linux-gnu/libctf-nobfd-arm64.so.0.0.0 .
+          ln -sf libctf-arm64.so.0.0.0 libctf-arm64.so.0
+          ln -sf libctf-nobfd-arm64.so.0.0.0 libctf-nobfd-arm64.so.0
+      - name: Verify qemu and ARM64 bash
+        run: |
           "$HOME/opt/arm64/root/usr/bin/qemu-aarch64-static" -L "$HOME/opt/arm64/root" \
             "$HOME/opt/arm64/root/bin/bash" --version | head -1
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ runner.os }}-${{ github.job }}-ccache-${{ hashFiles('src/**', 'tests/**', 'third_party/**', 'cmake/**', 'CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ github.job }}-ccache-
+      - name: Install ccache
+        run: |
+          if ! command -v ccache >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ccache
+          fi
+          ccache --version | head -1
       - name: Cross build (disk resources)
         run: |
           export LD_LIBRARY_PATH="$HOME/opt/arm64/hostlibs"
           export EDGEDESK_TOOLCHAIN_ROOT="$HOME/opt/arm64/root"
           cmake -S . -B out/build/arm64-disk -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DEDGEDESK_WEB_MODE=disk -DEDGEDESK_BUILD_WEB=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake
-          cmake --build out/build/arm64-disk --parallel 3
+          cmake --build out/build/arm64-disk -j "$(nproc)"
           file out/build/arm64-disk/bin/edgedesk
       - name: Run integration tests under qemu
         run: |

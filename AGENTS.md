@@ -57,12 +57,34 @@ V1.1 认证由 `AuthStore`（auth.json/锁）、`PasswordHashService`（Argon2id
 
 ## 每个任务的完成标准
 
-- 运行相关的测试/构建命令，如实报告确切的成功与失败：
-  - 原生：`cmake --preset host-offline-tests && cmake --build --preset host-offline-tests && ctest --preset host-offline-tests`
-  - 服务端：`cmake --build --preset dev-disk` + `ctest --preset dev-disk`
-  - 端到端：`bash scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19091 web/dist`
-  - 前端：`cd web && npm run build && npm test`
+测试按改动风险分层。不要每次改动都执行发布级全矩阵；但也不得用快速层代替发布验证。
+
+### L0 编辑循环（每次改动）
+
+- 运行 `scripts/test-fast.sh`。
+- 内部执行：`cmake --preset host-offline-tests` + `cmake --build --preset host-offline-tests`
+  + `ctest --preset host-offline-tests`；`web/node_modules` 存在时再跑 `npm test`。
+- 目标：秒级反馈，只覆盖宿主原生单测和前端单测。
+
+### L1 任务/PR（提交前）
+
+- 运行 `scripts/test-pr.sh`。
+- 内部执行：前端 `npm test && npm run build`；`dev-disk` 构建 + `ctest`；
+  `scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19091 web/dist`。
+- 所有影响运行行为的改动都必须执行；纯文档改动可只做链接/格式检查。
+
+### L2 全矩阵（main / nightly / release）
+
+- 按 `docs/testing.md` 的“构建与平台矩阵”执行：
   - Embed：`scripts/with-gcc15.sh all release-embed`
+  - musl：Bootlin/musl.cc 交叉构建 + `ctest` + 集成测试
+  - ARM64：交叉构建 + qemu 集成测试
+- CI 当前在 PR 与 main 执行全矩阵；nightly/release 也应执行。若后续改为条件矩阵，
+  main/nightly/release 必须保留全量。
+- 本地仅在改 `CMakeLists.txt`、`cmake/`、`cmake/toolchains/`、`third_party/`、
+  资源模式或准备发布时执行 L2；日常改动交给 L0/L1 与 CI。
+- 发布前必须完成 L2；不得用 L0/L1 代替。
+
 - 针对行为或 API 的变化更新文档（`docs/api.md`、`docs/config.md`、`docs/architecture.md`、`docs/testing.md`）。
 - 不得编造截图、基准测试或硬件测试结论；未运行的平台在 `docs/testing.md` 中标注为未验证。
 - 确保生成的 `out/`、`web/dist/`、`web/node_modules/` 不进入 Git。
