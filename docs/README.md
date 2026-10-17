@@ -3,7 +3,7 @@
 > 所有文档用于记录已确认的决策、需求、实现状态与待确认问题。文档完成 != 功能完成。
 > 功能完成情况以代码、自动化测试与 [验证矩阵](testing.md) 的实际结果为准。
 
-## 当前实现（V1.0）
+## 当前实现（V1.1）
 
 - [架构、线程模型与资源边界](architecture.md)
 - [API 与 WebSocket 协议](api.md)
@@ -18,12 +18,12 @@
 | --- | --- | --- |
 | [ADR-0001](adr/0001-technology-stack.md) | C++17、GCC 15+、libhv、musl、`#embed`、React + xterm.js | 已确认基线 |
 | [ADR-0002](adr/0002-architecture-security.md) | 业务模块分层、PTY 生命周期与安全边界 | 已确认 |
-| [ADR-0003](adr/0003-v1-auth-api-protocol.md) | 认证（密钥 + 会话 Cookie）、API 面、实时协议、限流与审计 | 已确认 |
+| [ADR-0003](adr/0003-v1-auth-api-protocol.md) | V1.0 认证（密钥 + 会话 Cookie）、API 面、实时协议、限流与审计 | 历史契约（V1.1 由 ADR-0008 取代登录方式） |
 | [ADR-0004](adr/0004-path-sandbox.md) | 目录 FD + openat 路径沙箱、符号链接策略 | 已确认 |
 | [ADR-0005](adr/0005-terminal-architecture.md) | PTY、线程边界、会话生命周期与重连 | 已确认 |
 | [ADR-0006](adr/0006-system-metrics.md) | 指标采集、内存窗口与增量推送 | 已确认 |
 | [ADR-0007](adr/0007-frontend-icon-library.md) | 前端图标库：Lucide（ISC，全站 UI）+ VS Code Icons 按需编译（文件类型） | 已确认（2026-10-17） |
-| [ADR-0008](adr/0008-authentication-and-settings.md) | V1.1 单管理员密码认证、首次初始化、独立 API Token 与系统设置 | 已确认决策；实现待完成 |
+| [ADR-0008](adr/0008-authentication-and-settings.md) | V1.1 单管理员密码认证、首次初始化、独立 API Token 与系统设置 | 已实现（V1.1.0） |
 
 ## Spec（要做什么）
 
@@ -55,7 +55,7 @@
 | [本地 GCC 15 工具链（免 sudo）](dev/gcc15-local-toolchain.md) | Ubuntu 24.04 上用 `scripts/install-gcc15-local.sh` 安装 GCC 15 到用户目录 | 已验证（2026-10-16） |
 | [测试与验证矩阵](testing.md) | 各平台构建/运行/交叉验证的真实结果 | 持续更新 |
 
-## 仍然待确认（不影响 V1.0 已实现范围）
+## 仍然待确认（不影响 V1.1 已实现范围）
 
 - TLS 是否内置终止（当前由外部网关终止）。
 - OpenHarmony ARM64 是否作为正式发行平台。

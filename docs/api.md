@@ -1,37 +1,56 @@
-# EdgeDesk V1.0 API 与 WebSocket 协议
+# EdgeDesk V1.1 API 与 WebSocket 协议
 
-> 状态：**已实现**。所有端点默认要求认证（见下文），响应均为
+> 状态：**已实现（V1.1.0）**。所有业务端点默认要求认证（见下文），响应均为
 > `application/json; charset=utf-8`，错误体统一为
 > `{"ok":false,"error":"<slug>","message":"...","errno":<可选>}`。
 
 ## 认证
 
+V1.1 采用单管理员密码登录，保留独立、可选的 Bearer API Token。
+
 | 方式 | 说明 |
 | --- | --- |
-| `Authorization: Bearer <token>` | 适合脚本/自动化；不需要 Origin。 |
-| 会话 Cookie `edgedesk_session` | `POST /api/auth/login` 获取；`HttpOnly; SameSite=Strict; Max-Age=43200`。 |
+| 管理员密码 + 会话 Cookie | `POST /api/auth/login {"password":"..."}` 获取 `edgedesk_session`；`HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`，`--cookie-secure` 时附加 `Secure`。 |
+| `Authorization: Bearer <token>` | 可选；由 `--auth-token-file` / `EDGEDESK_AUTH_TOKEN` / `--auth-token` 配置。未配置时 Bearer 不可用。 |
+| 一次性初始化码 | 仅用于 `POST /api/auth/setup`；从 `--data-dir` 下 `init-code`（0600）读取，默认 24 小时有效。 |
 
 携带 Cookie 的 `POST/PUT/DELETE/PATCH` 必须同时发送与 `Host` 一致的
 `Origin`（缺失时使用 `Referer`）；否则返回 `403 csrf_rejected`。
 WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 101。
 
-公共端点：`GET /api/health`、`POST /api/auth/login`、`POST /api/auth/logout`、
+认证状态：
+
+| 状态 | 含义 | 业务 API |
+| --- | --- | --- |
+| `uninitialized` | 新安装，`auth.json` 不存在 | `503 setup_required`，只允许初始化相关端点 |
+| `initialized` | 已有管理员密码 | 按认证结果允许 |
+| `corrupt` | `auth.json` 无效/版本不支持/不可读 | `503 auth_state_corrupt`，只能本机恢复 |
+
+公共端点：`GET /api/health`、`GET /api/auth/setup-status`、`POST /api/auth/setup`、
+`POST /api/auth/login`（已初始化时）、`POST /api/auth/logout`、
 `GET /api/auth/session`、静态资源。
 
 ### 认证端点
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `POST` | `/api/auth/login` | body `{"token":"..."}`；成功设置 Cookie，失败 `401 invalid_token`；超限 `429`（`Retry-After: 60`）。 |
-| `POST` | `/api/auth/logout` | 清除 Cookie。 |
-| `GET` | `/api/auth/session` | `{"ok":true,"authenticated":bool,"method":"cookie"\|"bearer"\|"none"}`。 |
+| 方法 | 路径 | 认证 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/api/auth/setup-status` | 公共 | `{"ok":true,"initialized":bool,"state":"uninitialized\|initialized\|corrupt"}`；不返回秘密。 |
+| `POST` | `/api/auth/setup` | 初始化码 | body `{"code":"...","password":"...","confirm_password":"..."}`；成功 `201`；已初始化 `409 already_initialized`；码错误/过期 `400`；损坏状态 `503`。 |
+| `POST` | `/api/auth/login` | 公共、限流 | body `{"password":"..."}`；成功设置 Cookie 并返回 `expires_in`/`expires_at`；失败 `401 invalid_credentials`；超限 `429`（`Retry-After: 60`）。 |
+| `POST` | `/api/auth/logout` | Cookie | 清除 Cookie；带 Cookie 时校验同源 Origin。 |
+| `GET` | `/api/auth/session` | 公共 | `{"ok":true,"authenticated":bool,"method":"cookie"\|"bearer"\|"none","state":"...","expires_at":<可选>}`。 |
+| `POST` | `/api/auth/password` | Cookie | body `{"current_password":"...","new_password":"...","confirm_password":"..."}`；成功后轮换会话密钥，所有旧 Cookie 失效，响应设置过期 Cookie。 |
+
+`POST /api/auth/login` 不再接受 `{"token":"..."}`；脚本客户端应直接使用
+`Authorization: Bearer`。密码至少 12 个 Unicode 字符、最多 1024 个 UTF-8 字节；
+服务端使用 Argon2id 哈希。
 
 ## 健康检查
 
 `GET /api/health` → `200`：
 
 ```json
-{"status":"ok","service":"edgedesk","phase":1,"version":"1.0.0","uptime_seconds":123.4}
+{"status":"ok","service":"edgedesk","phase":1,"version":"1.1.0","uptime_seconds":123.4}
 ```
 
 `phase` 字段为 Phase 1 契约，保持不变。
@@ -54,10 +73,12 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 | `POST` | `/api/files/rename` | `{"from":"/a","to":"/b","overwrite":false}` | 重命名/移动；目标存在且未允许覆盖 → `409`；跨设备 `409`。 |
 | `POST` | `/api/files/delete` | `{"paths":["/a","/b"]}` | 单项或批量删除，目录递归（深度 ≤64，条目 ≤100000）；禁止删除根。 |
 
-错误码：`invalid_argument 400`、`unauthorized 401`、`permission_denied 403`、
-`not_found 404`、`already_exists/conflict/is_a_directory 409`、`too_large 413`、
-`unsupported 415/501`、`busy 423`、`limit_exceeded 429`、`io_error 500`、
-`unavailable 503`。
+错误码：`invalid_argument 400`、`invalid_credentials 401`、`unauthorized 401`、
+`permission_denied 403`、`not_found 404`、`already_exists 409`、`conflict 409`、
+`is_a_directory 409`、`already_initialized 409`、`invalid_settings 400`、
+`too_large 413`、`unsupported 415/501`、`busy 423`、`limit_exceeded 429`、
+`rate_limited 429`、`io_error 500`、`setup_required 503`、`auth_state_corrupt 503`、
+`auth_unavailable 503`、`unavailable 503`。
 
 ## 终端 API
 
@@ -144,9 +165,23 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 | --- | --- | --- |
 | `GET` | `/api/system/summary` | `{"ok":true,"interval_ms":1000,"sample":{...},"history":[...]}`；`history` 查询参数（0-3600）控制携带的样本数。 |
 | `GET` | `/api/system/history` | `window` 参数（1-3600）返回最近 N 个样本。 |
+| `GET` | `/api/system/info` | 白名单系统信息：版本/构建类型、主机名、架构、内核、运行时间、监听地址、文件根目录、Bash、审计状态、数据/运行期目录、资源上限、`api_token_configured` 布尔值。不返回密码哈希、Token、Cookie、初始化码、环境变量全集或完整命令行。 |
+
+## 设置 API
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/settings` | `{"ok":true,"settings":{...},"api_token_configured":bool}`。 |
+| `PUT` | `/api/settings` | 部分更新白名单字段；未知字段/非法枚举/越界值 `400`。Cookie 请求必须同源，Bearer 可直接调用。 |
+
+`settings` 字段：`theme`（`light\|dark\|system`）、`files_view`（`list\|grid`）、
+`files_show_hidden`（bool）、`terminal_font_size`（10–24）、
+`dashboard_metrics_window`（60–3600 秒）。写入 `data-dir/settings.json`（0600），
+不会覆盖部署级配置。
 
 ## 请求限制
 
 - `Content-Length` 超过路径上限：JSON 1 MiB、文本 1 MiB、上传 256 MiB（可配置）。
 - 硬上限 4 MiB：任何超过该值的请求在读取 body 前直接断开连接（拒绝恶意大包）。
-- 每 IP 限流 30/s（突发 60），登录 5/分钟；超限 `429`，上传路径在头阶段拒绝。
+- 每 IP 限流 30/s（突发 60），登录/初始化/改密 5/分钟；超限 `429`，上传路径在头阶段拒绝。
+- 默认使用 TCP 对端 IP；只有 `--trusted-proxy` 列出的代理才解析 `X-Forwarded-For`。

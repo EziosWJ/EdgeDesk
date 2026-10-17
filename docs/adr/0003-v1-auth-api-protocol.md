@@ -4,7 +4,7 @@
 - 日期：2026-10-16
 - 关联：[产品范围](../spec/0001-product-scope.md)、[ADR-0002](0002-architecture-security.md)、[API 文档](../api.md)
 
-> 本 ADR 仅描述 V1.0 当前实现。V1.1 已确认改为单管理员密码登录与首次初始化，目标设计见 [ADR-0008](0008-authentication-and-settings.md) 和 [SPEC-0005](../spec/0005-authentication-and-settings.md)。认证代码与测试迁移完成前，本文件仍是 V1.0 的实际行为契约。
+> 本 ADR 描述 V1.0 的认证历史契约。V1.1 已改为单管理员密码登录与首次初始化，实际行为以 [ADR-0008](0008-authentication-and-settings.md)、[SPEC-0005](../spec/0005-authentication-and-settings.md) 和 [API 文档](../api.md) 为准；本文件保留用于理解 V1.0 的迁移来源。
 
 ## 背景
 

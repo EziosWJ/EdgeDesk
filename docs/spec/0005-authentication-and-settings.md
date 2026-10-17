@@ -1,11 +1,11 @@
 # SPEC-0005：管理员认证与系统设置
 
-- 状态：**Baseline（V1.1 产品范围已确认；实现待完成）**
+- 状态：**Implemented（V1.1.0，2026-10-17）**
 - 日期：2026-10-17
 - 关联：[ADR-0008](../adr/0008-authentication-and-settings.md)、[V1.0 产品范围](0001-product-scope.md)、[API 契约](../api.md)
 - 实施拆分：[开发任务](../tasks/0005-authentication-and-settings.md)
 
-> 本文定义 V1.1 的目标行为，不代表功能已经上线。认证实现完成前，V1.0 的运行行为以现有 API 文档和测试结果为准。
+> 本文定义 V1.1 的行为契约。实现与验证结果见 [API 文档](../api.md)、[配置文档](../config.md) 和 [验证矩阵](../testing.md)。
 
 ## 1. 目标
 
@@ -72,7 +72,7 @@
 - 请求：`POST /api/auth/login`，字段为 `password`。
 - 成功：签发 `edgedesk_session` Cookie，并记录不含秘密的登录成功审计事件。
 - 失败：统一返回认证失败，不区分“密码不存在”“密码错误”等敏感细节；按 IP 限流，默认每分钟 5 次。
-- Cookie 属性：`HttpOnly`、`SameSite=Strict`、`Path=/`；HTTPS 部署必须启用 `Secure`。
+- Cookie 属性：`HttpOnly`、`SameSite=Strict`、`Path=/`；HTTPS 部署必须通过 `--cookie-secure` 启用 `Secure`。
 - 默认会话 TTL 为 12 小时。服务进程重启后，既有 Cookie 会话失效。
 
 ### 修改密码

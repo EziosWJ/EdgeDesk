@@ -37,8 +37,10 @@
 
 
 已实现：`FileService`（`src/file/`）、`TerminalSessionManager`（`src/terminal/`）、
-`SystemMetrics`（`src/system/`）、认证/限流/审计（`src/security/`）。路由处理器只负责
-适配协议输入/输出；不得在路由里实现路径校验、PTY 管理或指标采集。
+`SystemMetrics`（`src/system/`）、认证/限流/审计与设置持久化（`src/security/`）。
+V1.1 认证由 `AuthStore`（auth.json/init-code/锁）、`PasswordHashService`（Argon2id
+有界 worker）和 `Auth`（密码登录/会话/Bearer）组成。路由处理器只负责适配协议
+输入/输出；不得在路由里实现路径校验、PTY 管理或指标采集。
 
 ## 强制性编码约束
 
