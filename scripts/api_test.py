@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """EdgeDesk REST API integration test (stdlib only).
 
-Usage: scripts/api_test.py <host> <port> <token> <file_root>
+Usage: scripts/api_test.py <host> <port> <token> <file_root> <password>
 
 Covers: health contract, auth/session, CSRF, file listing/stat/text/mkdir/
 rename/delete, streaming upload, Range download, path sandbox rejections,
@@ -17,6 +17,7 @@ HOST = "127.0.0.1"
 PORT = 0
 TOKEN = ""
 FILE_ROOT = ""
+PASSWORD = ""
 FAILURES = []
 
 
@@ -53,10 +54,10 @@ def json_body(payload):
     return json.loads(payload.decode())
 
 
-def login(token=None):
-    if token is None:
-        token = TOKEN
-    status, payload, headers = request("POST", "/api/auth/login", {"token": token})
+def login(password=None):
+    if password is None:
+        password = PASSWORD
+    status, payload, headers = request("POST", "/api/auth/login", {"password": password})
     check(status == 200, f"login status {status}")
     cookie = headers.get("Set-Cookie", "")
     check("HttpOnly" in cookie and "SameSite=Strict" in cookie, f"cookie flags: {cookie}")
@@ -75,8 +76,8 @@ def test_health():
 def test_auth_flow():
     status, _, _ = request("GET", "/api/files")
     check(status == 401, f"unauthenticated files status {status}")
-    status, _, _ = request("POST", "/api/auth/login", {"token": "definitely-wrong"})
-    check(status == 401, f"wrong token status {status}")
+    status, _, _ = request("POST", "/api/auth/login", {"password": "definitely-wrong"})
+    check(status == 401, f"wrong password status {status}")
     cookie = login()
     status, payload, _ = request("GET", "/api/auth/session", cookie=cookie)
     check(status == 200 and json_body(payload)["authenticated"] is True, "session check failed")
@@ -215,11 +216,11 @@ def test_not_found(cookie):
 
 
 def main():
-    global HOST, PORT, TOKEN, FILE_ROOT
-    if len(sys.argv) < 5:
+    global HOST, PORT, TOKEN, FILE_ROOT, PASSWORD
+    if len(sys.argv) < 6:
         print(__doc__)
         return 2
-    HOST, PORT, TOKEN, FILE_ROOT = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+    HOST, PORT, TOKEN, FILE_ROOT, PASSWORD = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
     test_health()
     cookie = test_auth_flow()
     test_csrf(cookie)

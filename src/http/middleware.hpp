@@ -6,6 +6,7 @@
 #include "security/audit.hpp"
 #include "security/auth.hpp"
 #include "security/rate_limiter.hpp"
+#include "security/settings_store.hpp"
 #include "system/system_metrics.hpp"
 #include "terminal/terminal_manager.hpp"
 #include "web/web_root.hpp"
@@ -27,14 +28,18 @@ struct RouteContext {
     TerminalManager* terminals = nullptr;
     SystemMetrics* metrics = nullptr;
     Auth* auth = nullptr;
+    SettingsStore* settings = nullptr;
     AuditLog* audit = nullptr;
     RateLimiter* api_limiter = nullptr;
     RateLimiter* login_limiter = nullptr;
+    RateLimiter* setup_limiter = nullptr;
     ConcurrencyGate* transfer_gate = nullptr;
 };
 
-// Public endpoints: /api/health, /api/auth/login and everything outside /api|/ws.
-bool path_is_public(std::string_view path);
+// Public endpoints depend on the authentication state: health/static/session
+// are always public; setup is public only while uninitialized; login is public
+// only after initialization.
+bool path_is_public(const RouteContext& ctx, std::string_view path);
 
 // Installs security headers, rate limiting, auth + CSRF and body-size limits.
 void install_middleware(hv::HttpService& router, RouteContext& ctx);

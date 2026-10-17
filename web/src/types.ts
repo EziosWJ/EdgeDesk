@@ -83,6 +83,53 @@ export type MetricsSample = {
   unavailable: string[];
 };
 
+export type AuthState = 'uninitialized' | 'initialized' | 'corrupt';
+
+export type SessionInfo = {
+  ok: boolean;
+  authenticated: boolean;
+  method: 'cookie' | 'bearer' | 'none';
+  state: AuthState;
+  expires_at?: number;
+};
+
+export type SetupStatus = {
+  ok: boolean;
+  initialized: boolean;
+  state: AuthState;
+};
+
+export type AppSettings = {
+  theme: 'light' | 'dark' | 'system';
+  files_view: 'list' | 'grid';
+  files_show_hidden: boolean;
+  terminal_font_size: number;
+  dashboard_metrics_window: number;
+};
+
+export type SystemInfo = {
+  ok: boolean;
+  version: string;
+  build: string;
+  hostname: string;
+  arch: string;
+  kernel: string;
+  uptime_seconds: number;
+  listen: { host: string; port: number };
+  file_root: string;
+  follow_symlinks: boolean;
+  bash: string;
+  audit_enabled: boolean;
+  audit_log: string;
+  data_dir: string;
+  state_dir: string;
+  max_upload_size: number;
+  max_terminal_sessions: number;
+  terminal_idle_timeout: number;
+  metrics_interval_ms: number;
+  api_token_configured: boolean;
+};
+
 export type WindowKind = 'terminal' | 'editor' | 'preview';
 
 export type WindowState = {

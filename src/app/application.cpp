@@ -7,7 +7,9 @@
 #include "http/server.hpp"
 #include "security/audit.hpp"
 #include "security/auth.hpp"
+#include "security/auth_store.hpp"
 #include "security/rate_limiter.hpp"
+#include "security/settings_store.hpp"
 #include "system/system_metrics.hpp"
 #include "terminal/terminal_manager.hpp"
 #include "web/web_root.hpp"
@@ -51,6 +53,24 @@ void Application::initialize() {
         throw std::runtime_error(error);
     }
 
+    AuthOptions auth_options;
+    auth_options.token = config_.auth_token;
+    auth_options.session_ttl_seconds = config_.session_ttl_seconds;
+    auth_options.cookie_secure = config_.cookie_secure;
+    auth_options.data_dir = config_.data_dir;
+    auth_ = std::make_unique<Auth>(std::move(auth_options));
+    if (auth_->state() == AuthState::uninitialized) {
+        std::string code;
+        if (!auth_->ensure_init_code(true, code, error)) {
+            throw std::runtime_error(error);
+        }
+        init_code_ = std::move(code);
+    }
+    settings_ = SettingsStore::open(config_.data_dir, error);
+    if (!settings_) {
+        throw std::runtime_error(error);
+    }
+
     AuditOptions audit_options;
     audit_options.path = config_.audit_log_path;
     audit_options.max_bytes = config_.audit_max_bytes;
@@ -88,13 +108,11 @@ void Application::initialize() {
     metrics_options.disk_mounts = config_.disk_mounts;
     metrics_ = std::make_unique<SystemMetrics>(metrics_options);
 
-    AuthOptions auth_options;
-    auth_options.token = config_.auth_token;
-    auth_options.session_ttl_seconds = config_.session_ttl_seconds;
-    auth_ = std::make_unique<Auth>(auth_options);
-
     api_limiter_ = std::make_unique<RateLimiter>(config_.rate_limit_per_second, config_.rate_limit_burst);
     login_limiter_ =
+        std::make_unique<RateLimiter>(static_cast<double>(config_.login_rate_limit_per_minute) / 60.0,
+                                      static_cast<double>(config_.login_rate_limit_per_minute));
+    setup_limiter_ =
         std::make_unique<RateLimiter>(static_cast<double>(config_.login_rate_limit_per_minute) / 60.0,
                                       static_cast<double>(config_.login_rate_limit_per_minute));
     transfer_gate_ = std::make_unique<ConcurrencyGate>(config_.max_transfers);
@@ -112,16 +130,31 @@ void Application::print_banner() const {
                   << "         Point --web-root at a built web/dist directory to serve the UI.\\n";
     }
 #endif
-    if (config_.auth_token_ephemeral) {
-        std::cout << "EdgeDesk access token (generated for this run): " << config_.auth_token << "\n"
-                  << "  Use it on the login screen, or set --auth-token-file / EDGEDESK_AUTH_TOKEN to fix it.\n";
+    const auto auth_state = auth_->state();
+    std::cout << "  auth: " << auth_state_name(auth_state);
+    if (config_.auth_token.empty()) {
+        std::cout << " (Bearer API token disabled)\n";
     } else if (!config_.auth_token_file.empty()) {
-        std::cout << "EdgeDesk access token: loaded from " << config_.auth_token_file << " (not printed)\n";
+        std::cout << " (Bearer API token loaded from " << config_.auth_token_file << ")\n";
     } else {
-        std::cout << "EdgeDesk access token: provided via command line / environment (not printed)\n";
+        std::cout << " (Bearer API token configured; not printed)\n";
+    }
+    if (auth_state == AuthState::uninitialized) {
+        if (::isatty(STDOUT_FILENO)) {
+            std::cout << "  initialization code: " << init_code_ << "\n"
+                      << "  Open the web UI and create the administrator password.\n";
+        } else {
+            std::cout << "  initialization code file: " << auth_->init_code_path() << " (0600)\n"
+                      << "  Read it locally to create the administrator password.\n";
+        }
+    } else if (auth_state == AuthState::corrupt) {
+        std::cout << "  WARNING: authentication state is corrupt (" << auth_->last_error() << ")\n"
+                  << "  Business APIs are disabled. Stop the service and run:\n"
+                  << "    edgedesk --reset-admin-password --data-dir " << config_.data_dir << "\n";
     }
     std::cout << "  file root: " << config_.file_root
               << " (symlinks: " << (config_.follow_symlinks ? "followed inside root" : "blocked") << ")\n"
+              << "  data dir: " << config_.data_dir << "\n"
               << "  state dir: " << config_.state_dir << "\n"
               << "  audit log: " << (config_.audit_enabled ? config_.audit_log_path : std::string("disabled"))
               << "\n"
@@ -145,6 +178,7 @@ void Application::start_maintenance() {
             terminals_->sweep(now_ms);
             api_limiter_->sweep(now_ms);
             login_limiter_->sweep(now_ms);
+            setup_limiter_->sweep(now_ms);
         }
     });
 }
@@ -181,9 +215,11 @@ int Application::run() {
     context.terminals = terminals_.get();
     context.metrics = metrics_.get();
     context.auth = auth_.get();
+    context.settings = settings_.get();
     context.audit = audit_.get();
     context.api_limiter = api_limiter_.get();
     context.login_limiter = login_limiter_.get();
+    context.setup_limiter = setup_limiter_.get();
     context.transfer_gate = transfer_gate_.get();
 
     Server server(context, config_);

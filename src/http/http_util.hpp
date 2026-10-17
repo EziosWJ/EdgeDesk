@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/config.hpp"
 #include "core/error.hpp"
 #include "file/file_types.hpp"
 
@@ -27,10 +28,14 @@ int write_error(HttpResponse* resp, const Error& error);
 int write_error(HttpResponse* resp, int status, const std::string& code, const std::string& message);
 
 // Streaming (async handler) variants.
-int write_json_to(const HttpResponseWriterPtr& writer, int status, const hv::Json& body);
+int write_json_to(const HttpResponseWriterPtr& writer, int status, const hv::Json& body,
+                  const std::string& set_cookie = {});
 int write_error_to(const HttpResponseWriterPtr& writer, const Error& error);
 
+// Peer address only. Use the Config overload in HTTP/WS handlers when a
+// trusted reverse proxy may provide X-Forwarded-For.
 std::string client_ip(HttpRequest* req);
+std::string client_ip(const Config& config, HttpRequest* req);
 std::optional<std::string> cookie_value(HttpRequest* req, std::string_view name);
 
 // Origin/Referer checks for CSRF and WebSocket handshakes.

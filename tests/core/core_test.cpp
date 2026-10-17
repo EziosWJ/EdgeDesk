@@ -35,12 +35,21 @@ void test_config(const std::filesystem::path& tmp) {
         CHECK_STR_EQ(config.host, "127.0.0.1");
         CHECK_EQ(config.port, 9042);
         CHECK_STR_EQ(config.file_root, root);
-        CHECK(!config.auth_token_ephemeral);
         CHECK_STR_EQ(config.auth_token, "secret");
     }
     {
-        // Public bind requires an explicit token.
-        const char* argv[] = {"edgedesk", "--host", "0.0.0.0", "--file-root", root.c_str()};
+        const auto persist = (tmp / "persist").string();
+        const char* argv[] = {"edgedesk", "--file-root", root.c_str(), "--data-dir", persist.c_str(),
+                              "--cookie-secure", "--trusted-proxy", "10.0.0.0/8",
+                              "--reset-admin-password"};
+        auto config = parse_args(9, argv);
+        CHECK_STR_EQ(config.data_dir, persist);
+        CHECK(config.cookie_secure);
+        CHECK_EQ(config.trusted_proxies.size(), std::size_t{1});
+        CHECK(config.reset_admin_password);
+    }
+    {
+        const char* argv[] = {"edgedesk", "--file-root", root.c_str(), "--trusted-proxy", "not-a-network"};
         bool threw = false;
         try {
             (void)parse_args(5, argv);
@@ -50,16 +59,34 @@ void test_config(const std::filesystem::path& tmp) {
         CHECK(threw);
     }
     {
+        const char* argv[] = {"edgedesk", "--file-root", root.c_str(), "--data-dir", "relative"};
+        bool threw = false;
+        try {
+            (void)parse_args(5, argv);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        CHECK(threw);
+    }
+    {
+        // Remote binding is explicit; an API token is optional in V1.1 because
+        // browsers authenticate with the administrator password.
+        const char* argv[] = {"edgedesk", "--host", "0.0.0.0", "--file-root", root.c_str()};
+        auto config = parse_args(5, argv);
+        CHECK_STR_EQ(config.host, "0.0.0.0");
+        CHECK(config.auth_token.empty());
+    }
+    {
         const char* argv[] = {"edgedesk", "--host", "0.0.0.0", "--file-root", root.c_str(), "--auth-token", "secret"};
         auto config = parse_args(7, argv);
         CHECK_STR_EQ(config.host, "0.0.0.0");
     }
     {
-        // Ephemeral token is generated when none is configured.
+        // No token is generated: Bearer auth is simply disabled.
         const char* argv[] = {"edgedesk", "--file-root", root.c_str()};
         auto config = parse_args(3, argv);
-        CHECK(config.auth_token_ephemeral);
-        CHECK_EQ(config.auth_token.size(), std::size_t{32}); // 16 random bytes hex
+        CHECK(config.auth_token.empty());
+        CHECK(!config.data_dir.empty());
     }
     {
         const char* argv[] = {"edgedesk", "--port", "99999", "--file-root", root.c_str()};
@@ -160,10 +187,11 @@ void test_error_mapping() {
     CHECK_STR_EQ(error_code_slug(ErrorCode::already_exists), "already_exists");
 }
 
-void test_auth() {
+void test_auth(const std::filesystem::path& tmp) {
     AuthOptions options;
     options.token = "s3cret";
     options.session_ttl_seconds = 100;
+    options.data_dir = (tmp / "auth-one").string();
     Auth auth(options);
     CHECK(auth.verify_token("s3cret"));
     CHECK(!auth.verify_token("wrong"));
@@ -179,7 +207,9 @@ void test_auth() {
     CHECK(!auth.verify_session(session + "x", 1000));
     CHECK(!auth.verify_session("v1.9999999999.deadbeef", 1000));
 
-    Auth other(options);
+    AuthOptions other_options = options;
+    other_options.data_dir = (tmp / "auth-two").string();
+    Auth other(other_options);
     CHECK(!other.verify_session(session, 1000)); // per-process secret
     CHECK(auth.session_cookie(session).find("HttpOnly") != std::string::npos);
     CHECK(auth.session_cookie(session).find("SameSite=Strict") != std::string::npos);
@@ -249,7 +279,7 @@ int main() {
     test_crypto();
     test_types();
     test_error_mapping();
-    test_auth();
+    test_auth(tmp);
     test_rate_limiter();
     test_audit_rotation(tmp);
     test_state_dir(tmp);

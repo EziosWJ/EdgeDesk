@@ -14,6 +14,7 @@ import { Icon } from '../../components/Icon';
 import { PromptDialog } from '../../components/PromptDialog';
 import { api, formatBytes } from '../../services/api';
 import { asset } from '../../services/assets';
+import { preferencesStore, usePreferences } from '../../stores/preferencesStore';
 import { windowStore } from '../../stores/windowStore';
 import type { FileEntry } from '../../types';
 import { DirectoryTree } from './DirectoryTree';
@@ -124,9 +125,14 @@ function dropDetails(drop: DropConfirm): string[] {
  * so the content below never shifts.
  */
 export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
+  const preferences = usePreferences();
   const [path, setPath] = useState(() => normalizePath(initialPath));
-  const [showHidden, setShowHidden] = useState(true);
-  const [view, setView] = useState<ViewMode>(readViewPreference);
+  const [showHidden, setShowHidden] = useState(preferences.files_show_hidden);
+  const [view, setView] = useState<ViewMode>(() =>
+    preferences.files_view === 'grid' || preferences.files_view === 'list'
+      ? preferences.files_view
+      : readViewPreference(),
+  );
   const [sort, setSort] = useState<SortKey>('name');
   const [desc, setDesc] = useState(false);
   const [page, setPage] = useState(1);
@@ -150,6 +156,16 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const treeWidthRef = useRef(treeWidth);
   const dragDepthRef = useRef(0);
+
+  useEffect(() => {
+    setShowHidden(preferences.files_show_hidden);
+  }, [preferences.files_show_hidden]);
+
+  useEffect(() => {
+    if (preferences.files_view === 'grid' || preferences.files_view === 'list') {
+      setView(preferences.files_view);
+    }
+  }, [preferences.files_view]);
 
   const listing = useDirectoryListing(path, { showHidden, sort, desc, page });
   const { reload, loading: listingLoading } = listing;
@@ -394,6 +410,7 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
   const changeView = (next: ViewMode) => {
     setView(next);
     writeViewPreference(next);
+    void preferencesStore.save({ files_view: next }).catch(() => undefined);
   };
 
   const onTreeResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -524,8 +541,10 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
           onToggleDesc={() => setDesc((value) => !value)}
           showHidden={showHidden}
           onToggleHidden={() => {
-            setShowHidden((value) => !value);
+            const next = !showHidden;
+            setShowHidden(next);
             setPage(1);
+            void preferencesStore.save({ files_show_hidden: next }).catch(() => undefined);
           }}
           loading={loading}
           onRefresh={refresh}

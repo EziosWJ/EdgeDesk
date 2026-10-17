@@ -3,6 +3,7 @@
 #include "http/routes/auth_route.hpp"
 #include "http/routes/file_route.hpp"
 #include "http/routes/health_route.hpp"
+#include "http/routes/settings_route.hpp"
 #include "http/routes/system_route.hpp"
 #include "http/routes/terminal_route.hpp"
 #include "http/ws_state.hpp"
@@ -43,6 +44,7 @@ int Server::run() {
     register_file_routes(router, context_);
     register_terminal_routes(router, context_);
     register_system_routes(router, context_);
+    register_settings_routes(router, context_);
 
     // Static frontend bundle with SPA fallback (never touches device files).
     router.staticHandler = [this](HttpRequest* req, HttpResponse* resp) -> int {
@@ -128,7 +130,8 @@ int Server::run() {
     server.setThreadNum(config_.http_threads);
     server_handle_ = &server;
 
-    std::cout << "EdgeDesk 1.0 listening on http://" << config_.host << ":" << config_.port << " (auth: enabled, assets: "
+    std::cout << "EdgeDesk " EDGEDESK_VERSION << " listening on http://" << config_.host << ":" << config_.port
+              << " (auth: " << auth_state_name(context_.auth->state()) << ", assets: "
               << (context_.web_root->embedded() ? "embed" : "disk") << ")" << std::endl;
     const int result = server.run();
     server_handle_ = nullptr;

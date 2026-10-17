@@ -53,7 +53,7 @@ int handle_list(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     ListResult result;
     Error error = ctx.files->list(options, result);
     if (!error.ok()) {
-        ctx.audit->record("file.list", "denied", error.message, http::client_ip(req), options.path);
+        ctx.audit->record("file.list", "denied", error.message, http::client_ip(*ctx.config, req), options.path);
         return http::write_error(resp, error);
     }
     return http::write_json(resp, 200, http::file_list_json(result));
@@ -78,7 +78,7 @@ int handle_read_text(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     FileEntry info;
     Error error = ctx.files->read_text(path, content, info);
     if (!error.ok()) {
-        ctx.audit->record("file.read_text", "denied", error.message, http::client_ip(req), path);
+        ctx.audit->record("file.read_text", "denied", error.message, http::client_ip(*ctx.config, req), path);
         return http::write_error(resp, error);
     }
     hv::Json body;
@@ -101,10 +101,10 @@ int handle_write_text(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     FileEntry info;
     Error error = ctx.files->write_text(path, content, true, info);
     if (!error.ok()) {
-        ctx.audit->record("file.write_text", "denied", error.message, http::client_ip(req), path);
+        ctx.audit->record("file.write_text", "denied", error.message, http::client_ip(*ctx.config, req), path);
         return http::write_error(resp, error);
     }
-    ctx.audit->record("file.write_text", "ok", std::to_string(content.size()) + " bytes", http::client_ip(req),
+    ctx.audit->record("file.write_text", "ok", std::to_string(content.size()) + " bytes", http::client_ip(*ctx.config, req),
                       path);
     hv::Json body;
     body["ok"] = true;
@@ -120,10 +120,10 @@ int handle_mkdir(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     if (path.empty()) return http::write_error(resp, 400, "invalid_argument", "field 'path' is required");
     error = ctx.files->mkdir(path);
     if (!error.ok()) {
-        ctx.audit->record("file.mkdir", "denied", error.message, http::client_ip(req), path);
+        ctx.audit->record("file.mkdir", "denied", error.message, http::client_ip(*ctx.config, req), path);
         return http::write_error(resp, error);
     }
-    ctx.audit->record("file.mkdir", "ok", "", http::client_ip(req), path);
+    ctx.audit->record("file.mkdir", "ok", "", http::client_ip(*ctx.config, req), path);
     hv::Json result;
     result["ok"] = true;
     result["path"] = path;
@@ -142,10 +142,10 @@ int handle_rename(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     }
     error = ctx.files->rename(from, to, overwrite);
     if (!error.ok()) {
-        ctx.audit->record("file.rename", "denied", error.message, http::client_ip(req), from + " -> " + to);
+        ctx.audit->record("file.rename", "denied", error.message, http::client_ip(*ctx.config, req), from + " -> " + to);
         return http::write_error(resp, error);
     }
-    ctx.audit->record("file.rename", "ok", from + " -> " + to, http::client_ip(req), from);
+    ctx.audit->record("file.rename", "ok", from + " -> " + to, http::client_ip(*ctx.config, req), from);
     hv::Json result;
     result["ok"] = true;
     return http::write_json(resp, 200, result);
@@ -168,12 +168,12 @@ int handle_delete(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     RemoveResult result;
     error = ctx.files->remove(paths, result);
     if (!error.ok()) {
-        ctx.audit->record("file.delete", "denied", error.message, http::client_ip(req), paths.front());
+        ctx.audit->record("file.delete", "denied", error.message, http::client_ip(*ctx.config, req), paths.front());
         return http::write_error(resp, error);
     }
     std::string detail = std::to_string(result.removed_files) + " files, " + std::to_string(result.removed_dirs) +
                          " dirs";
-    ctx.audit->record("file.delete", "ok", detail, http::client_ip(req), paths.front());
+    ctx.audit->record("file.delete", "ok", detail, http::client_ip(*ctx.config, req), paths.front());
     hv::Json out;
     out["ok"] = true;
     out["removed_files"] = result.removed_files;
@@ -210,7 +210,7 @@ void handle_download(const RouteContext& ctx, const HttpRequestPtr& req, const H
     FileService::ReadHandle handle;
     Error error = ctx.files->open_for_read(path, handle);
     if (!error.ok()) {
-        ctx.audit->record("file.download", "denied", error.message, http::client_ip(req.get()), path);
+        ctx.audit->record("file.download", "denied", error.message, http::client_ip(*ctx.config, req.get()), path);
         http::write_error_to(writer, error);
         return;
     }
@@ -262,7 +262,7 @@ void handle_download(const RouteContext& ctx, const HttpRequestPtr& req, const H
     writer->WriteHeader("Content-Length", static_cast<std::uint64_t>(length));
     writer->EndHeaders();
 
-    ctx.audit->record("file.download", "start", std::to_string(length) + " bytes", http::client_ip(req.get()),
+    ctx.audit->record("file.download", "start", std::to_string(length) + " bytes", http::client_ip(*ctx.config, req.get()),
                       path);
 
     std::vector<char> buffer(kDownloadChunk);
@@ -317,7 +317,7 @@ int handle_upload_state(RouteContext& ctx, const HttpContextPtr& http, http_pars
             }
             if (scope->failed) {
                 ctx.audit->record("file.upload", "denied", scope->error.message,
-                                  http::client_ip(http->request.get()), scope->path);
+                                  http::client_ip(*ctx.config, http->request.get()), scope->path);
             }
             http->userdata = scope.release();
             return 0;
@@ -339,18 +339,18 @@ int handle_upload_state(RouteContext& ctx, const HttpContextPtr& http, http_pars
             }
             if (scope->failed) {
                 ctx.audit->record("file.upload", "denied", scope->error.message,
-                                  http::client_ip(http->request.get()), scope->path);
+                                  http::client_ip(*ctx.config, http->request.get()), scope->path);
                 return http::write_error(http->response.get(), scope->error);
             }
             FileEntry info;
             Error error = scope->upload.finish(info);
             if (!error.ok()) {
-                ctx.audit->record("file.upload", "denied", error.message, http::client_ip(http->request.get()),
+                ctx.audit->record("file.upload", "denied", error.message, http::client_ip(*ctx.config, http->request.get()),
                                   scope->path);
                 return http::write_error(http->response.get(), error);
             }
             ctx.audit->record("file.upload", "ok", std::to_string(scope->received) + " bytes",
-                              http::client_ip(http->request.get()), scope->path);
+                              http::client_ip(*ctx.config, http->request.get()), scope->path);
             hv::Json body;
             body["ok"] = true;
             body["size"] = scope->received;
@@ -361,7 +361,7 @@ int handle_upload_state(RouteContext& ctx, const HttpContextPtr& http, http_pars
             auto* scope = static_cast<UploadRequestState*>(http->userdata);
             http->userdata = nullptr;
             if (scope != nullptr) {
-                ctx.audit->record("file.upload", "aborted", "connection closed", http::client_ip(http->request.get()),
+                ctx.audit->record("file.upload", "aborted", "connection closed", http::client_ip(*ctx.config, http->request.get()),
                                   scope->path);
                 delete scope;
             }

@@ -6,6 +6,7 @@ import { DonutChart } from '../../components/DonutChart';
 import { MetricChart } from '../../components/MetricChart';
 import { Sparkline } from '../../components/Sparkline';
 import { api, formatBytes, formatPercent, formatRate, formatUptime } from '../../services/api';
+import { preferencesStore, usePreferences } from '../../stores/preferencesStore';
 import { sessionStore, useMetricsSamples } from '../../stores/sessionStore';
 import { bootMoment, deltaTone, formatDelta, formatDateTime, kpiPercent, rateScale, sliceWindow, usageDelta } from './chartUtils';
 
@@ -69,16 +70,28 @@ function RangeSelect({ value, onChange }: { value: number; onChange: (seconds: n
     <select className="ed-range-select" value={value} onChange={(event) => onChange(Number(event.target.value))} aria-label="曲线时间范围">
       <option value={60}>1 分钟</option>
       <option value={300}>5 分钟</option>
+      <option value={600}>10 分钟</option>
+      <option value={1800}>30 分钟</option>
     </select>
   );
 }
 
 export function DashboardView() {
   const samples = useMetricsSamples();
+  const preferences = usePreferences();
   const intervalMs = sessionStore.intervalMs;
-  const [rangeSeconds, setRangeSeconds] = useState(60);
+  const [rangeSeconds, setRangeSeconds] = useState(preferences.dashboard_metrics_window);
   const [selectedMount, setSelectedMount] = useState<string | null>(null);
   const now = useClock();
+
+  useEffect(() => {
+    setRangeSeconds(preferences.dashboard_metrics_window);
+  }, [preferences.dashboard_metrics_window]);
+
+  const changeRange = (seconds: number) => {
+    setRangeSeconds(seconds);
+    void preferencesStore.save({ dashboard_metrics_window: seconds }).catch(() => undefined);
+  };
 
   useEffect(() => {
     // Prime the charts with the server-side history so the dashboard is useful
@@ -311,7 +324,7 @@ export function DashboardView() {
             <article className="ed-panel ed-chart-panel">
               <header className="ed-panel-head">
                 <h2>CPU 使用率</h2>
-                <RangeSelect value={rangeSeconds} onChange={setRangeSeconds} />
+                <RangeSelect value={rangeSeconds} onChange={changeRange} />
               </header>
               <ul className="ed-legend">
                 <li>
@@ -330,7 +343,7 @@ export function DashboardView() {
             <article className="ed-panel ed-chart-panel">
               <header className="ed-panel-head">
                 <h2>内存使用率</h2>
-                <RangeSelect value={rangeSeconds} onChange={setRangeSeconds} />
+                <RangeSelect value={rangeSeconds} onChange={changeRange} />
               </header>
               <ul className="ed-legend">
                 <li>
@@ -357,7 +370,7 @@ export function DashboardView() {
             <article className="ed-panel ed-chart-panel">
               <header className="ed-panel-head">
                 <h2>网络收发（{networkScale.unit}）</h2>
-                <RangeSelect value={rangeSeconds} onChange={setRangeSeconds} />
+                <RangeSelect value={rangeSeconds} onChange={changeRange} />
               </header>
               <ul className="ed-legend">
                 <li>

@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { preferencesStore } from '../../stores/preferencesStore';
 import { windowStore } from '../../stores/windowStore';
 import { createFileSystemMock, listingCalls, type FileSystemMock, type MockNode } from '../../test/fileSystemMock';
 import { FileWorkspace } from './FileWorkspace';
@@ -30,6 +31,7 @@ describe('FileWorkspace', () => {
 
   beforeEach(() => {
     windowStore.closeAll();
+    preferencesStore.reset();
     window.localStorage.removeItem('edgedesk.files.view');
     window.localStorage.removeItem('edgedesk.files.treeWidth');
     document.body.innerHTML = '';

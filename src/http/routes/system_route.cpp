@@ -118,12 +118,39 @@ void register_system_routes(hv::HttpService& router, RouteContext& ctx) {
         body["samples"] = history_json(ctx.metrics->history_samples(static_cast<std::size_t>(window)));
         return http::write_json(resp, 200, body);
     });
+
+    router.GET("/api/system/info", [&ctx](HttpRequest*, HttpResponse* resp) -> int {
+        const auto sample = ctx.metrics->latest();
+        hv::Json body;
+        body["ok"] = true;
+        body["version"] = EDGEDESK_VERSION;
+        body["build"] = EDGEDESK_BUILD_TYPE;
+        body["hostname"] = sample.hostname;
+        body["arch"] = sample.architecture;
+        body["kernel"] = sample.kernel_release;
+        body["uptime_seconds"] = sample.uptime_seconds;
+        body["listen"]["host"] = ctx.config->host;
+        body["listen"]["port"] = ctx.config->port;
+        body["file_root"] = ctx.config->file_root;
+        body["follow_symlinks"] = ctx.config->follow_symlinks;
+        body["bash"] = ctx.config->bash_path;
+        body["audit_enabled"] = ctx.config->audit_enabled;
+        body["audit_log"] = ctx.config->audit_enabled ? ctx.config->audit_log_path : "";
+        body["data_dir"] = ctx.config->data_dir;
+        body["state_dir"] = ctx.config->state_dir;
+        body["max_upload_size"] = ctx.config->max_upload_size;
+        body["max_terminal_sessions"] = ctx.config->max_terminal_sessions;
+        body["terminal_idle_timeout"] = ctx.config->terminal_idle_timeout_seconds;
+        body["metrics_interval_ms"] = ctx.config->metrics_interval_ms;
+        body["api_token_configured"] = ctx.auth->token_configured();
+        return http::write_json(resp, 200, body);
+    });
 }
 
 void ws_metrics_onopen(RouteContext& ctx, const WebSocketChannelPtr& channel, const HttpRequestPtr& req) {
     auto state = std::make_shared<WsClientState>();
     state->path = req->Path();
-    state->peer_ip = http::client_ip(req.get());
+    state->peer_ip = http::client_ip(*ctx.config, req.get());
     channel->setContextPtr(state);
 
     hv::Json snapshot;
