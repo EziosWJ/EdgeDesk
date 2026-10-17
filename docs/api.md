@@ -111,7 +111,7 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 ```json
 {"type":"ready","shell":"/bin/bash","shell_available":true,"max_sessions":8}
 {"type":"created"|"attached","session":{...}}   // 见会话字段
-{"type":"output","data":"..."}                  // 终端原始输出（含 ANSI/UTF-8）
+{"type":"output","data":"..."}                  // 终端输出（保留 ANSI；data 始终为合法 UTF-8）
 {"type":"exit","code":0}
 {"type":"guard","reason":"递归删除根目录或系统路径"}
 {"type":"confirmed"|"cancelled","confirmed":true}
@@ -125,6 +125,8 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 
 - WS 断开（刷新、导航、切 Tab、网络抖动）**不会**终止 PTY；`attach` 后会先收到
   回放缓冲（丢弃最旧数据时插入提示文本），随后是实时输出。
+- `output.data` 始终是合法 UTF-8：跨 PTY 读取边界或回放/实时边界的多字节字符会先
+  重组再发送，非法字节替换为 U+FFFD；JSON 序列化不会因终端字节流而失败。
 - 输出超过 2 MiB 未发送完的慢客户端会被断开，避免设备内存被占满。
 - 会话保持 Bash 登录语义：`/bin/bash -l`，加载 `/etc/profile` 与首个存在的
   `~/.bash_profile|~/.bash_login|~/.profile`；`~/.bashrc` 不由登录 Shell 自动加载。

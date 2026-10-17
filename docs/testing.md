@@ -27,8 +27,8 @@ scripts/test-pr.sh
   `cmake --preset dev-disk -DEDGEDESK_BUILD_WEB=ON`）。
 - 集成测试使用 `N..N+5`；默认 `19091`，冲突时用 `--port N` 换一组端口。
 
-> 2026-10-17 本机实际执行：`scripts/test-fast.sh` 通过（10/10 原生 + 77 项前端，
-> 首次含重建约 15 s，热缓存约 6 s）；`scripts/test-pr.sh` 通过（10/10 原生 +
+> 2026-10-17 本机实际执行：`scripts/test-fast.sh` 通过（11/11 原生 + 77 项前端，
+> 首次含重建约 15 s，热缓存约 6 s）；`scripts/test-pr.sh` 此前通过（10/10 原生 +
 > 全量集成，约 2 分钟，含一次 dev-disk 重建）。CI 新配置尚未在 GitHub Actions 上运行。
 
 ## 自动化测试清单
@@ -36,6 +36,7 @@ scripts/test-pr.sh
 | 测试 | 覆盖内容 | 环境 | 结果 |
 | --- | --- | --- | --- |
 | `core_test` | CLI/配置文件/环境变量解析（含 data-dir/cookie-secure/trusted-proxy）、非法参数、SHA-256/HMAC 向量、会话签名与过期、限流桶、审计轮转 | GCC 13.3 host | 通过 |
+| `utf8_test` | 合法 UTF-8 原样保留、非法/过长/代理区/超范围序列替换为 U+FFFD、多字节字符跨 `feed()` 边界重组、退出时冲刷不完整尾序列 | GCC 13.3 host | 通过 |
 | `auth_store_test` | 未初始化/已初始化/损坏状态、原子写入、0600/0700、flock、恢复重置 | GCC 13.3 host | 通过 |
 | `password_hash_test` | 密码策略、Argon2id hash/verify、盐独立、参数升级、有界 worker 队列 | GCC 13.3 host | 通过 |
 | `settings_store_test` | 默认值、白名单保存、非法枚举/越界拒绝、损坏文件回退、持久化 | GCC 13.3 host | 通过 |

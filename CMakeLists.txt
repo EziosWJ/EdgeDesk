@@ -71,6 +71,7 @@ add_library(edgedesk_core STATIC
   src/core/error.cpp
   src/core/fd.cpp
   src/core/types.cpp
+  src/core/utf8.cpp
   src/core/util.cpp
   src/file/file_service.cpp
   src/file/file_types.cpp
@@ -170,6 +171,7 @@ if(EDGEDESK_BUILD_TESTS)
   enable_testing()
   set(EDGEDESK_TEST_TARGETS
     core_test:core/core_test.cpp
+    utf8_test:core/utf8_test.cpp
     path_sandbox_test:file/path_sandbox_test.cpp
     file_service_test:file/file_service_test.cpp
     auth_store_test:security/auth_store_test.cpp

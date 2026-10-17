@@ -1,9 +1,11 @@
 #include "http/routes/terminal_route.hpp"
 
+#include "core/utf8.hpp"
 #include "core/util.hpp"
 #include "http/ws_state.hpp"
 
 #include <algorithm>
+#include <string_view>
 
 namespace edgedesk {
 namespace {
@@ -29,8 +31,15 @@ hv::Json session_info_json(const TerminalSessionInfo& info) {
     return json;
 }
 
+std::string dump_json(const hv::Json& body) {
+    // Replace invalid UTF-8 instead of letting nlohmann::json::dump throw: this
+    // callback runs on the PTY reader thread, where an exception terminates the
+    // process.
+    return body.dump(-1, ' ', false, hv::Json::error_handler_t::replace);
+}
+
 void send_json(const WebSocketChannelPtr& channel, const hv::Json& body) {
-    channel->send(body.dump(), WS_OPCODE_TEXT);
+    channel->send(dump_json(body), WS_OPCODE_TEXT);
 }
 
 void send_error(const WebSocketChannelPtr& channel, const std::string& code, const std::string& message) {
@@ -65,10 +74,14 @@ void attach_session(RouteContext& ctx, const WebSocketChannelPtr& channel,
     send_json(channel, attached);
 
     const std::weak_ptr<hv::WebSocketChannel> weak_channel(channel);
+    // A single subscription spans backlog replay and live output. Keep one
+    // sanitizer so a UTF-8 sequence split across the replay/live boundary (or
+    // between PTY reads) is reassembled instead of becoming U+FFFD.
+    auto sanitizer = std::make_shared<Utf8StreamSanitizer>();
     state->session = session;
     state->session_id = session_id;
     state->subscription = session->subscribe(TerminalSession::Subscriber{
-        [weak_channel](const char* data, std::size_t length) {
+        [weak_channel, sanitizer](const char* data, std::size_t length) {
             const auto target = weak_channel.lock();
             if (!target) return;
             if (target->writeBufsize() > kMaxWsBacklog) {
@@ -76,18 +89,27 @@ void attach_session(RouteContext& ctx, const WebSocketChannelPtr& channel,
                 target->close();
                 return;
             }
+            const std::string text = sanitizer->feed(std::string_view(data, length));
+            if (text.empty()) return;
             hv::Json body;
             body["type"] = "output";
-            body["data"] = std::string(data, length);
-            target->send(body.dump(), WS_OPCODE_TEXT);
+            body["data"] = text;
+            target->send(dump_json(body), WS_OPCODE_TEXT);
         },
-        [weak_channel](int exit_code) {
+        [weak_channel, sanitizer](int exit_code) {
             const auto target = weak_channel.lock();
             if (!target) return;
+            const std::string tail = sanitizer->finish();
+            if (!tail.empty()) {
+                hv::Json output;
+                output["type"] = "output";
+                output["data"] = tail;
+                target->send(dump_json(output), WS_OPCODE_TEXT);
+            }
             hv::Json body;
             body["type"] = "exit";
             body["code"] = exit_code;
-            target->send(body.dump(), WS_OPCODE_TEXT);
+            target->send(dump_json(body), WS_OPCODE_TEXT);
         }});
     if (state->subscription == 0) {
         state->session.reset();
