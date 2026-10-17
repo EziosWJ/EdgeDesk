@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "product": "EdgeDesk",
-  "designSource": "2026-10-16 4 prototype screens",
+  "designSource": "2026-10-16 initial screens; 2026-10-18 V1.2 desktop prototype and reusable desktop SVG assets",
   "licenseNote": "Project-specific derivative vector artwork. Do not assume third-party icon licensing for these files. UI icons come from lucide-react (ISC) and file-type icons from vscode-icons (MIT); see iconLibraries.",
   "iconLibraries": [
     {
@@ -33,7 +33,11 @@
     "decorations": [
       "decorations/panel-grid.svg",
       "decorations/dot-grid.svg"
+    ],
+    "desktop": [
+      "desktop/wallpaper-mountain-lake.svg",
+      "desktop/app-icons.svg"
     ]
   },
-  "usage": "Treat these files as static assets under web/public; with Vite, refer to import.meta.env.BASE_URL + 'assets/...' (or /assets/... for root deployment). UI icons are imported from lucide-react via src/components/Icon.tsx; file-type icons are compiled from @iconify-json/vscode-icons via src/features/files/FileTypeIcon.tsx."
+  "usage": "Treat these files as static assets under web/public; with Vite, refer to import.meta.env.BASE_URL + 'assets/...' (or /assets/... for root deployment). UI icons are imported from lucide-react via src/components/Icon.tsx; file-type icons are compiled from @iconify-json/vscode-icons via src/features/files/FileTypeIcon.tsx. Desktop wallpaper and the app-icons.svg symbol sprite are project-specific SVG assets under assets/desktop; use the wallpaper as a background and reference symbols with <svg><use href=\"/assets/desktop/app-icons.svg#cpu\"></use></svg>."
 }
