@@ -23,7 +23,6 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <stdexcept>
-#include <unistd.h>
 
 namespace edgedesk {
 namespace {
@@ -59,13 +58,6 @@ void Application::initialize() {
     auth_options.cookie_secure = config_.cookie_secure;
     auth_options.data_dir = config_.data_dir;
     auth_ = std::make_unique<Auth>(std::move(auth_options));
-    if (auth_->state() == AuthState::uninitialized) {
-        std::string code;
-        if (!auth_->ensure_init_code(true, code, error)) {
-            throw std::runtime_error(error);
-        }
-        init_code_ = std::move(code);
-    }
     settings_ = SettingsStore::open(config_.data_dir, error);
     if (!settings_) {
         throw std::runtime_error(error);
@@ -140,13 +132,7 @@ void Application::print_banner() const {
         std::cout << " (Bearer API token configured; not printed)\n";
     }
     if (auth_state == AuthState::uninitialized) {
-        if (::isatty(STDOUT_FILENO)) {
-            std::cout << "  initialization code: " << init_code_ << "\n"
-                      << "  Open the web UI and create the administrator password.\n";
-        } else {
-            std::cout << "  initialization code file: " << auth_->init_code_path() << " (0600)\n"
-                      << "  Read it locally to create the administrator password.\n";
-        }
+        std::cout << "  Open the web UI and set the administrator password.\n";
     } else if (auth_state == AuthState::corrupt) {
         std::cout << "  WARNING: authentication state is corrupt (" << auth_->last_error() << ")\n"
                   << "  Business APIs are disabled. Stop the service and run:\n"

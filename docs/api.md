@@ -12,7 +12,6 @@ V1.1 采用单管理员密码登录，保留独立、可选的 Bearer API Token�
 | --- | --- |
 | 管理员密码 + 会话 Cookie | `POST /api/auth/login {"password":"..."}` 获取 `edgedesk_session`；`HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`，`--cookie-secure` 时附加 `Secure`。 |
 | `Authorization: Bearer <token>` | 可选；由 `--auth-token-file` / `EDGEDESK_AUTH_TOKEN` / `--auth-token` 配置。未配置时 Bearer 不可用。 |
-| 一次性初始化码 | 仅用于 `POST /api/auth/setup`；从 `--data-dir` 下 `init-code`（0600）读取，默认 24 小时有效。 |
 
 携带 Cookie 的 `POST/PUT/DELETE/PATCH` 必须同时发送与 `Host` 一致的
 `Origin`（缺失时使用 `Referer`）；否则返回 `403 csrf_rejected`。
@@ -35,14 +34,14 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 | 方法 | 路径 | 认证 | 说明 |
 | --- | --- | --- | --- |
 | `GET` | `/api/auth/setup-status` | 公共 | `{"ok":true,"initialized":bool,"state":"uninitialized\|initialized\|corrupt"}`；不返回秘密。 |
-| `POST` | `/api/auth/setup` | 初始化码 | body `{"code":"...","password":"...","confirm_password":"..."}`；成功 `201`；已初始化 `409 already_initialized`；码错误/过期 `400`；损坏状态 `503`。 |
+| `POST` | `/api/auth/setup` | 公共、限流 | body `{"password":"...","confirm_password":"..."}`；成功 `201`；已初始化 `409 already_initialized`；密码策略错误 `400`；损坏状态 `503`。 |
 | `POST` | `/api/auth/login` | 公共、限流 | body `{"password":"..."}`；成功设置 Cookie 并返回 `expires_in`/`expires_at`；失败 `401 invalid_credentials`；超限 `429`（`Retry-After: 60`）。 |
 | `POST` | `/api/auth/logout` | Cookie | 清除 Cookie；带 Cookie 时校验同源 Origin。 |
 | `GET` | `/api/auth/session` | 公共 | `{"ok":true,"authenticated":bool,"method":"cookie"\|"bearer"\|"none","state":"...","expires_at":<可选>}`。 |
 | `POST` | `/api/auth/password` | Cookie | body `{"current_password":"...","new_password":"...","confirm_password":"..."}`；成功后轮换会话密钥，所有旧 Cookie 失效，响应设置过期 Cookie。 |
 
 `POST /api/auth/login` 不再接受 `{"token":"..."}`；脚本客户端应直接使用
-`Authorization: Bearer`。密码至少 12 个 Unicode 字符、最多 1024 个 UTF-8 字节；
+`Authorization: Bearer`。密码至少 6 个 Unicode 字符、最多 1024 个 UTF-8 字节；
 服务端使用 Argon2id 哈希。
 
 ## 健康检查
@@ -165,7 +164,7 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 | --- | --- | --- |
 | `GET` | `/api/system/summary` | `{"ok":true,"interval_ms":1000,"sample":{...},"history":[...]}`；`history` 查询参数（0-3600）控制携带的样本数。 |
 | `GET` | `/api/system/history` | `window` 参数（1-3600）返回最近 N 个样本。 |
-| `GET` | `/api/system/info` | 白名单系统信息：版本/构建类型、主机名、架构、内核、运行时间、监听地址、文件根目录、Bash、审计状态、数据/运行期目录、资源上限、`api_token_configured` 布尔值。不返回密码哈希、Token、Cookie、初始化码、环境变量全集或完整命令行。 |
+| `GET` | `/api/system/info` | 白名单系统信息：版本/构建类型、主机名、架构、内核、运行时间、监听地址、文件根目录、Bash、审计状态、数据/运行期目录、资源上限、`api_token_configured` 布尔值。不返回密码哈希、Token、Cookie、环境变量全集或完整命令行。 |
 
 ## 设置 API
 

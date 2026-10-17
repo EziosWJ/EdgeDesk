@@ -61,7 +61,7 @@ struct Config {
     std::uint64_t audit_max_bytes = 1ull * 1024 * 1024;
     int audit_max_files = 2;
 
-    // persistent application data (auth.json, settings.json, init-code)
+    // persistent application data (auth.json, settings.json)
     std::string data_dir;
 
     // runtime state directory (audit log default location)

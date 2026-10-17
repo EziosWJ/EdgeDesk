@@ -8,7 +8,7 @@
 | 测试 | 覆盖内容 | 环境 | 结果 |
 | --- | --- | --- | --- |
 | `core_test` | CLI/配置文件/环境变量解析（含 data-dir/cookie-secure/trusted-proxy）、非法参数、SHA-256/HMAC 向量、会话签名与过期、限流桶、审计轮转 | GCC 13.3 host | 通过 |
-| `auth_store_test` | 未初始化/已初始化/损坏状态、init-code 校验与删除、原子写入、0600/0700、flock、恢复重置 | GCC 13.3 host | 通过 |
+| `auth_store_test` | 未初始化/已初始化/损坏状态、原子写入、0600/0700、flock、恢复重置 | GCC 13.3 host | 通过 |
 | `password_hash_test` | 密码策略、Argon2id hash/verify、盐独立、参数升级、有界 worker 队列 | GCC 13.3 host | 通过 |
 | `settings_store_test` | 默认值、白名单保存、非法枚举/越界拒绝、损坏文件回退、持久化 | GCC 13.3 host | 通过 |
 | `path_sandbox_test` | `..` 穿越、URL 编码、绝对路径、前缀欺骗目录、符号链接逃逸/循环（含 follow 模式）、lstat 语义 | GCC 13.3 host | 通过 |
@@ -18,7 +18,7 @@
 | `system_metrics_test` | /proc/stat、loadavg、meminfo（含旧内核回退）、net/dev 速率差分、IPv4/IPv6 地址格式化与 `getifaddrs` 枚举（排除 lo）、mounts 过滤、采样线程与环形缓冲 | GCC 13.3 host | 通过 |
 | `embed_generator_test` | `#embed` 生成器的确定性、路径校验、ETag | Python 3.12 | 通过 |
 | 前端单元测试 | windowStore（开关/层级/拖动/缩放/最大化/关闭、不可变快照）、会话持久化（仅 id/title）、metrics 窗口有界、字节/百分比/运行时间格式化、FloatingWindow DOM 交互（指针拖动、缩放把手、按钮）、Sidebar（导航选中、收起/展开与 localStorage 持久化恢复、服务状态）、仪表盘图表工具（窗口切片、变化值、速率单位、时间刻度、开机时刻）、DonutChart（可用部分绿色/已使用主色/不可用态）、DashboardView DOM 渲染（KPI 六卡、三图表面板、磁盘环形图与挂载点切换、网卡 IP 地址、在线/数据中断状态、空数据不造假）、文件管理（路径助手/视图偏好/上传名校验、按扩展名与特殊文件名解析文件类型图标、Go/C++/Markdown 渲染不同图标、目录树按需加载与缓存/祖先展开/失败重试/刷新/不跟随链接、叶子节点隐藏角标与"无子目录"文案、单击打开与仅复选框选中、选中操作在工具栏就地切换、拖拽上传确认/跳过文件夹/取消不上传、树面板收起展开与宽度调整持久化、列表↔网格共享选择、本地筛选、隐藏文件联动、分页排序、失败态与重试、批量删除确认与失败不报成功、浮动终端/编辑器窗口）、V1.1 认证页面（密码登录、初始化确认校验、提交）、设置页（系统信息、Token 状态、偏好保存）、偏好 store（加载/乐观保存/失败保留） | Node 24.14 / vitest 3.2 / happy-dom | 通过（77 项）；`npm run build`（tsc + vite，含 unplugin-icons 文件类型图标）通过 |
-| `auth_test.py` | 初始化状态门禁、错误/正确初始化码、重复初始化 409、密码登录、Cookie 属性（含 `--cookie-secure`）、改密后旧 Cookie/旧密码失效、Bearer 不受影响、CSRF、设置白名单、系统信息脱敏、重启后旧 Cookie 失效、损坏状态失败关闭、本机恢复 | dev-disk / release-embed / x86_64-musl / arm64-disk / arm64-musl | 全部通过 |
+| `auth_test.py` | 初始化状态门禁、首次设置密码、重复初始化 409、密码登录、Cookie 属性（含 `--cookie-secure`）、改密后旧 Cookie/旧密码失效、Bearer 不受影响、CSRF、设置白名单、系统信息脱敏、重启后旧 Cookie 失效、损坏状态失败关闭、本机恢复 | dev-disk / release-embed / x86_64-musl / arm64-disk / arm64-musl | 全部通过 |
 | `api_test.py` | health 契约、密码登录/会话/Bearer、CSRF、目录浏览（含 `dirs_only` 只返回直接子目录）、文本读写、mkdir/rename/delete、流式上传字节一致、Range 206/416、路径沙箱拒绝、JSON 体积限制、系统指标（含 `network[].addresses` 字段） | 见下（三种二进制） | 通过 |
 | `ws_test.py` | 未认证/异源握手拒绝、终端 create/input/输出/resize/guard、断线重连（回放）、会话存活、显式关闭、metrics 快照+增量 | 同上 | 通过 |
 | `rate_limit_test.py` | 登录限流与通用限流在严格配置下触发 429；伪造 `X-Forwarded-For` 不能绕过 peer-IP 限流 | 同上 | 通过 |

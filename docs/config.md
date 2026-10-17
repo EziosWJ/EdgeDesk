@@ -38,8 +38,8 @@ audit-log = /var/lib/edgedesk/audit.log
 | `--login-rate-limit` | `5` | 每 IP 每分钟登录/初始化/改密尝试次数。 |
 | `--cookie-secure` | 关闭 | 为会话 Cookie 添加 `Secure`；HTTPS 部署必须开启。 |
 | `--trusted-proxy` | — | 可信反向代理 IP/CIDR（可重复）。只有来自这些地址的请求才解析 `X-Forwarded-For`。 |
-| `--data-dir` | `$XDG_DATA_HOME/edgedesk` 或 `$HOME/.local/share/edgedesk` | 持久化目录（0700）：`auth.json`、`init-code`、`settings.json`。`HOME`/`XDG_DATA_HOME` 都不可用时必须显式配置。 |
-| `--reset-admin-password` | — | 本机恢复：重置管理员认证并生成新的初始化码；要求服务已停止，不删除业务数据/设置/审计。 |
+| `--data-dir` | `$XDG_DATA_HOME/edgedesk` 或 `$HOME/.local/share/edgedesk` | 持久化目录（0700）：`auth.json`、`settings.json`。`HOME`/`XDG_DATA_HOME` 都不可用时必须显式配置。 |
+| `--reset-admin-password` | — | 本机恢复：重置管理员认证；要求服务已停止，不删除业务数据/设置/审计。 |
 | `--rate-limit` / `--rate-limit-burst` | `30` / `60` | 通用请求速率与突发额度。 |
 | `--max-terminal-sessions` | `8` | 并发 PTY 会话上限。 |
 | `--terminal-idle-timeout` | `1800` | 无客户端连接且无 IO 时的保留秒数（0=永不回收）。 |
@@ -57,13 +57,12 @@ audit-log = /var/lib/edgedesk/audit.log
 
 ## 首次初始化与恢复
 
-新安装的 `data-dir` 没有 `auth.json`，服务进入未初始化状态，并生成一次性
-`init-code`（权限 `0600`）：
+新安装的 `data-dir` 没有 `auth.json`，服务进入未初始化状态：
 
-- 前台 TTY 启动时，初始化码只在终端打印一次；
-- systemd/非 TTY 启动时只打印文件路径，请以服务用户或 root 读取；
-- 打开 Web UI，输入初始化码并设置至少 12 个字符的管理员密码；
-- 初始化成功后 `init-code` 被删除，`auth.json`（密码哈希及参数）以 `0600` 保存。
+- 打开 Web UI，直接设置至少 6 个字符的管理员密码（无需初始化码）；
+- 初始化成功后 `auth.json`（密码哈希及参数）以 `0600` 保存；
+- 未初始化状态只开放静态资源、健康检查、初始化状态和初始化接口。远程部署必须
+  在首次初始化完成前限制访问。
 
 忘记密码或 `auth.json` 损坏时，停止服务后执行：
 
@@ -71,8 +70,8 @@ audit-log = /var/lib/edgedesk/audit.log
 edgedesk --reset-admin-password --data-dir /var/lib/edgedesk
 ```
 
-该命令只重置认证状态并生成新的初始化码，不会删除文件数据、`settings.json`
-或审计日志。服务运行中执行会被 `.lock` 拒绝。
+该命令只重置认证状态，不会删除文件数据、`settings.json` 或审计日志。
+服务运行中执行会被 `.lock` 拒绝；重启后在 Web UI 直接设置新密码。
 
 ## 可选 Bearer API Token
 

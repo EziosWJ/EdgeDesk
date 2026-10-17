@@ -2,11 +2,11 @@
 """EdgeDesk V1.1 authentication/settings integration test.
 
 Usage examples:
-  scripts/auth_test.py --port 19091 --data-dir /tmp/auth --password "old password" \
+  scripts/auth_test.py --port 19091 --password "old password" \
       --new-password "new password" --token token --cookie-out /tmp/old-cookie
   scripts/auth_test.py --port 19091 --password "new password" --check-old-cookie /tmp/old-cookie
-  scripts/auth_test.py --port 19091 --data-dir /tmp/corrupt --expect-corrupt
-  scripts/auth_test.py --port 19092 --data-dir /tmp/auth --password "new password" --setup-only
+  scripts/auth_test.py --port 19091 --expect-corrupt
+  scripts/auth_test.py --port 19092 --password "new password" --setup-only
 
 The script assumes the server is already running. It performs setup when the
 instance is uninitialized, then logs in and exercises the V1.1 auth/settings
@@ -78,41 +78,28 @@ def protected_denied(base):
     return status
 
 
-def setup_if_needed(base, data_dir, password):
+def setup_if_needed(base, password):
     status, payload, _ = request(base, "GET", "/api/auth/setup-status")
     check(status == 200, f"setup-status status {status}")
     state = body_of(payload).get("state")
     if state == "uninitialized":
         protected_denied(base)
-        code_path = os.path.join(data_dir, "init-code")
-        with open(code_path, "r", encoding="utf-8") as handle:
-            code = handle.read().strip()
-        check(bool(code), "init-code file is empty")
-
-        status, _, _ = request(base, "POST", "/api/auth/setup",
-                                {"code": "wrong-code", "password": password,
-                                 "confirm_password": password})
-        check(status == 400, f"wrong init code status {status}")
-
         status, payload, _ = request(base, "POST", "/api/auth/setup",
-                                      {"code": code, "password": password,
-                                       "confirm_password": password})
+                                      {"password": password, "confirm_password": password})
         check(status == 201, f"setup status {status}: {payload[:160]!r}")
 
         status, _, _ = request(base, "POST", "/api/auth/setup",
-                                {"code": code, "password": password,
-                                 "confirm_password": password})
+                                {"password": password, "confirm_password": password})
         check(status == 409, f"setup replay status {status}")
 
         status, payload, _ = request(base, "GET", "/api/auth/setup-status")
         check(body_of(payload).get("state") == "initialized", f"setup state {payload!r}")
-        check(not os.path.exists(code_path), "init-code was not deleted after setup")
     elif state == "corrupt":
         check(False, "unexpected corrupt auth state")
     else:
         check(state == "initialized", f"unexpected setup state {state}")
         status, _, _ = request(base, "POST", "/api/auth/setup",
-                                {"code": "x", "password": password, "confirm_password": password})
+                                {"password": password, "confirm_password": password})
         check(status == 409, f"setup on initialized instance should be 409, got {status}")
 
 
@@ -171,7 +158,7 @@ def test_settings(base, cookie):
     info = body_of(payload)
     check(status == 200 and info.get("version"), f"system info {payload[:160]!r}")
     serialized = json.dumps(info).lower()
-    for secret in ("password", "hash", "init-code", "cookie", "authorization"):
+    for secret in ("password", "hash", "cookie", "authorization"):
         check(secret not in serialized, f"system info leaked {secret}")
     check(isinstance(info.get("api_token_configured"), bool), "token configured flag must be boolean")
 
@@ -226,7 +213,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, required=True)
-    parser.add_argument("--data-dir", default="")
     parser.add_argument("--password", default="")
     parser.add_argument("--new-password", default="")
     parser.add_argument("--token", default="")
@@ -245,7 +231,7 @@ def main():
             parser.error("--password is required")
         if args.check_old_cookie:
             test_old_cookie(base, args.check_old_cookie)
-        setup_if_needed(base, args.data_dir, args.password)
+        setup_if_needed(base, args.password)
         if args.setup_only:
             pass
         else:

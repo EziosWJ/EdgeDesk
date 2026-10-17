@@ -11,6 +11,7 @@ using namespace edgedesk;
 
 int main() {
     std::string error;
+    CHECK(validate_password("secret", error)); // exactly 6
     CHECK(validate_password("correct horse battery", error));
     CHECK(!validate_password("short", error));
     CHECK(!validate_password(std::string(1025, 'a'), error));

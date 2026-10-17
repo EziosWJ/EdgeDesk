@@ -42,7 +42,7 @@ src/
 │   └── system_metrics.*      采样线程 + 定长环形缓冲 + 订阅推送
 ├── security/
 │   ├── auth.*                密码登录、可选 Bearer、签名会话 Cookie（HMAC-SHA256）
-│   ├── auth_store.*          auth.json / init-code / .lock 状态机与原子持久化
+│   ├── auth_store.*          auth.json / .lock 状态机与原子持久化
 │   ├── password_hash.*       Argon2id + 有界 worker 队列
 │   ├── settings_store.*      settings.json 白名单偏好
 │   ├── rate_limiter.*        per-IP 令牌桶 + 并发闸门
@@ -57,7 +57,7 @@ src/
 
 ## 认证与持久化边界
 
-- `--data-dir`（0700）保存 `auth.json`、`init-code` 和 `settings.json`；`--state-dir`
+- `--data-dir`（0700）保存 `auth.json` 和 `settings.json`；`--state-dir`
   只保存运行期数据与审计日志。两者不互相回退。
 - 启动时 `AuthStore` 读取 `auth.json`：缺失 → `uninitialized`；有效 → `initialized`；
   存在但无效 → `corrupt`（失败关闭，不自动重新初始化）。

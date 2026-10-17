@@ -51,7 +51,6 @@ private:
     std::unique_ptr<RateLimiter> setup_limiter_;
     std::unique_ptr<ConcurrencyGate> transfer_gate_;
     std::unique_ptr<WebRoot> web_root_;
-    std::string init_code_;
 
     std::thread maintenance_;
     std::atomic<bool> stopping_{false};

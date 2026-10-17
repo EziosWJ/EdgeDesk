@@ -1,8 +1,6 @@
 #include "security/auth_store.hpp"
 
 #include "core/atomic_file.hpp"
-#include "core/types.hpp"
-#include "core/util.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -17,10 +15,9 @@ namespace edgedesk {
 namespace {
 
 constexpr const char* kAuthFile = "auth.json";
-constexpr const char* kInitCodeFile = "init-code";
+constexpr const char* kLegacyInitCodeFile = "init-code";
 constexpr const char* kLockFile = ".lock";
 constexpr std::size_t kMaxAuthFileBytes = 64 * 1024;
-constexpr std::int64_t kInitCodeTtlSeconds = 24 * 3600;
 
 bool is_hex(std::string_view text, std::size_t expected_bytes) {
     if (text.size() != expected_bytes * 2) return false;
@@ -126,12 +123,6 @@ std::string serialize_record(const AuthRecord& record) {
     return body.dump();
 }
 
-bool init_code_expired(int dir_fd, const char* name) {
-    struct stat info {};
-    if (::fstatat(dir_fd, name, &info, AT_SYMLINK_NOFOLLOW) != 0) return true;
-    return info.st_mtime + kInitCodeTtlSeconds < now_unix_seconds();
-}
-
 } // namespace
 
 const char* auth_state_name(AuthState state) {
@@ -185,6 +176,10 @@ bool AuthStore::reload(std::string& error) {
         return false;
     }
     if (missing) {
+        // Older builds stored a one-time code here; initialization no longer
+        // requires it, so remove stale files when possible.
+        std::string remove_error;
+        remove_file_at(dir_fd_.get(), kLegacyInitCodeFile, remove_error);
         state_ = AuthState::uninitialized;
         last_error_.clear();
         return true;
@@ -198,67 +193,6 @@ bool AuthStore::reload(std::string& error) {
     state_ = AuthState::initialized;
     last_error_.clear();
     return true;
-}
-
-std::string AuthStore::init_code_path() const { return data_dir_ + "/" + kInitCodeFile; }
-
-bool AuthStore::read_init_code(std::string& code, std::string& error) const {
-    code.clear();
-    error.clear();
-    if (state_ != AuthState::uninitialized) {
-        error = "authentication is already initialized";
-        return false;
-    }
-    if (init_code_expired(dir_fd_.get(), kInitCodeFile)) {
-        error = "initialization code is missing or expired";
-        return false;
-    }
-    bool missing = false;
-    std::string text;
-    if (!read_file_at(dir_fd_.get(), kInitCodeFile, 1024, text, missing, error)) return false;
-    if (missing) {
-        error = "initialization code is missing";
-        return false;
-    }
-    code = trim(text);
-    if (code.empty()) {
-        error = "initialization code is empty";
-        return false;
-    }
-    return true;
-}
-
-bool AuthStore::ensure_init_code(bool rotate, std::string& code, std::string& error) {
-    code.clear();
-    error.clear();
-    if (state_ != AuthState::uninitialized) {
-        error = "authentication is already initialized";
-        return false;
-    }
-    if (!rotate) {
-        std::string existing;
-        std::string read_error;
-        if (read_init_code(existing, read_error)) {
-            code = std::move(existing);
-            return true;
-        }
-    }
-    code = random_hex(32);
-    if (code.empty()) {
-        error = "cannot obtain entropy for the initialization code";
-        return false;
-    }
-    if (!atomic_write_file_at(dir_fd_.get(), kInitCodeFile, code + "\n", 0600, error)) {
-        code.clear();
-        return false;
-    }
-    return true;
-}
-
-bool AuthStore::verify_init_code(std::string_view candidate, std::string& error) const {
-    std::string code;
-    if (!read_init_code(code, error)) return false;
-    return constant_time_equal(candidate, code);
 }
 
 bool AuthStore::read_record(AuthRecord& record, std::string& error) const {
@@ -280,23 +214,19 @@ bool AuthStore::save_record(const AuthRecord& record, std::string& error) {
     if (!atomic_write_file_at(dir_fd_.get(), kAuthFile, serialize_record(record), 0600, error)) {
         return false;
     }
-    // Best effort: once auth.json is installed, the setup endpoint is closed
-    // regardless of whether the one-time code file can be removed.
-    std::string remove_error;
-    if (!remove_file_at(dir_fd_.get(), kInitCodeFile, remove_error)) {
-        last_error_ = remove_error;
-    } else {
-        last_error_.clear();
-    }
     state_ = AuthState::initialized;
+    last_error_.clear();
     return true;
 }
 
-bool AuthStore::reset_for_recovery(std::string& code, std::string& error) {
+bool AuthStore::reset_for_recovery(std::string& error) {
     if (!remove_file_at(dir_fd_.get(), kAuthFile, error)) return false;
+    // Best-effort cleanup of a legacy one-time code from older builds.
+    std::string remove_error;
+    remove_file_at(dir_fd_.get(), kLegacyInitCodeFile, remove_error);
     state_ = AuthState::uninitialized;
     last_error_.clear();
-    return ensure_init_code(true, code, error);
+    return true;
 }
 
 } // namespace edgedesk

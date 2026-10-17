@@ -58,7 +58,6 @@ describe('auth views', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     act(() => root.render(<SetupView onSuccess={() => {}} />));
-    typeInto(container.querySelector<HTMLInputElement>('#ed-setup-code')!, 'code');
     typeInto(container.querySelector<HTMLInputElement>('#ed-setup-password')!, 'correct horse battery');
     typeInto(container.querySelector<HTMLInputElement>('#ed-setup-confirm')!, 'different password!!');
     await act(async () => {
@@ -73,7 +72,6 @@ describe('auth views', () => {
     vi.stubGlobal('fetch', fetchMock);
     const onSuccess = vi.fn();
     act(() => root.render(<SetupView onSuccess={onSuccess} />));
-    typeInto(container.querySelector<HTMLInputElement>('#ed-setup-code')!, 'code');
     typeInto(container.querySelector<HTMLInputElement>('#ed-setup-password')!, 'correct horse battery');
     typeInto(container.querySelector<HTMLInputElement>('#ed-setup-confirm')!, 'correct horse battery');
     await act(async () => {
@@ -83,7 +81,6 @@ describe('auth views', () => {
       '/api/auth/setup',
       expect.objectContaining({
         body: JSON.stringify({
-          code: 'code',
           password: 'correct horse battery',
           confirm_password: 'correct horse battery',
         }),

@@ -97,7 +97,7 @@ bool validate_password(std::string_view password, std::string& error) {
         return false;
     }
     if (codepoints < kPasswordMinCodepoints) {
-        error = "password must contain at least 12 characters";
+        error = "password must contain at least 6 characters";
         return false;
     }
     error.clear();

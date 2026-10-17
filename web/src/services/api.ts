@@ -47,10 +47,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   setupStatus: () => request<SetupStatus>('/api/auth/setup-status'),
-  setup: (code: string, password: string, confirmPassword: string) =>
+  setup: (password: string, confirmPassword: string) =>
     request<{ ok: boolean; initialized: boolean }>('/api/auth/setup', {
       method: 'POST',
-      body: JSON.stringify({ code, password, confirm_password: confirmPassword }),
+      body: JSON.stringify({ password, confirm_password: confirmPassword }),
     }),
   session: () => request<SessionInfo>('/api/auth/session'),
   login: (password: string) =>
