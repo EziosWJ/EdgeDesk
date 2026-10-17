@@ -11,7 +11,7 @@ void register_health_routes(hv::HttpService& router, RouteContext& ctx) {
         body["status"] = "ok";
         body["service"] = "edgedesk";
         body["phase"] = 1; // Phase 1 contract field kept stable
-        body["version"] = "1.0.0";
+        body["version"] = EDGEDESK_VERSION;
         const auto sample = ctx.metrics->latest();
         if (sample.timestamp_ms > 0) {
             body["uptime_seconds"] = sample.uptime_seconds;

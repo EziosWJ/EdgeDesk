@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { TerminalSocket } from '../../services/terminalSocket';
+import { usePreferences } from '../../stores/preferencesStore';
 import type { TerminalSessionInfo } from '../../types';
 
 type Props = {
@@ -20,8 +21,10 @@ type Props = {
  * navigating, switching tabs or refreshing the browser never kills Bash.
  */
 export function TerminalPane({ sessionId, autoCreateCwd, title, onSessionCreated, onExited }: Props) {
+  const preferences = usePreferences();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<TerminalSocket | null>(null);
+  const terminalRef = useRef<Terminal | null>(null);
   const createdRef = useRef(false);
   const [status, setStatus] = useState<'connecting' | 'open' | 'closed' | 'error'>('connecting');
   const [guard, setGuard] = useState<string | null>(null);
@@ -35,7 +38,7 @@ export function TerminalPane({ sessionId, autoCreateCwd, title, onSessionCreated
     const styles = getComputedStyle(document.documentElement);
     const terminal = new Terminal({
       fontFamily: 'JetBrains Mono, Menlo, Consolas, monospace',
-      fontSize: 13,
+      fontSize: preferences.terminal_font_size,
       cursorBlink: true,
       scrollback: 5000,
       allowProposedApi: true,
@@ -46,6 +49,7 @@ export function TerminalPane({ sessionId, autoCreateCwd, title, onSessionCreated
         selectionBackground: '#274b73',
       },
     });
+    terminalRef.current = terminal;
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(container);
@@ -98,11 +102,18 @@ export function TerminalPane({ sessionId, autoCreateCwd, title, onSessionCreated
       socket.disconnect();
       terminal.dispose();
       socketRef.current = null;
+      terminalRef.current = null;
     };
     // Session identity is fixed for the lifetime of the pane; changing it
     // creates a new pane in the window manager instead of rebinding.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.options.fontSize = preferences.terminal_font_size;
+  }, [preferences.terminal_font_size]);
 
   return (
     <div className="ed-terminal-pane">

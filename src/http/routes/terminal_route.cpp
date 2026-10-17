@@ -231,10 +231,10 @@ void register_terminal_routes(hv::HttpService& router, RouteContext& ctx) {
         std::shared_ptr<TerminalSession> session;
         error = ctx.terminals->create(request, session);
         if (!error.ok()) {
-            ctx.audit->record("terminal.create", "denied", error.message, http::client_ip(req), request.cwd);
+            ctx.audit->record("terminal.create", "denied", error.message, http::client_ip(*ctx.config, req), request.cwd);
             return http::write_error(resp, error);
         }
-        ctx.audit->record("terminal.create", "ok", session->title(), http::client_ip(req), session->id());
+        ctx.audit->record("terminal.create", "ok", session->title(), http::client_ip(*ctx.config, req), session->id());
         hv::Json result;
         result["ok"] = true;
         result["session"] = session_info_json(session->info());
@@ -249,7 +249,7 @@ void register_terminal_routes(hv::HttpService& router, RouteContext& ctx) {
         if (session_id.empty()) return http::write_error(resp, 400, "invalid_argument", "field 'session_id' is required");
         const bool closed = ctx.terminals->request_close(session_id);
         if (!closed) return http::write_error(resp, 404, "not_found", "unknown terminal session");
-        ctx.audit->record("terminal.close", "ok", "http", http::client_ip(req), session_id);
+        ctx.audit->record("terminal.close", "ok", "http", http::client_ip(*ctx.config, req), session_id);
         hv::Json result;
         result["ok"] = true;
         return http::write_json(resp, 200, result);
@@ -259,7 +259,7 @@ void register_terminal_routes(hv::HttpService& router, RouteContext& ctx) {
 void ws_terminal_onopen(RouteContext& ctx, const WebSocketChannelPtr& channel, const HttpRequestPtr& req) {
     auto state = std::make_shared<WsClientState>();
     state->path = req->Path();
-    state->peer_ip = http::client_ip(req.get());
+    state->peer_ip = http::client_ip(*ctx.config, req.get());
     channel->setContextPtr(state);
 
     // Convenience: attach directly when the session id is in the query string.

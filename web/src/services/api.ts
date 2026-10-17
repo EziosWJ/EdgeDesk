@@ -1,7 +1,11 @@
 import type {
+  AppSettings,
   FileEntry,
   FileListing,
   MetricsSample,
+  SessionInfo,
+  SetupStatus,
+  SystemInfo,
   TerminalSessionInfo,
 } from '../types';
 
@@ -42,13 +46,36 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  session: () => request<{ ok: boolean; authenticated: boolean; method: string }>('/api/auth/session'),
-  login: (token: string) =>
-    request<{ ok: boolean; expires_in: number }>('/api/auth/login', {
+  setupStatus: () => request<SetupStatus>('/api/auth/setup-status'),
+  setup: (code: string, password: string, confirmPassword: string) =>
+    request<{ ok: boolean; initialized: boolean }>('/api/auth/setup', {
       method: 'POST',
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ code, password, confirm_password: confirmPassword }),
+    }),
+  session: () => request<SessionInfo>('/api/auth/session'),
+  login: (password: string) =>
+    request<{ ok: boolean; expires_in: number; expires_at: number }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ password }),
     }),
   logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+  changePassword: (currentPassword: string, newPassword: string, confirmPassword: string) =>
+    request<{ ok: boolean; reauthenticate: boolean }>('/api/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+        confirm_password: confirmPassword,
+      }),
+    }),
+  settings: () =>
+    request<{ ok: boolean; settings: AppSettings; api_token_configured: boolean }>('/api/settings'),
+  updateSettings: (patch: Partial<AppSettings>) =>
+    request<{ ok: boolean; settings: AppSettings }>('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+  systemInfo: () => request<SystemInfo>('/api/system/info'),
   health: () => request<{ status: string; service: string; phase: number; version: string }>('/api/health'),
 
   listFiles: (

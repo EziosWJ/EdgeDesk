@@ -38,16 +38,22 @@ std::uint64_t body_limit_for(const Config& config, std::string_view path) {
     return config.max_request_body;
 }
 
-bool path_is_public(std::string_view path) {
+bool path_is_public(const RouteContext& ctx, std::string_view path) {
     if (path.rfind("/api/", 0) != 0 && path.rfind("/ws/", 0) != 0) return true; // static bundle
-    if (path == "/api/health") return true;
-    if (path == "/api/auth/login" || path == "/api/auth/logout" || path == "/api/auth/session") return true;
+    if (path == "/api/health" || path == "/api/auth/session" || path == "/api/auth/logout") return true;
+    if (ctx.auth == nullptr) return false;
+    const auto state = ctx.auth->state();
+    if (path == "/api/auth/setup-status") return true;
+    // Setup stays public so an already-initialized instance can return 409
+    // instead of leaking an authentication-required response.
+    if (path == "/api/auth/setup") return true;
+    if (state == AuthState::initialized && path == "/api/auth/login") return true;
     return false;
 }
 
 bool request_is_authenticated(RouteContext& ctx, HttpRequest* req, bool& used_cookie) {
     used_cookie = false;
-    if (ctx.auth == nullptr) return false;
+    if (ctx.auth == nullptr || ctx.auth->state() != AuthState::initialized) return false;
     const std::string authorization = req->GetHeader("Authorization", "");
     if (!authorization.empty()) {
         return ctx.auth->verify_bearer(authorization);
@@ -58,6 +64,26 @@ bool request_is_authenticated(RouteContext& ctx, HttpRequest* req, bool& used_co
         return true;
     }
     return false;
+}
+
+int auth_state_gate(RouteContext& ctx, HttpRequest* req, HttpResponse* resp, std::string_view path) {
+    if (path.rfind("/api/", 0) != 0 && path.rfind("/ws/", 0) != 0) return HTTP_STATUS_NEXT;
+    if (path_is_public(ctx, path)) return HTTP_STATUS_NEXT;
+    if (ctx.auth == nullptr) {
+        return http::write_error(resp, 503, "auth_unavailable", "authentication is unavailable");
+    }
+    const auto state = ctx.auth->state();
+    if (state == AuthState::uninitialized) {
+        ctx.audit->record("auth", "denied", "setup required", http::client_ip(*ctx.config, req), std::string(path));
+        return http::write_error(resp, 503, "setup_required", "administrator initialization is required");
+    }
+    if (state == AuthState::corrupt) {
+        ctx.audit->record("auth", "denied", "auth state corrupt", http::client_ip(*ctx.config, req),
+                          std::string(path));
+        return http::write_error(resp, 503, "auth_state_corrupt",
+                                 "authentication state is corrupt; use local recovery");
+    }
+    return HTTP_STATUS_NEXT;
 }
 
 bool request_origin_ok(HttpRequest* req) {
@@ -80,12 +106,22 @@ void install_middleware(hv::HttpService& router, RouteContext& ctx) {
         set_security_headers(resp);
         const std::string path = req->Path();
         const std::uint64_t content_length = static_cast<std::uint64_t>(req->content_length);
-        const std::string ip = http::client_ip(req);
+        const std::string ip = http::client_ip(*ctx.config, req);
         bool used_cookie = false;
         const bool authenticated = request_is_authenticated(ctx, req, used_cookie);
         const bool origin_ok = request_origin_ok(req);
+        const auto auth_state = ctx.auth == nullptr ? AuthState::corrupt : ctx.auth->state();
 
         if (is_upload_path(path) || path.rfind("/ws/", 0) == 0) {
+            if (auth_state != AuthState::initialized) {
+                ctx.audit->record(is_upload_path(path) ? "auth" : "ws_auth", "denied",
+                                  auth_state == AuthState::uninitialized ? "setup required" : "auth state corrupt", ip,
+                                  path);
+                resp->status_code = static_cast<http_status>(503);
+                resp->body = auth_state == AuthState::uninitialized ? "administrator initialization is required"
+                                                                    : "authentication state is corrupt";
+                return resp->status_code;
+            }
             // Uploads write straight to disk and upgrades switch protocols, so
             // both must be fully validated before anything is consumed.
             if (is_upload_path(path)) {
@@ -130,7 +166,7 @@ void install_middleware(hv::HttpService& router, RouteContext& ctx) {
         HttpRequest* req = context->request.get();
         HttpResponse* resp = context->response.get();
         const std::string path = req->Path();
-        const std::string ip = http::client_ip(req);
+        const std::string ip = http::client_ip(*ctx.config, req);
 
         if (is_upload_path(path)) {
             // Auth/CSRF/limits were enforced at the header stage; a state
@@ -145,7 +181,13 @@ void install_middleware(hv::HttpService& router, RouteContext& ctx) {
             return http::write_error(resp, 429, "rate_limited", "too many requests; slow down");
         }
 
-        if (!path_is_public(path)) {
+        const int gate = auth_state_gate(ctx, req, resp, path);
+        if (gate != HTTP_STATUS_NEXT) {
+            release_upload_state(context);
+            return gate;
+        }
+
+        if (!path_is_public(ctx, path)) {
             bool used_cookie = false;
             if (!request_is_authenticated(ctx, req, used_cookie)) {
                 release_upload_state(context);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(EdgeDesk VERSION 1.0.0 LANGUAGES C CXX)
+project(EdgeDesk VERSION 1.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,9 +45,28 @@ if(EDGEDESK_BUILD_WEB)
   )
 endif()
 
+# Pinned Argon2id reference implementation. The library is intentionally built
+# without its internal thread pool: EdgeDesk runs hashes through one bounded
+# worker queue so embedded devices cannot spawn unbounded hash threads.
+add_library(edgedesk_argon2 STATIC
+  third_party/argon2/src/argon2.c
+  third_party/argon2/src/core.c
+  third_party/argon2/src/encoding.c
+  third_party/argon2/src/ref.c
+  third_party/argon2/src/thread.c
+  third_party/argon2/src/blake2/blake2b.c
+)
+target_include_directories(edgedesk_argon2
+  PUBLIC "${CMAKE_SOURCE_DIR}/third_party/argon2/include"
+  PRIVATE "${CMAKE_SOURCE_DIR}/third_party/argon2/src"
+          "${CMAKE_SOURCE_DIR}/third_party/argon2/src/blake2")
+target_compile_definitions(edgedesk_argon2 PRIVATE ARGON2_NO_THREADS)
+target_compile_options(edgedesk_argon2 PRIVATE -Wall -Wextra)
+
 # Library with all non-network modules: core, file, terminal, system, security,
 # web assets. Tests link this target without pulling in libhv.
 add_library(edgedesk_core STATIC
+  src/core/atomic_file.cpp
   src/core/config.cpp
   src/core/error.cpp
   src/core/fd.cpp
@@ -58,7 +77,10 @@ add_library(edgedesk_core STATIC
   src/file/path_sandbox.cpp
   src/security/audit.cpp
   src/security/auth.cpp
+  src/security/auth_store.cpp
+  src/security/password_hash.cpp
   src/security/rate_limiter.cpp
+  src/security/settings_store.cpp
   src/system/cpu_metrics.cpp
   src/system/disk_metrics.cpp
   src/system/memory_metrics.cpp
@@ -70,11 +92,16 @@ add_library(edgedesk_core STATIC
   src/terminal/terminal_session.cpp
   src/web/web_root.cpp
 )
-target_include_directories(edgedesk_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(edgedesk_core
+  PUBLIC "${CMAKE_SOURCE_DIR}/src"
+  PRIVATE "${CMAKE_SOURCE_DIR}/third_party")
 target_compile_features(edgedesk_core PUBLIC cxx_std_17)
 target_compile_options(edgedesk_core PRIVATE -Wall -Wextra -Wpedantic)
-target_compile_definitions(edgedesk_core PRIVATE EDGEDESK_DISK_DEFAULT_DIR="${EDGEDESK_WEB_ROOT}")
-target_link_libraries(edgedesk_core PUBLIC Threads::Threads)
+target_compile_definitions(edgedesk_core
+  PRIVATE EDGEDESK_DISK_DEFAULT_DIR="${EDGEDESK_WEB_ROOT}"
+  PUBLIC EDGEDESK_VERSION="${PROJECT_VERSION}"
+  PUBLIC EDGEDESK_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
+target_link_libraries(edgedesk_core PUBLIC Threads::Threads edgedesk_argon2)
 if(UNIX AND NOT APPLE)
   # forkpty lives in libutil on glibc and in libc on musl.
   include(CheckLibraryExists)
@@ -111,12 +138,14 @@ if(EDGEDESK_BUILD_SERVER)
   add_executable(edgedesk
     src/app/main.cpp
     src/app/application.cpp
+    src/app/recovery.cpp
     src/http/http_util.cpp
     src/http/middleware.cpp
     src/http/server.cpp
     src/http/routes/auth_route.cpp
     src/http/routes/file_route.cpp
     src/http/routes/health_route.cpp
+    src/http/routes/settings_route.cpp
     src/http/routes/system_route.cpp
     src/http/routes/terminal_route.cpp
   )
@@ -143,6 +172,9 @@ if(EDGEDESK_BUILD_TESTS)
     core_test:core/core_test.cpp
     path_sandbox_test:file/path_sandbox_test.cpp
     file_service_test:file/file_service_test.cpp
+    auth_store_test:security/auth_store_test.cpp
+    password_hash_test:security/password_hash_test.cpp
+    settings_store_test:security/settings_store_test.cpp
     command_guard_test:terminal/command_guard_test.cpp
     terminal_session_test:terminal/terminal_session_test.cpp
     system_metrics_test:system/system_metrics_test.cpp

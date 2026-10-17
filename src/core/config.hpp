@@ -31,11 +31,13 @@ struct Config {
     int max_transfers = 4;
 
     // authentication
-    std::string auth_token;          // resolved token (explicit or generated)
+    std::string auth_token;          // optional Bearer token (empty = disabled)
     std::string auth_token_file;
-    bool auth_token_ephemeral = false;
     int session_ttl_seconds = 12 * 3600;
     int login_rate_limit_per_minute = 5;
+    bool cookie_secure = false;
+    std::vector<std::string> trusted_proxies;
+    bool reset_admin_password = false;
 
     // general rate limiting
     int rate_limit_per_second = 30;
@@ -59,6 +61,9 @@ struct Config {
     std::uint64_t audit_max_bytes = 1ull * 1024 * 1024;
     int audit_max_files = 2;
 
+    // persistent application data (auth.json, settings.json, init-code)
+    std::string data_dir;
+
     // runtime state directory (audit log default location)
     std::string state_dir;
 
@@ -78,5 +83,10 @@ std::string default_state_dir();
 
 // Creates the state directory with 0700 when missing. Returns false + reason.
 bool ensure_state_dir(const std::string& path, std::string& error);
+
+// Computes the persistent data directory: $XDG_DATA_HOME/edgedesk, then
+// $HOME/.local/share/edgedesk. Returns an empty string when neither base is
+// usable; callers must fail startup rather than fall back to /tmp.
+std::string default_data_dir();
 
 } // namespace edgedesk

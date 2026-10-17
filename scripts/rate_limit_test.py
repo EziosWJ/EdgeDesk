@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Rate limiting integration test against a server started with strict limits.
 
-Usage: scripts/rate_limit_test.py <host> <port> <token>
+Usage: scripts/rate_limit_test.py <host> <port> <password>
 Expects the caller to launch the server with something like:
   --rate-limit 2 --rate-limit-burst 2 --login-rate-limit 2
 """
@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.request
 
-HOST, PORT, TOKEN = "127.0.0.1", 0, ""
+HOST, PORT, PASSWORD = "127.0.0.1", 0, ""
 
 
 def post(path, body, headers=None):
@@ -27,17 +27,27 @@ def post(path, body, headers=None):
 
 
 def main():
-    global HOST, PORT, TOKEN
+    global HOST, PORT, PASSWORD
     if len(sys.argv) < 4:
         print(__doc__)
         return 2
-    HOST, PORT, TOKEN = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+    HOST, PORT, PASSWORD = sys.argv[1], int(sys.argv[2]), sys.argv[3]
     failures = []
 
     # Login limiter (burst 2): the third attempt within a minute is throttled.
-    statuses = [post("/api/auth/login", {"token": "wrong"}) for _ in range(3)]
+    statuses = [post("/api/auth/login", {"password": "wrong"}) for _ in range(3)]
     if 429 not in statuses:
         failures.append(f"login limiter did not trigger: {statuses}")
+
+    # X-Forwarded-For must not bypass the peer-IP login limiter. Four
+    # requests with different spoofed values still hit the same bucket.
+    time.sleep(3)
+    spoofed = [
+        post("/api/auth/login", {"password": "wrong"}, headers={"X-Forwarded-For": f"10.0.0.{index}"})
+        for index in range(4)
+    ]
+    if 429 not in spoofed:
+        failures.append(f"spoofed X-Forwarded-For bypassed login limiter: {spoofed}")
 
     # General limiter (burst 2): immediate follow-up requests are throttled.
     time.sleep(3)  # let buckets refill

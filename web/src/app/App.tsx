@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { SetupView } from '../features/auth/SetupView';
+import { CorruptStateView } from '../features/auth/CorruptStateView';
 import { LoginView } from '../features/auth/LoginView';
 import { DashboardView } from '../features/dashboard/DashboardView';
 import { FilesView } from '../features/files/FilesView';
@@ -9,27 +11,74 @@ import { WindowLayer } from '../components/WindowLayer';
 import { api } from '../services/api';
 import { MetricsSocket } from '../services/metricsSocket';
 import { sessionStore } from '../stores/sessionStore';
+import { preferencesStore, usePreferences } from '../stores/preferencesStore';
 import { windowStore } from '../stores/windowStore';
+
+type AuthView = 'checking' | 'setup' | 'anonymous' | 'authenticated' | 'corrupt';
+
+function applyTheme(theme: 'light' | 'dark' | 'system'): void {
+  const root = document.documentElement;
+  const media = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  const effective = theme === 'system' ? (media?.matches ? 'dark' : 'light') : theme;
+  root.dataset.theme = effective;
+  root.style.colorScheme = effective;
+}
 
 export default function App() {
   const [active, setActive] = useState<ModuleId>('dashboard');
-  const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'anonymous'>('checking');
+  const [authView, setAuthView] = useState<AuthView>('checking');
   const [health, setHealth] = useState<HealthState>('checking');
   const metricsSocketRef = useRef<MetricsSocket | null>(null);
+  const preferences = usePreferences();
 
   useEffect(() => {
+    applyTheme(preferences.theme);
+    if (preferences.theme !== 'system' || typeof window.matchMedia !== 'function') return;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const listener = () => applyTheme('system');
+    media.addEventListener('change', listener);
+    return () => media.removeEventListener('change', listener);
+  }, [preferences.theme]);
+
+  useEffect(() => {
+    let cancelled = false;
     api
-      .session()
-      .then((data) => setAuthState(data.authenticated ? 'authenticated' : 'anonymous'))
-      .catch(() => setAuthState('anonymous'));
+      .setupStatus()
+      .then((status) => {
+        if (cancelled) return;
+        if (status.state === 'corrupt') {
+          setAuthView('corrupt');
+          return;
+        }
+        if (!status.initialized) {
+          setAuthView('setup');
+          return;
+        }
+        return api
+          .session()
+          .then((session) => {
+            if (cancelled) return;
+            setAuthView(session.authenticated ? 'authenticated' : 'anonymous');
+          })
+          .catch(() => {
+            if (!cancelled) setAuthView('anonymous');
+          });
+      })
+      .catch(() => {
+        if (!cancelled) setAuthView('anonymous');
+      });
     api
       .health()
       .then(() => setHealth('online'))
       .catch(() => setHealth('offline'));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
-    if (authState !== 'authenticated') return;
+    if (authView !== 'authenticated') return;
+    void preferencesStore.load().catch(() => undefined);
     const socket = new MetricsSocket();
     socket.onHistory = (samples, intervalMs) => sessionStore.setMetricsHistory(samples, intervalMs);
     socket.onSample = (sample) => sessionStore.pushSample(sample);
@@ -57,20 +106,30 @@ export default function App() {
       socket.close();
       metricsSocketRef.current = null;
     };
-  }, [authState]);
+  }, [authView]);
 
-  if (authState === 'checking') {
-    return <div className="ed-boot">正在校验会话…</div>;
+  const handleAuthenticated = () => {
+    setAuthView('authenticated');
+    api.health().then(() => setHealth('online')).catch(() => setHealth('offline'));
+  };
+
+  const handleLogout = () => {
+    windowStore.closeAll();
+    preferencesStore.reset();
+    setAuthView('anonymous');
+  };
+
+  if (authView === 'checking') {
+    return <div className="ed-boot">正在校验认证状态…</div>;
   }
-  if (authState === 'anonymous') {
-    return (
-      <LoginView
-        onSuccess={() => {
-          setAuthState('authenticated');
-          api.health().then(() => setHealth('online')).catch(() => setHealth('offline'));
-        }}
-      />
-    );
+  if (authView === 'corrupt') {
+    return <CorruptStateView />;
+  }
+  if (authView === 'setup') {
+    return <SetupView onSuccess={() => setAuthView('anonymous')} />;
+  }
+  if (authView === 'anonymous') {
+    return <LoginView onSuccess={handleAuthenticated} />;
   }
 
   return (
@@ -80,7 +139,7 @@ export default function App() {
       <div className="content-shell">
         <header className="topbar">
           <div className="topbar-title">
-            EdgeDesk <span>/ V1.0 单二进制运维面板</span>
+            EdgeDesk <span>/ V1.1 单二进制运维面板</span>
           </div>
           <span className="version">文件 · 终端 · 监控 · 无数据库</span>
         </header>
@@ -88,14 +147,7 @@ export default function App() {
           {active === 'dashboard' && <DashboardView />}
           {active === 'files' && <FilesView />}
           {active === 'terminal' && <TerminalView />}
-          {active === 'settings' && (
-            <SettingsView
-              onLogout={() => {
-                windowStore.closeAll();
-                setAuthState('anonymous');
-              }}
-            />
-          )}
+          {active === 'settings' && <SettingsView onLogout={handleLogout} />}
         </main>
       </div>
 

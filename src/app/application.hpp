@@ -14,6 +14,7 @@ class ConcurrencyGate;
 class FileService;
 class PathSandbox;
 class RateLimiter;
+class SettingsStore;
 class SystemMetrics;
 class TerminalManager;
 class WebRoot;
@@ -39,6 +40,7 @@ private:
 
     Config config_;
     std::unique_ptr<Auth> auth_;
+    std::unique_ptr<SettingsStore> settings_;
     std::unique_ptr<AuditLog> audit_;
     std::unique_ptr<PathSandbox> sandbox_;
     std::unique_ptr<FileService> files_;
@@ -46,8 +48,10 @@ private:
     std::unique_ptr<SystemMetrics> metrics_;
     std::unique_ptr<RateLimiter> api_limiter_;
     std::unique_ptr<RateLimiter> login_limiter_;
+    std::unique_ptr<RateLimiter> setup_limiter_;
     std::unique_ptr<ConcurrencyGate> transfer_gate_;
     std::unique_ptr<WebRoot> web_root_;
+    std::string init_code_;
 
     std::thread maintenance_;
     std::atomic<bool> stopping_{false};

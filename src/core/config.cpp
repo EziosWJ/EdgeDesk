@@ -3,6 +3,7 @@
 #include "core/types.hpp"
 #include "core/util.hpp"
 
+#include <arpa/inet.h>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -35,6 +36,8 @@ const OptionSpec kOptions[] = {
     {"auth-token-file", true, false},
     {"session-ttl", true, false},
     {"login-rate-limit", true, false},
+    {"cookie-secure", false, false},
+    {"trusted-proxy", true, true},
     {"rate-limit", true, false},
     {"rate-limit-burst", true, false},
     {"max-terminal-sessions", true, false},
@@ -50,6 +53,8 @@ const OptionSpec kOptions[] = {
     {"audit-max-size", true, false},
     {"audit-max-files", true, false},
     {"state-dir", true, false},
+    {"data-dir", true, false},
+    {"reset-admin-password", false, false},
     {"config", true, false},
 };
 
@@ -78,6 +83,25 @@ bool read_token_file(const std::string& path, std::string& token, std::string& e
         return false;
     }
     return true;
+}
+
+bool valid_network_spec(std::string_view text) {
+    const auto slash = text.find('/');
+    const std::string address(text.substr(0, slash));
+    int prefix = -1;
+    if (slash != std::string_view::npos) {
+        std::uint64_t parsed = 0;
+        if (!parse_uint64(text.substr(slash + 1), parsed) || parsed > 128) return false;
+        prefix = static_cast<int>(parsed);
+    }
+    unsigned char buffer[16] = {};
+    if (::inet_pton(AF_INET, address.c_str(), buffer) == 1) {
+        return prefix < 0 || prefix <= 32;
+    }
+    if (::inet_pton(AF_INET6, address.c_str(), buffer) == 1) {
+        return prefix < 0 || prefix <= 128;
+    }
+    return false;
 }
 
 bool parse_int(std::string_view text, long long min_value, long long max_value, long long& out,
@@ -151,6 +175,14 @@ bool apply_option(Config& config, const std::string& name, const std::string& va
     } else if (name == "login-rate-limit") {
         if (!parse_int(value, 1, 1000, number, "login-rate-limit", error)) return false;
         config.login_rate_limit_per_minute = static_cast<int>(number);
+    } else if (name == "cookie-secure") {
+        config.cookie_secure = true;
+    } else if (name == "trusted-proxy") {
+        if (!valid_network_spec(value)) {
+            error = "invalid --trusted-proxy address or CIDR: " + value;
+            return false;
+        }
+        config.trusted_proxies.push_back(value);
     } else if (name == "rate-limit") {
         if (!parse_int(value, 1, 100000, number, "rate-limit", error)) return false;
         config.rate_limit_per_second = static_cast<int>(number);
@@ -193,6 +225,10 @@ bool apply_option(Config& config, const std::string& name, const std::string& va
         config.audit_max_files = static_cast<int>(number);
     } else if (name == "state-dir") {
         config.state_dir = value;
+    } else if (name == "data-dir") {
+        config.data_dir = value;
+    } else if (name == "reset-admin-password") {
+        config.reset_admin_password = true;
     } else if (name == "config") {
         config.config_file = value;
     } else {
@@ -271,6 +307,18 @@ std::string default_state_dir() {
     return "/tmp/edgedesk-" + std::to_string(static_cast<unsigned long>(::getuid()));
 }
 
+std::string default_data_dir() {
+    const char* xdg = std::getenv("XDG_DATA_HOME");
+    if (xdg != nullptr && xdg[0] == '/') {
+        return std::string(xdg) + "/edgedesk";
+    }
+    const char* home = std::getenv("HOME");
+    if (home != nullptr && home[0] == '/') {
+        return std::string(home) + "/.local/share/edgedesk";
+    }
+    return {};
+}
+
 bool ensure_state_dir(const std::string& path, std::string& error) {
     if (path.empty() || path.front() != '/') {
         error = "state directory must be an absolute path";
@@ -317,8 +365,8 @@ Config parse_args(int argc, const char* const argv[]) {
         config.config_file = config_path;
     }
 
-    // Environment: only the secret token is accepted via env to keep a single
-    // documented secret channel; everything else uses CLI/config file.
+    // Environment: the secret token, runtime directory and persistent data
+    // directory. Precedence stays defaults < config file < environment < CLI.
     const char* env_token = std::getenv("EDGEDESK_AUTH_TOKEN");
     if (env_token != nullptr && env_token[0] != '\0') {
         config.auth_token = trim(env_token);
@@ -326,6 +374,10 @@ Config parse_args(int argc, const char* const argv[]) {
     const char* env_state = std::getenv("EDGEDESK_STATE_DIR");
     if (env_state != nullptr && env_state[0] == '/') {
         config.state_dir = env_state;
+    }
+    const char* env_data = std::getenv("EDGEDESK_DATA_DIR");
+    if (env_data != nullptr && env_data[0] == '/') {
+        config.data_dir = env_data;
     }
 
     // Pass 2: command line overrides.
@@ -373,8 +425,10 @@ Config parse_args(int argc, const char* const argv[]) {
 
     if (config.help_requested || config.version_requested) return config;
 
-    // Resolve the access token: token file wins over a literal CLI/env token
-    // because it keeps the secret out of process listings and shell history.
+    // Resolve the optional API token: token file wins over a literal CLI/env
+    // token because it keeps the secret out of process listings and shell
+    // history. An empty token disables Bearer authentication; it never disables
+    // the password login flow.
     if (!config.auth_token_file.empty()) {
         std::string token;
         std::string error;
@@ -383,17 +437,13 @@ Config parse_args(int argc, const char* const argv[]) {
         }
         config.auth_token = token;
     }
-    if (config.auth_token.empty()) {
-        config.auth_token = random_hex(16);
-        if (config.auth_token.empty()) {
-            throw std::invalid_argument("failed to generate an auth token: no entropy source available");
-        }
-        config.auth_token_ephemeral = true;
+
+    if (config.data_dir.empty()) {
+        config.data_dir = default_data_dir();
     }
-    if (!is_loopback_host(config.host) && config.auth_token_ephemeral) {
+    if (config.data_dir.empty() || config.data_dir.front() != '/') {
         throw std::invalid_argument(
-            "refusing non-loopback --host without an explicit access token; "
-            "use --auth-token-file, EDGEDESK_AUTH_TOKEN or --auth-token");
+            "cannot determine a persistent data directory; pass --data-dir or set EDGEDESK_DATA_DIR");
     }
 
     if (config.state_dir.empty()) {
@@ -443,12 +493,15 @@ std::string help_text() {
         "  --max-request-body SIZE     JSON API body limit (default 1M)\n"
         "  --max-transfers N           Concurrent uploads/downloads (default 4)\n"
         "\n"
-        "Authentication (always enabled):\n"
-        "  --auth-token TEXT           Access token (visible in ps; prefer a file)\n"
-        "  --auth-token-file PATH      Read the access token from a file\n"
+        "Authentication:\n"
+        "  --auth-token TEXT           Optional Bearer API token (visible in ps)\n"
+        "  --auth-token-file PATH      Read the optional Bearer token from a file\n"
         "  (env EDGEDESK_AUTH_TOKEN)   Alternative to the options above\n"
         "  --session-ttl SECONDS       Cookie session lifetime (default 43200)\n"
         "  --login-rate-limit N        Login attempts per minute per IP (default 5)\n"
+        "  --cookie-secure             Add Secure to session cookies (HTTPS deployments)\n"
+        "  --trusted-proxy IP/CIDR     Trust X-Forwarded-For from this proxy (repeatable)\n"
+        "  --reset-admin-password      Reset local admin auth and exit (service stopped)\n"
         "  --rate-limit N              Requests per second per IP (default 30)\n"
         "  --rate-limit-burst N        Burst budget per IP (default 60)\n"
         "\n"
@@ -465,6 +518,7 @@ std::string help_text() {
         "  --disk-mount PATH           Restrict disk metrics to this mount (repeatable)\n"
         "\n"
         "Audit / runtime:\n"
+        "  --data-dir PATH             Persistent data directory (auth/settings; default XDG data)\n"
         "  --state-dir PATH            Writable runtime state directory\n"
         "  --audit-log PATH            Audit log path (default <state-dir>/audit.log)\n"
         "  --audit-max-size SIZE       Rotation size (default 1M)\n"

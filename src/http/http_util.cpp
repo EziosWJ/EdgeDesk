@@ -3,6 +3,8 @@
 #include "core/types.hpp"
 #include "core/util.hpp"
 
+#include <arpa/inet.h>
+#include <cstring>
 #include <ctime>
 
 namespace edgedesk::http {
@@ -21,6 +23,46 @@ std::string host_of_url(std::string_view url) {
     }
     const auto end = url.find('/', start);
     return std::string(url.substr(start, end == std::string_view::npos ? url.size() - start : end - start));
+}
+
+bool ip_in_spec(std::string_view address, std::string_view spec) {
+    const auto slash = spec.find('/');
+    const std::string network(spec.substr(0, slash));
+    unsigned char address_bytes[16] = {};
+    unsigned char network_bytes[16] = {};
+    const int family = address.find(':') == std::string_view::npos ? AF_INET : AF_INET6;
+    if (::inet_pton(family, std::string(address).c_str(), address_bytes) != 1) return false;
+    if (::inet_pton(family, network.c_str(), network_bytes) != 1) return false;
+    const int max_prefix = family == AF_INET ? 32 : 128;
+    int prefix = max_prefix;
+    if (slash != std::string_view::npos) {
+        std::uint64_t parsed = 0;
+        if (!parse_uint64(spec.substr(slash + 1), parsed) || parsed > static_cast<std::uint64_t>(max_prefix)) {
+            return false;
+        }
+        prefix = static_cast<int>(parsed);
+    }
+    const int full_bytes = prefix / 8;
+    const int remaining = prefix % 8;
+    if (full_bytes > 0 && std::memcmp(address_bytes, network_bytes, static_cast<std::size_t>(full_bytes)) != 0) {
+        return false;
+    }
+    if (remaining == 0) return true;
+    const unsigned char mask = static_cast<unsigned char>(0xFFu << (8 - remaining));
+    return (address_bytes[full_bytes] & mask) == (network_bytes[full_bytes] & mask);
+}
+
+bool trusted_proxy(const Config& config, std::string_view peer) {
+    for (const auto& spec : config.trusted_proxies) {
+        if (ip_in_spec(peer, spec)) return true;
+    }
+    return false;
+}
+
+bool valid_ip(std::string_view address) {
+    unsigned char bytes[16] = {};
+    return ::inet_pton(AF_INET, std::string(address).c_str(), bytes) == 1 ||
+           ::inet_pton(AF_INET6, std::string(address).c_str(), bytes) == 1;
 }
 
 } // namespace
@@ -50,13 +92,16 @@ int write_error(HttpResponse* resp, int status, const std::string& code, const s
     return write_json(resp, status, body);
 }
 
-int write_json_to(const HttpResponseWriterPtr& writer, int status, const hv::Json& body) {
+int write_json_to(const HttpResponseWriterPtr& writer, int status, const hv::Json& body,
+                  const std::string& set_cookie) {
     writer->Begin();
     writer->WriteStatus(static_cast<http_status>(status));
     writer->WriteHeader("Content-Type", "application/json; charset=utf-8");
     writer->WriteHeader("Cache-Control", "no-store");
-    writer->EndHeaders();
+    if (!set_cookie.empty()) writer->WriteHeader("Set-Cookie", set_cookie.c_str());
     const std::string text = body.dump();
+    writer->WriteHeader("Content-Length", text.size());
+    writer->EndHeaders();
     writer->WriteBody(text.c_str(), static_cast<int>(text.size()));
     writer->End();
     return status;
@@ -74,12 +119,18 @@ int write_error_to(const HttpResponseWriterPtr& writer, const Error& error) {
 
 std::string client_ip(HttpRequest* req) {
     if (req == nullptr) return {};
-    const std::string forwarded = req->GetHeader("X-Forwarded-For", "");
-    if (!forwarded.empty()) {
-        const auto comma = forwarded.find(',');
-        return trim(comma == std::string::npos ? forwarded : forwarded.substr(0, comma));
-    }
     return req->client_addr.ip;
+}
+
+std::string client_ip(const Config& config, HttpRequest* req) {
+    if (req == nullptr) return {};
+    const std::string peer = req->client_addr.ip;
+    if (!trusted_proxy(config, peer)) return peer;
+    const std::string forwarded = req->GetHeader("X-Forwarded-For", "");
+    if (forwarded.empty()) return peer;
+    const auto comma = forwarded.find(',');
+    const auto candidate = trim(comma == std::string::npos ? forwarded : forwarded.substr(0, comma));
+    return valid_ip(candidate) ? candidate : peer;
 }
 
 std::optional<std::string> cookie_value(HttpRequest* req, std::string_view name) {

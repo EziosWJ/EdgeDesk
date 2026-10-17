@@ -4,7 +4,7 @@ import { api } from '../../services/api';
 const asset = (path: string) => `${import.meta.env.BASE_URL}assets/${path}`;
 
 export function LoginView({ onSuccess }: { onSuccess: () => void }) {
-  const [token, setToken] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -13,7 +13,7 @@ export function LoginView({ onSuccess }: { onSuccess: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      await api.login(token.trim());
+      await api.login(password);
       onSuccess();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -29,22 +29,22 @@ export function LoginView({ onSuccess }: { onSuccess: () => void }) {
         <h1>
           Edge<span>Desk</span>
         </h1>
-        <p>输入设备访问密钥以继续。密钥由启动参数、密钥文件或环境变量提供；未配置时服务启动日志会打印一次性密钥。</p>
-        <label htmlFor="ed-token">访问密钥</label>
+        <p>输入管理员密码以继续。EdgeDesk 为单管理员、仅密码登录；脚本客户端可使用独立的 Bearer API Token。</p>
+        <label htmlFor="ed-password">管理员密码</label>
         <input
-          id="ed-token"
+          id="ed-password"
           type="password"
-          value={token}
+          value={password}
           autoComplete="current-password"
-          onChange={(event) => setToken(event.target.value)}
-          placeholder="access token"
+          onChange={(event) => setPassword(event.target.value)}
+          placeholder="administrator password"
           required
         />
         {error && <div className="ed-alert danger">{error}</div>}
-        <button type="submit" className="ed-button primary" disabled={busy || token.trim().length === 0}>
+        <button type="submit" className="ed-button primary" disabled={busy || password.length === 0}>
           {busy ? '验证中…' : '登录'}
         </button>
-        <small>会话使用 HttpOnly + SameSite=Strict Cookie，12 小时后过期；服务重启后需重新登录。</small>
+        <small>会话使用 HttpOnly + SameSite=Strict Cookie，默认 12 小时后过期；服务重启后需重新登录。</small>
       </form>
     </div>
   );

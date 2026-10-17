@@ -1,4 +1,5 @@
 #include "app/application.hpp"
+#include "app/recovery.hpp"
 #include "core/config.hpp"
 
 #include <exception>
@@ -12,8 +13,11 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (config.version_requested) {
-            std::cout << "EdgeDesk 1.0.0" << std::endl;
+            std::cout << "EdgeDesk " EDGEDESK_VERSION << std::endl;
             return 0;
+        }
+        if (config.reset_admin_password) {
+            return edgedesk::run_reset_admin_password(config);
         }
         edgedesk::Application application(std::move(config));
         return application.run();

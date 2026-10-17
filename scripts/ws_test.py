@@ -6,7 +6,7 @@ session survival across socket disconnect + reconnect, explicit close, and the
 metrics stream (snapshot + incremental samples).
 
 Usage:
-    scripts/ws_test.py <host> <port> <token> [--keep-session 0|1]
+    scripts/ws_test.py <host> <port> <password> [--keep-session 0|1]
 """
 import base64
 import hashlib
@@ -156,12 +156,12 @@ class WsClient:
         raise AssertionError(f"timeout waiting for {want_type}; got {collected[-5:]}")
 
 
-def login(base_url, token):
+def login(base_url, password):
     import urllib.request
 
     request = urllib.request.Request(
         base_url + "/api/auth/login",
-        data=json.dumps({"token": token}).encode(),
+        data=json.dumps({"password": password}).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
@@ -204,8 +204,8 @@ def expect_handshake_rejected(host, port, path, token=None, origin=None):
 
 def test_auth(host, port):
     expect_handshake_rejected(host, port, "/ws/terminal")
-    cookie = login(f"http://{host}:{port}", TOKEN)
-    # Valid token but a foreign Origin must not be upgraded (CSWSH defence).
+    cookie = login(f"http://{host}:{port}", PASSWORD)
+    # Valid session but a foreign Origin must not be upgraded (CSWSH defence).
     expect_handshake_rejected(host, port, "/ws/terminal", token=cookie, origin="http://evil.example")
     print("ws_test: handshake auth + origin rejection OK")
 
@@ -307,14 +307,14 @@ def test_metrics(host, port, cookie, origin):
 
 
 def main():
-    global HOST, TOKEN
+    global HOST, PASSWORD
     if len(sys.argv) < 4:
         print(__doc__)
         return 2
     HOST = sys.argv[1]
     port = int(sys.argv[2])
-    TOKEN = sys.argv[3]
-    cookie = login(f"http://{HOST}:{port}", TOKEN)
+    PASSWORD = sys.argv[3]
+    cookie = login(f"http://{HOST}:{port}", PASSWORD)
     origin = f"http://{HOST}:{port}"
     test_auth(HOST, port)
     print("ws_test: auth stage done", flush=True)
