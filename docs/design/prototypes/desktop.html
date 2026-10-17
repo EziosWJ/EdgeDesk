@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>EdgeDesk · 桌面与 Dock</title><link rel="stylesheet" href="./prototype.css"><script defer src="./prototype.js"></script></head>
+<body class="proto-page">
+  <header class="desktop-topbar"><a class="brand" href="./index.html"><img src="../../../web/public/assets/brand/edgedesk-mark.svg" alt=""><strong>EdgeDesk</strong></a><div class="topbar-actions"><span>原型模式</span><span>⌕</span><span>◉</span><span>Wi-Fi</span><span>10:24</span></div></header>
+  <main class="desktop-surface">
+    <div class="desktop-icons">
+      <a class="desktop-icon" data-desktop-icon data-launch-target="./dashboard.html"><span class="app-tile tile-blue"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#dashboard"/></svg></span><span>设备概览</span></a>
+      <a class="desktop-icon" data-desktop-icon data-launch-target="./files.html"><span class="app-tile tile-yellow"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#files"/></svg></span><span>文件管理</span></a>
+      <a class="desktop-icon" data-desktop-icon data-launch-target="./terminal.html"><span class="app-tile tile-dark"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#terminal"/></svg></span><span>终端</span></a>
+      <a class="desktop-icon" data-desktop-icon data-launch-target="./settings.html"><span class="app-tile tile-gray"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#settings"/></svg></span><span>系统设置</span></a>
+    </div>
+    <section class="window desktop-window" data-demo-window>
+      <div class="window-titlebar"><div class="traffic"><i></i><i></i><i></i></div><svg width="18" height="18" style="color:#83bcff"><use href="../../../web/public/assets/desktop/app-icons.svg#dashboard"/></svg><span class="window-title">设备概览 · 资源小组件</span><div class="window-controls"><button aria-label="最小化演示窗口" data-window-action="minimize"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#minimize"/></svg></button><button aria-label="最大化演示窗口" data-window-action="maximize"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#maximize"/></svg></button><button aria-label="关闭演示窗口" data-window-action="close"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#close"/></svg></button></div></div>
+      <div class="window-body"><div class="page-heading"><div><h1>设备运行概览</h1><p>桌面工作区中的独立窗口，可以拖动、缩放、最小化和恢复。</p></div><span class="demo-badge">演示数据</span></div>
+        <div class="desktop-kpis">
+          <div class="metric-card"><div class="metric-head"><span class="metric-title"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#cpu"/></svg>CPU</span><span class="status-dot"></span></div><div class="metric-value-row"><strong class="metric-value">38%</strong></div><div class="metric-detail">4 核 · 2.4 GHz</div></div>
+          <div class="metric-card"><div class="metric-head"><span class="metric-title"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#memory"/></svg>内存</span><span class="status-dot"></span></div><div class="metric-value-row"><strong class="metric-value">61%</strong></div><div class="metric-detail">5.2 / 8.0 GB</div></div>
+          <div class="metric-card"><div class="metric-head"><span class="metric-title"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#storage"/></svg>存储</span><span class="status-dot"></span></div><div class="metric-value-row"><strong class="metric-value">42%</strong></div><div class="metric-detail">372 / 876 GB</div></div>
+          <div class="metric-card"><div class="metric-head"><span class="metric-title"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#network"/></svg>网络</span><span class="status-dot"></span></div><div class="metric-value-row"><strong class="metric-value">12.4</strong><span class="metric-unit">MB/s</span></div><div class="metric-detail">eth0 · 下行吞吐</div></div>
+        </div>
+      </div>
+    </section>
+    <nav class="desktop-dock" aria-label="Dock">
+      <a class="dock-item active" href="./dashboard.html" title="设备概览"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#dashboard"/></svg></a>
+      <a class="dock-item" href="./files.html" title="文件管理"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#files"/></svg></a>
+      <a class="dock-item" href="./terminal.html" title="终端"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#terminal"/></svg></a>
+      <a class="dock-item" href="./settings.html" title="系统设置"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#settings"/></svg></a>
+      <a class="dock-item" href="./launcher.html" title="应用启动器"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#launcher"/></svg></a>
+    </nav>
+  </main>
+</body></html>
