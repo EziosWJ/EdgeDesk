@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Plus, RefreshCw, SquareArrowOutUpRight, X } from 'lucide-react';
 import { TerminalPane } from './TerminalPane';
 import { Icon } from '../../components/Icon';
@@ -14,6 +14,7 @@ export function TerminalView() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const tabRefs = useRef(new Map<string, HTMLDivElement>());
 
   const refresh = async () => {
     try {
@@ -36,6 +37,16 @@ export function TerminalView() {
   useEffect(() => {
     void refresh();
   }, []);
+
+  useEffect(() => {
+    if (sessions.length === 0) {
+      if (activeId !== null) setActiveId(null);
+      return;
+    }
+    if (!activeId || !sessions.some((session) => session.id === activeId)) {
+      setActiveId(sessions[0].id);
+    }
+  }, [sessions, activeId]);
 
   const createSession = async () => {
     setBusy(true);
@@ -61,25 +72,44 @@ export function TerminalView() {
     setActiveId((current) => (current === sessionId ? (sessions.find((s) => s.id !== sessionId)?.id ?? null) : current));
   };
 
+  const activateTab = (sessionId: string) => {
+    setActiveId(sessionId);
+    tabRefs.current.get(sessionId)?.focus();
+  };
+
+  const onTabKeyDown = (event: KeyboardEvent<HTMLDivElement>, index: number) => {
+    if (event.target !== event.currentTarget) return;
+    const last = sessions.length - 1;
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % sessions.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + sessions.length) % sessions.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = last;
+    else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      setActiveId(sessions[index].id);
+      return;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    const next = sessions[nextIndex];
+    if (next) activateTab(next.id);
+  };
+
   const active = sessions.find((session) => session.id === activeId) ?? null;
 
   return (
     <div className="ed-view ed-terminal-view">
-      <div className="ed-view-header">
+      <div className="ed-view-header ed-view-header-compact">
         <div>
           <h1>终端工作区</h1>
-          <p>
-            真实 Bash 登录 Shell（{sessionStore.shellInfo.shell}），会话独立于页面生命周期；切换 Tab、导航或刷新后仍可重连。
-          </p>
+          <p>在真实 Bash 会话中工作；切换页面或刷新不会中断。</p>
         </div>
         <div className="ed-toolbar">
           <button type="button" className="ed-button" onClick={() => void refresh()} disabled={busy}>
             <Icon icon={RefreshCw} size={14} />
             刷新
-          </button>
-          <button type="button" className="ed-button primary" onClick={() => void createSession()} disabled={busy || !sessionStore.shellInfo.available}>
-            <Icon icon={Plus} size={14} />
-            新建终端
           </button>
         </div>
       </div>
@@ -92,62 +122,99 @@ export function TerminalView() {
       )}
 
       {sessions.length === 0 ? (
-        <div className="ed-empty">
+        <div className="ed-empty ed-terminal-empty">
           <img src={asset('illustrations/empty-terminal.svg')} alt="" />
           <h2>还没有终端会话</h2>
-          <p>点击“新建终端”启动一个真实的 Bash 登录 Shell，会话上限 {sessionStore.shellInfo.maxSessions} 个。</p>
+          <p>启动一个真实的 Bash 登录 Shell，会话上限 {sessionStore.shellInfo.maxSessions} 个。</p>
+          <div className="ed-toolbar">
+            <button
+              type="button"
+              className="ed-button primary"
+              onClick={() => void createSession()}
+              disabled={busy || !sessionStore.shellInfo.available}
+            >
+              <Icon icon={Plus} size={15} />
+              新建终端
+            </button>
+          </div>
         </div>
       ) : (
         <>
-          <div className="ed-tabbar" role="tablist">
-            {sessions.map((session) => (
+          <div className="ed-tabbar" role="tablist" aria-label="终端会话">
+            {sessions.map((session, index) => (
               <div
                 key={session.id}
+                ref={(node) => {
+                  if (node) tabRefs.current.set(session.id, node);
+                  else tabRefs.current.delete(session.id);
+                }}
                 role="tab"
+                id={`ed-terminal-tab-${session.id}`}
                 aria-selected={session.id === activeId}
+                aria-controls="ed-terminal-panel"
+                aria-label={`${session.title}，${session.running ? '运行中' : '已退出'}`}
+                tabIndex={session.id === activeId ? 0 : -1}
                 className={`ed-tab ${session.id === activeId ? 'active' : ''} ${session.running ? '' : 'exited'}`}
+                title={`创建于 ${formatTime(session.created_ms / 1000)}`}
                 onClick={() => setActiveId(session.id)}
+                onKeyDown={(event) => onTabKeyDown(event, index)}
               >
+                <span className={`ed-tab-dot ${session.running ? 'running' : 'exited'}`} aria-hidden="true" />
                 <span className="ed-tab-title">{session.title}</span>
-                <span className="ed-tab-meta" title={`创建于 ${formatTime(session.created_ms / 1000)}`}>
-                  {session.running ? (session.subscribers > 1 ? `${session.subscribers} 个视图` : '运行中') : '已退出'}
+                <span className="ed-tab-actions">
+                  <button
+                    type="button"
+                    title="在浮动窗口中打开"
+                    aria-label={`在浮动窗口中打开 ${session.title}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      windowStore.open({
+                        kind: 'terminal',
+                        title: session.title,
+                        payload: { sessionId: session.id },
+                      });
+                    }}
+                  >
+                    <Icon icon={SquareArrowOutUpRight} size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    title="关闭并销毁会话"
+                    aria-label={`关闭并销毁 ${session.title}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void closeSession(session.id);
+                    }}
+                  >
+                    <Icon icon={X} size={14} />
+                  </button>
                 </span>
-                <button
-                  type="button"
-                  title="在浮动窗口中打开"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    windowStore.open({
-                      kind: 'terminal',
-                      title: session.title,
-                      payload: { sessionId: session.id },
-                    });
-                  }}
-                >
-                  <Icon icon={SquareArrowOutUpRight} size={14} />
-                </button>
-                <button
-                  type="button"
-                  title="关闭并销毁会话"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void closeSession(session.id);
-                  }}
-                >
-                  <Icon icon={X} size={14} />
-                </button>
               </div>
             ))}
-            <button type="button" className="ed-tab-add" onClick={() => void createSession()} title="新建终端">
+            <button
+              type="button"
+              className="ed-tab-add"
+              onClick={() => void createSession()}
+              title="新建终端"
+              aria-label="新建终端"
+              disabled={busy || !sessionStore.shellInfo.available}
+            >
               <Icon icon={Plus} size={16} />
             </button>
           </div>
-          <div className="ed-terminal-surface ed-panel">
+          <div
+            className="ed-terminal-surface ed-panel"
+            id="ed-terminal-panel"
+            role="tabpanel"
+            aria-labelledby={active ? `ed-terminal-tab-${active.id}` : undefined}
+          >
             {active ? (
               <TerminalPane
                 key={active.id}
                 sessionId={active.id}
                 title={active.title}
+                cwd={active.cwd}
+                subscribers={active.subscribers}
                 onSessionCreated={(session) => sessionStore.upsert(session)}
                 onExited={() => void refresh()}
               />

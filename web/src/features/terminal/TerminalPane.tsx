@@ -4,12 +4,15 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { TerminalSocket } from '../../services/terminalSocket';
 import { usePreferences } from '../../stores/preferencesStore';
+import { sessionStore } from '../../stores/sessionStore';
 import type { TerminalSessionInfo } from '../../types';
 
 type Props = {
   sessionId: string | null;
   autoCreateCwd?: string;
   title?: string;
+  cwd?: string;
+  subscribers?: number;
   onSessionCreated?: (session: TerminalSessionInfo) => void;
   onExited?: (sessionId: string | null, code: number) => void;
 };
@@ -20,7 +23,15 @@ type Props = {
  * Unmounting only closes the WebSocket; the PTY session stays alive so that
  * navigating, switching tabs or refreshing the browser never kills Bash.
  */
-export function TerminalPane({ sessionId, autoCreateCwd, title, onSessionCreated, onExited }: Props) {
+export function TerminalPane({
+  sessionId,
+  autoCreateCwd,
+  title,
+  cwd,
+  subscribers,
+  onSessionCreated,
+  onExited,
+}: Props) {
   const preferences = usePreferences();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<TerminalSocket | null>(null);
@@ -30,6 +41,7 @@ export function TerminalPane({ sessionId, autoCreateCwd, title, onSessionCreated
   const [guard, setGuard] = useState<string | null>(null);
   const [exited, setExited] = useState<number | null>(null);
   const [currentId, setCurrentId] = useState<string | null>(sessionId);
+  const [size, setSize] = useState<{ cols: number; rows: number } | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -54,6 +66,7 @@ export function TerminalPane({ sessionId, autoCreateCwd, title, onSessionCreated
     terminal.loadAddon(fit);
     terminal.open(container);
     terminal.focus();
+    setSize({ cols: terminal.cols, rows: terminal.rows });
 
     const socket = new TerminalSocket(sessionId);
     socketRef.current = socket;
@@ -88,6 +101,11 @@ export function TerminalPane({ sessionId, autoCreateCwd, title, onSessionCreated
       try {
         fit.fit();
         socket.resize(terminal.cols, terminal.rows);
+        setSize((prev) =>
+          prev && prev.cols === terminal.cols && prev.rows === terminal.rows
+            ? prev
+            : { cols: terminal.cols, rows: terminal.rows },
+        );
       } catch {
         /* container not laid out yet */
       }
@@ -115,23 +133,19 @@ export function TerminalPane({ sessionId, autoCreateCwd, title, onSessionCreated
     terminal.options.fontSize = preferences.terminal_font_size;
   }, [preferences.terminal_font_size]);
 
+  const statusText =
+    status === 'open'
+      ? exited !== null
+        ? `已退出 (${exited})`
+        : '已连接'
+      : status === 'connecting'
+        ? '连接中…'
+        : status === 'closed'
+          ? '重连中…'
+          : '异常';
+
   return (
     <div className="ed-terminal-pane">
-      <div className="ed-terminal-statusbar">
-        <span className={`ed-terminal-status ${status}`}>
-          {status === 'open'
-            ? exited !== null
-              ? `已退出 (${exited})`
-              : '已连接'
-            : status === 'connecting'
-              ? '连接中…'
-              : status === 'closed'
-                ? '重连中…'
-                : '异常'}
-        </span>
-        {currentId && <code className="ed-session-id">{currentId.slice(0, 8)}</code>}
-        <span className="ed-terminal-hint">会话在后端继续运行，切换/刷新不会中断</span>
-      </div>
       {guard && (
         <div className="ed-guard-bar">
           <strong>已被 CommandGuard 拦截：</strong>
@@ -147,6 +161,29 @@ export function TerminalPane({ sessionId, autoCreateCwd, title, onSessionCreated
         </div>
       )}
       <div className="ed-terminal-host" ref={containerRef} title={title} />
+      <div className="ed-terminal-statusbar">
+        <div className="ed-terminal-status-main">
+          <span className={`ed-terminal-status ${status}`} role="status">
+            <span className="ed-terminal-status-dot" aria-hidden="true" />
+            {statusText}
+          </span>
+          <code className="ed-terminal-shell">{sessionStore.shellInfo.shell}</code>
+          {cwd && (
+            <span className="ed-terminal-cwd" title={cwd}>
+              {cwd}
+            </span>
+          )}
+        </div>
+        <div className="ed-terminal-status-meta">
+          {size && <span className="ed-terminal-size">{size.cols}×{size.rows}</span>}
+          {typeof subscribers === 'number' && subscribers > 1 && <span>{subscribers} 个视图</span>}
+          {currentId && (
+            <code className="ed-session-id" title={currentId}>
+              #{currentId.slice(0, 8)}
+            </code>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

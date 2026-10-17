@@ -90,14 +90,15 @@ export function rateScale(values: readonly (number | null)[]): { divisor: number
 
 const two = (value: number): string => String(value).padStart(2, '0');
 
+/** Metrics timestamps are Unix milliseconds; format them in local time. */
 export function formatClock(ts: number, withSeconds = true): string {
-  const date = new Date(ts * 1000);
+  const date = new Date(ts);
   const base = `${two(date.getHours())}:${two(date.getMinutes())}`;
   return withSeconds ? `${base}:${two(date.getSeconds())}` : base;
 }
 
 export function formatDateTime(ts: number): string {
-  const date = new Date(ts * 1000);
+  const date = new Date(ts);
   return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`;
 }
 
@@ -105,7 +106,7 @@ export function formatDateTime(ts: number): string {
 export function xTickLabels(timestamps: readonly number[], count = 5): string[] {
   if (timestamps.length === 0) return [];
   const span = timestamps[timestamps.length - 1] - timestamps[0];
-  const withSeconds = span <= 180;
+  const withSeconds = span <= 180_000;
   const step = (timestamps.length - 1) / Math.max(1, count - 1);
   const labels: string[] = [];
   for (let index = 0; index < count; index += 1) {
@@ -117,5 +118,5 @@ export function xTickLabels(timestamps: readonly number[], count = 5): string[] 
 
 /** Wall-clock moment the device booted, derived from uptime and the sample time. */
 export function bootMoment(sample: MetricsSample): number {
-  return sample.ts - sample.uptime_seconds;
+  return sample.ts - sample.uptime_seconds * 1000;
 }

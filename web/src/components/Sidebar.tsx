@@ -13,11 +13,21 @@ import { Icon } from './Icon';
 export type ModuleId = 'dashboard' | 'files' | 'terminal' | 'settings';
 export type HealthState = 'checking' | 'online' | 'offline';
 
-const modules: { id: ModuleId; label: string; icon: LucideIcon }[] = [
-  { id: 'dashboard', label: '仪表盘', icon: LayoutDashboard },
-  { id: 'files', label: '文件管理', icon: FolderTree },
-  { id: 'terminal', label: '终端工作区', icon: SquareTerminal },
-  { id: 'settings', label: '设置', icon: Settings },
+type Module = {
+  id: ModuleId;
+  label: string;
+  hint: string;
+  icon: LucideIcon;
+};
+
+const WORKSPACE_MODULES: Module[] = [
+  { id: 'dashboard', label: '仪表盘', hint: '资源总览', icon: LayoutDashboard },
+  { id: 'files', label: '文件管理', hint: '文件与目录', icon: FolderTree },
+  { id: 'terminal', label: '终端工作区', hint: 'Bash 会话', icon: SquareTerminal },
+];
+
+const SYSTEM_MODULES: Module[] = [
+  { id: 'settings', label: '设置', hint: '偏好与安全', icon: Settings },
 ];
 
 const STORAGE_KEY = 'edgedesk.nav.collapsed.v1';
@@ -53,10 +63,32 @@ export function Sidebar({ active, health, onSelect }: SidebarProps) {
   const statusText = health === 'online' ? '运行中 · 已认证' : health === 'offline' ? '未连接' : '检测中';
   const toggleLabel = collapsed ? '展开菜单' : '收起菜单';
 
+  const renderModule = (item: Module) => (
+    <button
+      key={item.id}
+      type="button"
+      className={`nav-item ${active === item.id ? 'active' : ''}`}
+      aria-current={active === item.id ? 'page' : undefined}
+      aria-label={collapsed ? item.label : undefined}
+      title={collapsed ? item.label : undefined}
+      onClick={() => onSelect(item.id)}
+    >
+      <span className="nav-icon-tile">
+        <Icon icon={item.icon} size={18} className="nav-icon" />
+      </span>
+      <span className="nav-copy">
+        <span className="nav-label">{item.label}</span>
+        <span className="nav-hint">{item.hint}</span>
+      </span>
+    </button>
+  );
+
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-head">
-        <img className="brand-mark" src={asset('brand/edgedesk-mark.svg')} width="30" height="30" alt="" />
+        <span className="brand-mark-wrap" aria-hidden="true">
+          <img className="brand-mark" src={asset('brand/edgedesk-mark.svg')} width="30" height="30" alt="" />
+        </span>
         <div className="brand-text">
           <strong>
             Edge<span>Desk</span>
@@ -69,27 +101,20 @@ export function Sidebar({ active, health, onSelect }: SidebarProps) {
       </div>
 
       <nav aria-label="主导航" className="main-nav">
-        {modules.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`nav-item ${active === item.id ? 'active' : ''}`}
-            aria-current={active === item.id ? 'page' : undefined}
-            aria-label={collapsed ? item.label : undefined}
-            title={collapsed ? item.label : undefined}
-            onClick={() => onSelect(item.id)}
-          >
-            <Icon icon={item.icon} size={18} className="nav-icon" />
-            <span className="nav-label">{item.label}</span>
-          </button>
-        ))}
+        <span className="nav-section-label">工作区</span>
+        {WORKSPACE_MODULES.map(renderModule)}
+        <span className="nav-section-label">系统</span>
+        {SYSTEM_MODULES.map(renderModule)}
       </nav>
 
-      <div className="device-status" title={`本机服务：${statusText}`}>
-        <span className={`device-dot ${health}`} aria-hidden="true" />
-        <div className="device-status-text">
-          <strong>本机服务</strong>
-          <span className={`status ${health}`}>{statusText}</span>
+      <div className="sidebar-footer">
+        <span className="sidebar-version">EdgeDesk v1.1</span>
+        <div className="device-status" title={`本机服务：${statusText}`}>
+          <span className={`device-dot ${health}`} aria-hidden="true" />
+          <div className="device-status-text">
+            <strong>本机服务</strong>
+            <span className={`status ${health}`}>{statusText}</span>
+          </div>
         </div>
       </div>
     </aside>

@@ -41,6 +41,7 @@ export type TerminalSessionInfo = {
 };
 
 export type MetricsSample = {
+  /** Unix timestamp in milliseconds, matching /api/system and /ws/metrics. */
   ts: number;
   uptime_seconds: number;
   hostname: string;

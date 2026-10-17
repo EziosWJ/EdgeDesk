@@ -481,7 +481,7 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
           onClick={() => setTreeVisible(false)}
         />
       )}
-      <aside className="ed-files-tree ed-panel" aria-label="目录树面板">
+      <aside className="ed-files-tree" aria-label="目录树面板">
         <DirectoryTree
           currentPath={path}
           showHidden={showHidden}
@@ -562,22 +562,8 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
             </button>
           </div>
         )}
-        {notice && (
-          <div className="ed-alert info" role="status">
-            <span>{notice}</span>
-            <button type="button" className="ed-link" onClick={() => setNotice(null)}>
-              关闭
-            </button>
-          </div>
-        )}
-        {uploadPercent !== null && (
-          <div className="ed-alert info" role="status">
-            正在上传… <progress max={100} value={uploadPercent} /> {uploadPercent}%
-          </div>
-        )}
-
         {contentState === 'error' && (
-          <div className="ed-files-state ed-panel" role="alert">
+          <div className="ed-files-state" role="alert">
             <img src={asset('illustrations/monitor-unavailable.svg')} alt="" />
             <strong>目录加载失败</strong>
             <p>{listingError}</p>
@@ -589,13 +575,13 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
           </div>
         )}
         {contentState === 'loading' && (
-          <div className="ed-files-state ed-panel" aria-busy="true" aria-live="polite">
+          <div className="ed-files-state" aria-busy="true" aria-live="polite">
             <span className="ed-spinner large" aria-hidden="true" />
             <span>正在加载 {path} …</span>
           </div>
         )}
         {contentState === 'empty' && (
-          <div className="ed-files-state ed-panel">
+          <div className="ed-files-state">
             <img src={asset('illustrations/empty-files.svg')} alt="" />
             <strong>当前目录为空</strong>
             <p>这里还没有文件或子目录，可以上传文件、拖入文件或新建文件夹。</p>
@@ -610,7 +596,7 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
           </div>
         )}
         {contentState === 'filtered' && (
-          <div className="ed-files-state ed-panel">
+          <div className="ed-files-state">
             <strong>没有匹配 “{filter.trim()}” 的条目</strong>
             <p>筛选只在当前目录的当前页内生效，不会跨目录搜索。</p>
             <button type="button" className="ed-button" onClick={() => setFilter('')}>
@@ -626,12 +612,29 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
           ))}
 
         <div className="ed-table-footer">
-          <span className="ed-files-status">
+          <div className="ed-files-status">
             {loading && entries.length > 0 && <span className="ed-spinner" aria-hidden="true" />}
-            {listingError ? '目录不可用' : `共 ${data?.total ?? 0} 项`}
-            {filter.trim() ? ` · 已筛选 ${visibleEntries.length} / 当前页 ${entries.length} 项` : ''}
-            {selected.size > 0 ? ` · 已选 ${selected.size} 项` : ''}
-          </span>
+            <span>
+              {listingError ? '目录不可用' : `共 ${data?.total ?? 0} 项`}
+              {filter.trim() ? ` · 已筛选 ${visibleEntries.length} / 当前页 ${entries.length} 项` : ''}
+              {selected.size > 0 ? ` · 已选 ${selected.size} 项` : ''}
+            </span>
+            {notice && (
+              <span className="ed-files-notice" role="status">
+                {notice}
+                <button type="button" className="ed-link" onClick={() => setNotice(null)}>
+                  关闭
+                </button>
+              </span>
+            )}
+            {uploadPercent !== null && (
+              <span className="ed-upload-progress" role="status">
+                上传中
+                <progress max={100} value={uploadPercent} />
+                {uploadPercent}%
+              </span>
+            )}
+          </div>
           <div className="ed-toolbar">
             <button
               type="button"

@@ -9,8 +9,17 @@ import type { MetricsSample } from '../../types';
 const KIB = 1024;
 const GIB = KIB * KIB * KIB;
 
+const ROOT_DISK = {
+  mount: '/',
+  filesystem: 'ext4',
+  total_bytes: 100 * GIB,
+  used_bytes: 38 * GIB,
+  available_bytes: 62 * GIB,
+  used_percent: 38,
+};
+
 /** Shaped like the real /api/system payload; values are deterministic for assertions. */
-function sample(index: number, ts: number): MetricsSample {
+function sample(index: number, ts: number, disks: MetricsSample['disks'] = [ROOT_DISK]): MetricsSample {
   return {
     ts,
     uptime_seconds: 93_600 + index,
@@ -29,16 +38,7 @@ function sample(index: number, ts: number): MetricsSample {
       swap_free_kb: 0,
       used_percent: 50,
     },
-    disks: [
-      {
-        mount: '/',
-        filesystem: 'ext4',
-        total_bytes: 100 * GIB,
-        used_bytes: 38 * GIB,
-        available_bytes: 62 * GIB,
-        used_percent: 38,
-      },
-    ],
+    disks,
     network: [
       {
         name: 'eth0',
@@ -53,8 +53,10 @@ function sample(index: number, ts: number): MetricsSample {
   };
 }
 
-function prime(count: number, lastTs: number): void {
-  const samples = Array.from({ length: count }, (_, index) => sample(index, lastTs - (count - 1 - index)));
+function prime(count: number, lastTs: number, disks?: MetricsSample['disks']): void {
+  const samples = Array.from({ length: count }, (_, index) =>
+    sample(index, lastTs - (count - 1 - index) * 1000, disks),
+  );
   sessionStore.setMetricsHistory(samples, 1000);
 }
 
@@ -83,7 +85,7 @@ describe('DashboardView', () => {
   };
 
   it('renders the six KPI cards and three chart panels from real samples', () => {
-    prime(120, Date.now() / 1000);
+    prime(120, Date.now());
     render();
     expect(container.querySelectorAll('.ed-kpi')).toHaveLength(6);
     expect(container.querySelector('.ed-kpi h2')?.textContent).toBe('CPU 使用率');
@@ -95,21 +97,59 @@ describe('DashboardView', () => {
     expect(container.textContent).toContain('192.0.2.10');
   });
 
-  it('shows the disk donut, legend and mount chips for the real mount points', () => {
-    prime(120, Date.now() / 1000);
+  it('puts multi-value KPI details on separate rows instead of combining them', () => {
+    prime(120, Date.now());
     render();
-    expect(container.querySelector('.ed-donut-center strong')?.textContent).toBe('38%');
-    const chips = [...container.querySelectorAll<HTMLButtonElement>('.ed-mount-chip')];
-    expect(chips.map((chip) => chip.textContent)).toEqual(['/38%']);
-    expect(chips[0].getAttribute('aria-pressed')).toBe('true');
+    const memoryCard = [...container.querySelectorAll('.ed-kpi')]
+      .find((card) => card.querySelector('h2')?.textContent === '内存使用率');
+    expect(memoryCard).toBeDefined();
+    const labels = [...memoryCard!.querySelectorAll('.ed-kpi-rows span')].map((span) => span.textContent);
+    expect(labels).toEqual(['已用', '可用', 'Swap 空闲']);
+  });
+
+  it('lists every mount with used/unused progress bars instead of a single donut', () => {
+    const disks = [
+      ROOT_DISK,
+      {
+        mount: '/data',
+        filesystem: 'xfs',
+        total_bytes: 200 * GIB,
+        used_bytes: 50 * GIB,
+        available_bytes: 150 * GIB,
+        used_percent: 25,
+      },
+    ];
+    prime(120, Date.now(), disks);
+    render();
+    const items = [...container.querySelectorAll('.ed-disk-item')];
+    expect(items).toHaveLength(2);
+    expect(items.map((item) => item.querySelector('.ed-disk-mount code')?.textContent)).toEqual(['/', '/data']);
+    expect(items.map((item) => item.querySelector<HTMLElement>('.ed-disk-bar-used')?.style.width)).toEqual(['38%', '25%']);
+    expect(items[0].textContent).toContain('已使用 38.0 GiB · 38.0%');
+    expect(items[0].textContent).toContain('未使用 62.0 GiB · 62.0%');
+    expect(items[1].textContent).toContain('已使用 50.0 GiB · 25.0%');
+    expect(items[1].textContent).toContain('未使用 150.0 GiB · 75.0%');
+    expect(items[0].querySelector('.ed-disk-bar')?.getAttribute('aria-valuenow')).toBe('38');
+    expect(container.querySelector('.ed-donut')).toBeNull();
+    expect(container.querySelectorAll('.ed-mount-chip')).toHaveLength(0);
+  });
+
+  it('uses one shared time-range selector at the top of the dashboard', () => {
+    prime(120, Date.now());
+    render();
+    const selects = [...container.querySelectorAll<HTMLSelectElement>('select')];
+    expect(selects).toHaveLength(1);
+    expect(selects[0].getAttribute('aria-label')).toBe('全部曲线时间范围');
+    expect(container.querySelector('.ed-dashboard-meta .ed-range-control select')).toBe(selects[0]);
+    expect(container.querySelectorAll('.ed-chart-panel .ed-range-select')).toHaveLength(0);
   });
 
   it('marks the device online while samples are fresh and interrupts when stale', () => {
-    prime(120, Date.now() / 1000);
+    prime(120, Date.now());
     render();
     expect(container.querySelector('.ed-status-pill.online')?.textContent).toContain('在线');
 
-    prime(120, Date.now() / 1000 - 3600);
+    prime(120, Date.now() - 3600_000);
     render();
     expect(container.querySelector('.ed-status-pill.warning')?.textContent).toContain('数据中断');
   });

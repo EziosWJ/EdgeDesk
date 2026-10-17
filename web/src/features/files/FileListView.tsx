@@ -1,4 +1,4 @@
-import type { MouseEvent } from 'react';
+import type { KeyboardEvent, MouseEvent } from 'react';
 import { ArrowDown, ArrowUp, CornerLeftUp } from 'lucide-react';
 import { Icon } from '../../components/Icon';
 import { formatBytes, formatTime } from '../../services/api';
@@ -58,8 +58,18 @@ export function FileListView({
     onOpen(entry);
   };
 
+  const sortProps = (key: SortKey) => ({
+    onClick: () => onToggleSort(key),
+    onKeyDown: (event: KeyboardEvent<HTMLTableCellElement>) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      onToggleSort(key);
+    },
+    tabIndex: 0,
+  });
+
   return (
-    <div className="ed-table-wrap ed-panel" aria-busy={loading}>
+    <div className="ed-table-wrap" aria-busy={loading}>
       <table className="ed-table ed-files-table">
         <thead>
           <tr>
@@ -72,21 +82,21 @@ export function FileListView({
               />
             </th>
             <th
-              onClick={() => onToggleSort('name')}
+              {...sortProps('name')}
               className="sortable ed-col-name"
               aria-sort={sort === 'name' ? (desc ? 'descending' : 'ascending') : 'none'}
             >
               名称 <SortMark active={sort === 'name'} desc={desc} />
             </th>
             <th
-              onClick={() => onToggleSort('size')}
+              {...sortProps('size')}
               className="sortable ed-col-size"
               aria-sort={sort === 'size' ? (desc ? 'descending' : 'ascending') : 'none'}
             >
               大小 <SortMark active={sort === 'size'} desc={desc} />
             </th>
             <th
-              onClick={() => onToggleSort('mtime')}
+              {...sortProps('mtime')}
               className="sortable ed-col-time"
               aria-sort={sort === 'mtime' ? (desc ? 'descending' : 'ascending') : 'none'}
             >

@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -6,6 +7,7 @@ import {
   List,
   PenLine,
   RefreshCw,
+  SlidersHorizontal,
   SquareTerminal,
   Trash2,
   Upload,
@@ -71,8 +73,29 @@ export function FileToolbar({
   onUpload,
   onOpenTerminal,
 }: Props) {
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const viewMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!viewMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (viewMenuRef.current && target instanceof Node && viewMenuRef.current.contains(target)) return;
+      setViewMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setViewMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [viewMenuOpen]);
+
   return (
-    <div className="ed-files-toolbar ed-panel">
+    <div className="ed-files-toolbar">
       <div className="ed-breadcrumb-row">
         <button
           type="button"
@@ -108,26 +131,6 @@ export function FileToolbar({
             onChange={(event) => onFilterChange(event.target.value)}
           />
         </label>
-        <div className="ed-viewswitch" role="group" aria-label="视图类型">
-          <button
-            type="button"
-            aria-pressed={view === 'list'}
-            title="列表视图"
-            aria-label="列表视图"
-            onClick={() => onViewChange('list')}
-          >
-            <Icon icon={List} size={16} />
-          </button>
-          <button
-            type="button"
-            aria-pressed={view === 'grid'}
-            title="网格视图"
-            aria-label="网格视图"
-            onClick={() => onViewChange('grid')}
-          >
-            <Icon icon={LayoutGrid} size={16} />
-          </button>
-        </div>
         <button
           type="button"
           className="ed-icon-button"
@@ -138,81 +141,121 @@ export function FileToolbar({
         >
           <Icon icon={RefreshCw} size={16} />
         </button>
+        <div className="ed-view-options" ref={viewMenuRef}>
+          <button
+            type="button"
+            className="ed-icon-button"
+            title="视图选项"
+            aria-label="视图选项"
+            aria-expanded={viewMenuOpen}
+            onClick={() => setViewMenuOpen((value) => !value)}
+          >
+            <Icon icon={SlidersHorizontal} size={16} />
+          </button>
+          {viewMenuOpen && (
+            <div className="ed-view-menu" role="group" aria-label="视图选项">
+              <label className="ed-toggle">
+                <input type="checkbox" checked={showHidden} onChange={onToggleHidden} />
+                显示隐藏文件
+              </label>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="ed-action-row">
-        {selection ? (
-          <>
-            <span className="ed-selection-count" role="status">
-              已选 {selection.count} 项
-            </span>
-            {selection.single?.type === 'file' && (
-              <a className="ed-button" href={api.downloadUrl(selection.single.path)}>
-                <Icon icon={Download} size={15} />
-                下载
-              </a>
-            )}
-            {selection.single && (
-              <button type="button" className="ed-button" onClick={() => selection.onRename(selection.single!)}>
-                <Icon icon={PenLine} size={15} />
-                重命名
+        <div className="ed-action-primary">
+          {selection ? (
+            <>
+              <span className="ed-selection-count" role="status">
+                已选 {selection.count} 项
+              </span>
+              {selection.single?.type === 'file' && (
+                <a className="ed-button" href={api.downloadUrl(selection.single.path)}>
+                  <Icon icon={Download} size={15} />
+                  下载
+                </a>
+              )}
+              {selection.single && (
+                <button type="button" className="ed-button" onClick={() => selection.onRename(selection.single!)}>
+                  <Icon icon={PenLine} size={15} />
+                  重命名
+                </button>
+              )}
+              <button type="button" className="ed-button danger" onClick={selection.onDelete}>
+                <Icon icon={Trash2} size={15} />
+                删除
               </button>
-            )}
-            <button type="button" className="ed-button danger" onClick={selection.onDelete}>
-              <Icon icon={Trash2} size={15} />
-              删除
+              <button type="button" className="ed-button" onClick={selection.onClear}>
+                <Icon icon={X} size={15} />
+                取消选择
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="ed-button primary" onClick={onUpload}>
+                <Icon icon={Upload} size={15} />
+                上传文件
+              </button>
+              <button type="button" className="ed-button" onClick={onNewFolder}>
+                新建文件夹
+              </button>
+              <button
+                type="button"
+                className="ed-button"
+                onClick={onOpenTerminal}
+                title="在浮动窗口中打开 Bash"
+              >
+                <Icon icon={SquareTerminal} size={15} />
+                在当前目录打开终端
+              </button>
+            </>
+          )}
+        </div>
+
+        <div className="ed-action-tools">
+          <span className="ed-sort-control">
+            <label htmlFor="ed-files-sort">排序</label>
+            <select
+              id="ed-files-sort"
+              value={sort}
+              onChange={(event) => onSortChange(event.target.value as SortKey)}
+            >
+              <option value="name">名称</option>
+              <option value="size">大小</option>
+              <option value="mtime">修改时间</option>
+            </select>
+            <button
+              type="button"
+              className="ed-icon-button"
+              onClick={onToggleDesc}
+              title={desc ? '降序' : '升序'}
+              aria-label={desc ? '切换为升序' : '切换为降序'}
+            >
+              <Icon icon={desc ? ArrowDown : ArrowUp} size={14} />
             </button>
-            <button type="button" className="ed-button" onClick={selection.onClear}>
-              <Icon icon={X} size={15} />
-              取消选择
-            </button>
-          </>
-        ) : (
-          <>
-            <button type="button" className="ed-button primary" onClick={onUpload}>
-              <Icon icon={Upload} size={15} />
-              上传文件
-            </button>
-            <button type="button" className="ed-button" onClick={onNewFolder}>
-              新建文件夹
+          </span>
+          <div className="ed-viewswitch" role="group" aria-label="视图类型">
+            <button
+              type="button"
+              aria-pressed={view === 'list'}
+              title="列表视图"
+              aria-label="列表视图"
+              onClick={() => onViewChange('list')}
+            >
+              <Icon icon={List} size={16} />
             </button>
             <button
               type="button"
-              className="ed-button"
-              onClick={onOpenTerminal}
-              title="在浮动窗口中打开 Bash"
+              aria-pressed={view === 'grid'}
+              title="网格视图"
+              aria-label="网格视图"
+              onClick={() => onViewChange('grid')}
             >
-              <Icon icon={SquareTerminal} size={15} />
-              在当前目录打开终端
+              <Icon icon={LayoutGrid} size={16} />
             </button>
-            {view === 'grid' && (
-              <span className="ed-sort-control">
-                <label htmlFor="ed-files-sort">排序</label>
-                <select
-                  id="ed-files-sort"
-                  value={sort}
-                  onChange={(event) => onSortChange(event.target.value as SortKey)}
-                >
-                  <option value="name">名称</option>
-                  <option value="size">大小</option>
-                  <option value="mtime">修改时间</option>
-                </select>
-                <button
-                  type="button"
-                  className="ed-icon-button"
-                  onClick={onToggleDesc}
-                  title={desc ? '降序' : '升序'}
-                >
-                  <Icon icon={desc ? ArrowDown : ArrowUp} size={14} />
-                </button>
-              </span>
-            )}
-          </>
-        )}
-        <label className="ed-toggle" title="同时作用于目录树和文件列表">
-          <input type="checkbox" checked={showHidden} onChange={onToggleHidden} />
-          显示隐藏文件
-        </label>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -24,11 +24,20 @@ describe('Sidebar', () => {
     });
   };
 
-  it('renders the modules and marks the active one', () => {
+  it('renders grouped modules and marks the active one', () => {
     render('files');
     const items = [...container.querySelectorAll<HTMLButtonElement>('.nav-item')];
-    expect(items.map((item) => item.textContent)).toEqual(['仪表盘', '文件管理', '终端工作区', '设置']);
-    expect(container.querySelector('.nav-item.active')?.textContent).toBe('文件管理');
+    expect(items.map((item) => item.querySelector('.nav-label')?.textContent)).toEqual([
+      '仪表盘',
+      '文件管理',
+      '终端工作区',
+      '设置',
+    ]);
+    expect(container.querySelector('.nav-item.active .nav-label')?.textContent).toBe('文件管理');
+    expect([...container.querySelectorAll('.nav-section-label')].map((label) => label.textContent)).toEqual([
+      '工作区',
+      '系统',
+    ]);
   });
 
   it('reports the selected module', () => {

@@ -92,23 +92,23 @@ describe('axis helpers', () => {
 });
 
 describe('time helpers', () => {
-  const base = new Date(2026, 0, 1, 12, 0, 0).getTime() / 1000;
+  const base = new Date(2026, 0, 1, 12, 0, 0).getTime();
 
   it('labels a short window with seconds and a long window without', () => {
-    expect(xTickLabels([base, base + 1, base + 2, base + 3, base + 4])).toEqual([
+    expect(xTickLabels([base, base + 1000, base + 2000, base + 3000, base + 4000])).toEqual([
       '12:00:00',
       '12:00:01',
       '12:00:02',
       '12:00:03',
       '12:00:04',
     ]);
-    const long = Array.from({ length: 5 }, (_, index) => base + index * 120);
+    const long = Array.from({ length: 5 }, (_, index) => base + index * 120_000);
     expect(xTickLabels(long)).toEqual(['12:00', '12:02', '12:04', '12:06', '12:08']);
   });
 
   it('derives the boot moment from uptime and formats it', () => {
     const sample = { ts: 1_000_000, uptime_seconds: 400 } as MetricsSample;
-    expect(bootMoment(sample)).toBe(999_600);
-    expect(formatDateTime(new Date(2026, 0, 1, 8, 5).getTime() / 1000)).toBe('2026-01-01 08:05');
+    expect(bootMoment(sample)).toBe(600_000);
+    expect(formatDateTime(new Date(2026, 0, 1, 8, 5).getTime())).toBe('2026-01-01 08:05');
   });
 });

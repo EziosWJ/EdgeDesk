@@ -2,7 +2,6 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { Activity, CircuitBoard, Cpu, HardDrive, MemoryStick, Timer } from 'lucide-react';
 import { Icon } from '../../components/Icon';
-import { DonutChart } from '../../components/DonutChart';
 import { MetricChart } from '../../components/MetricChart';
 import { Sparkline } from '../../components/Sparkline';
 import { api, formatBytes, formatPercent, formatRate, formatUptime } from '../../services/api';
@@ -67,7 +66,7 @@ function primaryInterfaceAddress(addresses: readonly string[]): string | null {
 
 function RangeSelect({ value, onChange }: { value: number; onChange: (seconds: number) => void }) {
   return (
-    <select className="ed-range-select" value={value} onChange={(event) => onChange(Number(event.target.value))} aria-label="曲线时间范围">
+    <select className="ed-range-select" value={value} onChange={(event) => onChange(Number(event.target.value))} aria-label="全部曲线时间范围">
       <option value={60}>1 分钟</option>
       <option value={300}>5 分钟</option>
       <option value={600}>10 分钟</option>
@@ -81,7 +80,6 @@ export function DashboardView() {
   const preferences = usePreferences();
   const intervalMs = sessionStore.intervalMs;
   const [rangeSeconds, setRangeSeconds] = useState(preferences.dashboard_metrics_window);
-  const [selectedMount, setSelectedMount] = useState<string | null>(null);
   const now = useClock();
 
   useEffect(() => {
@@ -142,17 +140,16 @@ export function DashboardView() {
 
   const disks = latest?.disks ?? [];
   const primaryDisk = disks.find((disk) => disk.mount === '/') ?? disks[0] ?? null;
-  const activeDisk = (selectedMount ? disks.find((disk) => disk.mount === selectedMount) : null) ?? primaryDisk;
   const diskValues = primaryDisk
     ? visible.map((sample) => sample.disks.find((disk) => disk.mount === primaryDisk.mount)?.used_percent ?? null)
     : [];
   const loadText =
     latest && latest.cpu.load1 !== null
-      ? `${latest.cpu.load1.toFixed(2)} / ${latest.cpu.load5?.toFixed(2) ?? '—'} / ${latest.cpu.load15?.toFixed(2) ?? '—'}`
+      ? `${latest.cpu.load1.toFixed(2)}/${latest.cpu.load5?.toFixed(2) ?? '—'}/${latest.cpu.load15?.toFixed(2) ?? '—'}`
       : '—';
 
   const hardUnavailable = [...unavailable].filter((code) => code !== 'network_rate_initial');
-  const staleSeconds = latest ? Math.max(0, now.getTime() / 1000 - latest.ts) : null;
+  const staleSeconds = latest ? Math.max(0, (now.getTime() - latest.ts) / 1000) : null;
   const status = !latest
     ? { tone: 'warning', text: '等待数据', detail: '尚未收到指标采样，正在连接服务。' }
     : staleSeconds !== null && staleSeconds > Math.max(5, (intervalMs * 3) / 1000)
@@ -177,6 +174,10 @@ export function DashboardView() {
             </span>
           </span>
           <span className="ed-badge subtle">采样 {intervalMs} ms</span>
+          <div className="ed-range-control">
+            <span>曲线范围</span>
+            <RangeSelect value={rangeSeconds} onChange={changeRange} />
+          </div>
         </div>
       </div>
 
@@ -206,8 +207,8 @@ export function DashboardView() {
                   <b>{latest.cpu.cores} 核</b>
                 </div>
                 <div>
-                  <span>负载 1/5/15</span>
-                  <b>{loadText}</b>
+                  <span>负载</span>
+                  <b title="1 分钟 / 5 分钟 / 15 分钟平均负载">{loadText}</b>
                 </div>
               </div>
             </KpiCard>
@@ -228,10 +229,16 @@ export function DashboardView() {
                   <b>{latest.memory ? formatBytes(latest.memory.used_kb * 1024) : '—'}</b>
                 </div>
                 <div>
-                  <span>可用 / Swap 空闲</span>
+                  <span>可用</span>
+                  <b>{latest.memory ? formatBytes(latest.memory.available_kb * 1024) : '—'}</b>
+                </div>
+                <div>
+                  <span>Swap 空闲</span>
                   <b>
                     {latest.memory
-                      ? `${formatBytes(latest.memory.available_kb * 1024)} / ${formatBytes(latest.memory.swap_free_kb * 1024)}`
+                      ? latest.memory.swap_total_kb > 0
+                        ? formatBytes(latest.memory.swap_free_kb * 1024)
+                        : '未启用'
                       : '—'}
                   </b>
                 </div>
@@ -251,11 +258,17 @@ export function DashboardView() {
               <div className="ed-kpi-rows">
                 <div>
                   <span>挂载点</span>
-                  <b>{primaryDisk ? `${primaryDisk.mount}（${primaryDisk.filesystem}）` : '—'}</b>
+                  <b className="ellipsis" title={primaryDisk ? `${primaryDisk.mount}（${primaryDisk.filesystem}）` : undefined}>
+                    {primaryDisk ? `${primaryDisk.mount}（${primaryDisk.filesystem}）` : '—'}
+                  </b>
                 </div>
                 <div>
-                  <span>已用 / 总量</span>
-                  <b>{primaryDisk ? `${formatBytes(primaryDisk.used_bytes)} / ${formatBytes(primaryDisk.total_bytes)}` : '—'}</b>
+                  <span>已用</span>
+                  <b>{primaryDisk ? formatBytes(primaryDisk.used_bytes) : '—'}</b>
+                </div>
+                <div>
+                  <span>总量</span>
+                  <b>{primaryDisk ? formatBytes(primaryDisk.total_bytes) : '—'}</b>
                 </div>
               </div>
             </KpiCard>
@@ -271,16 +284,18 @@ export function DashboardView() {
               <Sparkline values={throughput} color="var(--ed-accent)" height={54} label="throughput" showValue={false} />
               <div className="ed-kpi-rows">
                 <div>
-                  <span>↑ 发送 / ↓ 接收</span>
-                  <b>
-                    {formatRate(sumRates((item) => item.tx_bytes_per_second))} / {formatRate(sumRates((item) => item.rx_bytes_per_second))}
-                  </b>
+                  <span>发送 ↑</span>
+                  <b>{formatRate(sumRates((item) => item.tx_bytes_per_second))}</b>
                 </div>
                 <div>
-                  <span>接口 / IP</span>
-                  <b title={networkAddressSummary || undefined}>
+                  <span>接收 ↓</span>
+                  <b>{formatRate(sumRates((item) => item.rx_bytes_per_second))}</b>
+                </div>
+                <div>
+                  <span>IP</span>
+                  <b className="ellipsis" title={networkAddressSummary || undefined}>
                     {latest.network.length > 0
-                      ? `${latest.network.length} 个${primaryNetworkAddress ? ` · ${primaryNetworkAddress}` : ' · IP 未分配'}`
+                      ? primaryNetworkAddress ?? 'IP 未分配'
                       : '—'}
                   </b>
                 </div>
@@ -308,7 +323,7 @@ export function DashboardView() {
                 <strong className="ed-kpi-value ed-kpi-value-sm">{latest.arch || '—'}</strong>
               </div>
               <div className="ed-kpi-rows">
-                <div>
+                <div className="stacked">
                   <span>内核版本</span>
                   <b>{latest.kernel || '—'}</b>
                 </div>
@@ -324,7 +339,6 @@ export function DashboardView() {
             <article className="ed-panel ed-chart-panel">
               <header className="ed-panel-head">
                 <h2>CPU 使用率</h2>
-                <RangeSelect value={rangeSeconds} onChange={changeRange} />
               </header>
               <ul className="ed-legend">
                 <li>
@@ -343,7 +357,6 @@ export function DashboardView() {
             <article className="ed-panel ed-chart-panel">
               <header className="ed-panel-head">
                 <h2>内存使用率</h2>
-                <RangeSelect value={rangeSeconds} onChange={changeRange} />
               </header>
               <ul className="ed-legend">
                 <li>
@@ -370,7 +383,6 @@ export function DashboardView() {
             <article className="ed-panel ed-chart-panel">
               <header className="ed-panel-head">
                 <h2>网络收发（{networkScale.unit}）</h2>
-                <RangeSelect value={rangeSeconds} onChange={changeRange} />
               </header>
               <ul className="ed-legend">
                 <li>
@@ -419,61 +431,59 @@ export function DashboardView() {
           </section>
 
           <section className="ed-bottom-grid">
-            <article className="ed-panel ed-chart-panel">
+            <article className="ed-panel ed-chart-panel ed-disk-panel">
               <header className="ed-panel-head">
                 <h2>磁盘使用情况</h2>
-                <span className="ed-panel-note">{disks.length > 0 ? `${disks.length} 个挂载点` : '—'}</span>
+                <span className="ed-panel-note">
+                  {disks.length > 0 ? `${disks.length} 个挂载点 · 已使用 / 未使用` : '—'}
+                </span>
               </header>
-              {activeDisk ? (
-                <>
-                  <div className="ed-disk-body">
-                    <DonutChart percent={activeDisk.used_percent} />
-                    <div className="ed-disk-detail">
-                      <div className="ed-disk-path">
-                        <code>{activeDisk.mount}</code>
-                        <span className="ed-badge subtle">{activeDisk.filesystem}</span>
-                      </div>
-                      <div className="ed-disk-amount">
-                        {formatBytes(activeDisk.used_bytes)} / {formatBytes(activeDisk.total_bytes)}
-                      </div>
-                      <ul className="ed-disk-legend">
-                        <li>
-                          <span className="ed-dot primary" />
-                          已使用
-                          <b>
-                            {formatBytes(activeDisk.used_bytes)} · {formatPercent(activeDisk.used_percent)}
-                          </b>
-                        </li>
-                        <li>
-                          <span className="ed-dot accent" />
-                          可用
-                          <b>
-                            {formatBytes(activeDisk.available_bytes)} · {formatPercent(100 - activeDisk.used_percent)}
-                          </b>
-                        </li>
-                        <li>
-                          <span className="ed-dot muted" />
-                          总容量
-                          <b>{formatBytes(activeDisk.total_bytes)}</b>
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-                  <div className="ed-mount-list" role="group" aria-label="切换挂载点">
-                    {disks.map((disk) => (
-                      <button
-                        key={disk.mount}
-                        type="button"
-                        aria-pressed={disk.mount === activeDisk.mount}
-                        className={`ed-mount-chip ${disk.mount === activeDisk.mount ? 'active' : ''}`}
-                        onClick={() => setSelectedMount(disk.mount)}
-                      >
-                        <code>{disk.mount}</code>
-                        <span>{formatPercent(disk.used_percent, 0)}</span>
-                      </button>
-                    ))}
-                  </div>
-                </>
+              {disks.length > 0 ? (
+                <ul className="ed-disk-list">
+                  {disks.map((disk) => {
+                    const usedPercent = Math.min(100, Math.max(0, disk.used_percent));
+                    const freePercent = 100 - usedPercent;
+                    const unusedBytes = Math.max(0, disk.total_bytes - disk.used_bytes);
+                    return (
+                      <li key={disk.mount} className="ed-disk-item">
+                        <div className="ed-disk-item-head">
+                          <div className="ed-disk-mount">
+                            <code title={disk.mount}>{disk.mount}</code>
+                            <span className="ed-badge subtle">{disk.filesystem}</span>
+                          </div>
+                          <div className="ed-disk-usage">
+                            <b>{formatPercent(usedPercent)}</b>
+                            <span>
+                              {formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)}
+                            </span>
+                          </div>
+                        </div>
+                        <div
+                          className="ed-disk-bar"
+                          role="progressbar"
+                          aria-label={`${disk.mount} 磁盘使用率`}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={Number(usedPercent.toFixed(1))}
+                          aria-valuetext={`已使用 ${formatBytes(disk.used_bytes)}，未使用 ${formatBytes(unusedBytes)}`}
+                        >
+                          <span className="ed-disk-bar-used" style={{ width: `${usedPercent}%` }} />
+                          <span className="ed-disk-bar-free" style={{ width: `${freePercent}%` }} />
+                        </div>
+                        <div className="ed-disk-item-foot">
+                          <span>
+                            <span className="ed-dot primary" />
+                            已使用 {formatBytes(disk.used_bytes)} · {formatPercent(usedPercent)}
+                          </span>
+                          <span title={`普通用户可用 ${formatBytes(disk.available_bytes)}`}>
+                            <span className="ed-dot accent" />
+                            未使用 {formatBytes(unusedBytes)} · {formatPercent(freePercent)}
+                          </span>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
               ) : (
                 <div className="ed-empty small">
                   <img src={asset('illustrations/monitor-unavailable.svg')} alt="" />
@@ -482,7 +492,7 @@ export function DashboardView() {
               )}
             </article>
 
-            <article className="ed-panel ed-chart-panel">
+            <article className="ed-panel ed-chart-panel ed-status-panel">
               <header className="ed-panel-head">
                 <h2>设备状态</h2>
                 <img className="ed-device-art" src={asset('illustrations/edge-device.svg')} alt="" width="84" height="72" />

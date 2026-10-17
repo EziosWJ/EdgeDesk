@@ -193,18 +193,21 @@ describe('FileWorkspace', () => {
     await flush();
     const before = listingCalls(mock).length;
 
+    expect(container.querySelector('.ed-sort-control')).not.toBeNull();
     act(() => container.querySelector<HTMLElement>('[aria-label="网格视图"]')!.click());
     await flush();
     expect(gridNames()).toEqual(['.cache', 'opt', 'var', '.env', 'README.md', 'archive.bin']);
     expect(container.querySelector('.ed-file-card.selected .ed-file-card-name')?.textContent).toBe('README.md');
     expect(listingCalls(mock)).toHaveLength(before); // switching views never refetches
     expect(window.localStorage.getItem('edgedesk.files.view')).toBe('grid');
+    expect(container.querySelector('.ed-sort-control')).not.toBeNull();
 
     act(() => container.querySelector<HTMLElement>('[aria-label="列表视图"]')!.click());
     await flush();
     expect(rowFor('README.md').className).toContain('selected');
     expect(rowFor('README.md').querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true);
     expect(window.localStorage.getItem('edgedesk.files.view')).toBe('list');
+    expect(container.querySelector('.ed-sort-control')).not.toBeNull();
   });
 
   it('filters the current page locally and explains the scope', async () => {
@@ -231,7 +234,8 @@ describe('FileWorkspace', () => {
     expect(tableRows()).toContain('.env');
     expect(treeLabels()).toContain('.cache');
 
-    const toggle = container.querySelector<HTMLInputElement>('.ed-toggle input')!;
+    act(() => container.querySelector<HTMLElement>('[aria-label="视图选项"]')!.click());
+    const toggle = container.querySelector<HTMLInputElement>('.ed-view-menu .ed-toggle input')!;
     act(() => toggle.click());
     await flush();
 
@@ -363,7 +367,7 @@ describe('FileWorkspace', () => {
     await flush();
     expect(uploads.map((item) => item.name)).toEqual(['notes.txt', 'README.md']);
     expect(uploads[0].url).toBe('/api/files/content?path=%2Fnotes.txt');
-    expect(container.textContent).toContain('已上传 2 个文件');
+    expect(container.querySelector('.ed-table-footer')?.textContent).toContain('已上传 2 个文件');
     expect(mock.calls.some((call) => call.method === 'GET' && call.url.startsWith('/api/files?'))).toBe(true);
   });
 

@@ -42,7 +42,7 @@ export function FileGridView({
   };
 
   return (
-    <section className="ed-file-grid-wrap ed-panel" aria-busy={loading}>
+    <section className="ed-file-grid-wrap" aria-busy={loading}>
       <header className="ed-file-grid-head">
         <SelectionHeaderCheckbox
           checked={allSelected}
@@ -94,6 +94,9 @@ export function FileGridView({
             </div>
             <div className="ed-file-card-meta">
               <span className="ed-file-card-kind">{entryKindLabel(entry)}</span>
+              <span className="ed-file-card-meta-sep" aria-hidden="true">
+                ·
+              </span>
               <span title={entryMeta(entry)}>{entryMeta(entry)}</span>
             </div>
           </article>

@@ -137,12 +137,6 @@ export default function App() {
       <Sidebar active={active} health={health} onSelect={setActive} />
 
       <div className="content-shell">
-        <header className="topbar">
-          <div className="topbar-title">
-            EdgeDesk <span>/ V1.1 单二进制运维面板</span>
-          </div>
-          <span className="version">文件 · 终端 · 监控 · 无数据库</span>
-        </header>
         <main className="main-area">
           {active === 'dashboard' && <DashboardView />}
           {active === 'files' && <FilesView />}
