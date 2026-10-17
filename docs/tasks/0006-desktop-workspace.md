@@ -7,12 +7,13 @@
 
 ## 1. 实施约束
 
-1. 先阅读 AGENTS.md、SPEC-0001 至 SPEC-0006、ADR-0001/0002/0005/0007/0008/0009/0010，再修改代码。
-2. 不重写 C++ 后端、不新增 API/数据库、不改变认证和授权契约、不引入新的窗口组件库。
-3. 不删除现有文件管理、终端多 Tab、Bash 登录环境、会话刷新重连、指标实时曲线、设置和主题能力。
-4. 窗口关闭、窗口最小化、WebSocket 断开和 Bash 会话结束必须保持语义区分。
-5. 每个 Issue 独立实现、独立测试；完成标准以测试和浏览器实际行为为依据，不能只凭 Agent 自述。
-6. 修改行为代码后执行 scripts/test-fast.sh；提交前执行 scripts/test-pr.sh。纯文档改动可做 Markdown/链接检查。
+1. 先阅读 AGENTS.md、SPEC-0001 至 SPEC-0006、ADR-0001/0002/0005/0007/0008/0009/0010，并阅读 docs/design/prototypes/README.md、prototype-guidelines.md、prototype-conformance.md，再修改代码。
+2. 不重写 C++ 后端、不新增 API/数据库、不改变认证和授权契约、不引入新的窗口组件库；复用 web/public/assets/desktop/ 的壁纸与 SVG sprite、现有设计 Token 和 Icon 封装。
+3. 不把原型截图裁切成生产 UI；窗口、图表、表格、指标卡必须是实际 React/HTML/CSS 组件。原型中的演示数据不得进入生产逻辑。
+4. 不删除现有文件管理、终端多 Tab、Bash 登录环境、会话刷新重连、指标实时曲线、设置和主题能力。
+5. 窗口关闭、窗口最小化、WebSocket 断开和 Bash 会话结束必须保持语义区分。
+6. 每个 Issue 独立实现、独立测试；完成标准以测试和浏览器实际行为为依据，不能只凭 Agent 自述。
+7. 修改行为代码后执行 scripts/test-fast.sh；提交前执行 scripts/test-pr.sh。纯文档改动可做 Markdown/链接检查。
 
 ## 2. 推荐实施阶段
 
