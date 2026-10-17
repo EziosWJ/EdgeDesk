@@ -22,7 +22,7 @@
 | [ADR-0004](adr/0004-path-sandbox.md) | 目录 FD + openat 路径沙箱、符号链接策略 | 已确认 |
 | [ADR-0005](adr/0005-terminal-architecture.md) | PTY、线程边界、会话生命周期与重连 | 已确认 |
 | [ADR-0006](adr/0006-system-metrics.md) | 指标采集、内存窗口与增量推送 | 已确认 |
-| [ADR-0007](adr/0007-frontend-icon-library.md) | 前端图标库：Lucide（ISC，全站 UI）+ VS Code Icons 按需编译（文件类型） | 已确认（2026-10-17） |
+| [ADR-0007](adr/0007-frontend-icon-library.md) | 前端图标库：Lucide（ISC，全站 UI）+ VS Code Icons 按需编译（文件类型） | 已确认（2026-10-17） |\n| [ADR-0008](adr/0008-authentication-and-settings.md) | V1.1 单管理员密码认证、首次初始化、独立 API Token 与系统设置 | 已确认决策；实现待完成 |
 
 ## Spec（要做什么）
 
@@ -31,7 +31,7 @@
 | [SPEC-0001](spec/0001-product-scope.md) | 项目定位、V1.0 范围及验收 |
 | [SPEC-0002](spec/0002-file-management.md) | 文件管理与文件工作区 |
 | [SPEC-0003](spec/0003-terminal-workspace.md) | Bash、终端 Tab、刷新重连、浮动窗口 |
-| [SPEC-0004](spec/0004-device-dashboard.md) | 设备基本资源与实时曲线 |
+| [SPEC-0004](spec/0004-device-dashboard.md) | 设备基本资源与实时曲线 |\n| [SPEC-0005](spec/0005-authentication-and-settings.md) | V1.1 管理员认证、首次初始化、系统设置与验收 |
 
 ## 设计素材
 
@@ -51,7 +51,7 @@
 
 - TLS 是否内置终止（当前由外部网关终止）。
 - OpenHarmony ARM64 是否作为正式发行平台。
-- 多用户/角色、会话持久化是否需要。
+- V1.1 首期是否开放高级部署配置的网页写入（当前决定为只读展示，后续逐项评估）。\n- 多用户/角色不在当前规划内；会话不跨服务进程重启持久化。
 - 浮动窗口布局在跨刷新后的自动恢复策略（当前仅恢复会话列表，不自动重开窗口）。
 
 ## 变更约定
