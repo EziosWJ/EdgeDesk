@@ -33,6 +33,10 @@ struct ListOptions {
     std::string sort = "name"; // name | size | mtime | type
     bool desc = false;
     bool show_hidden = true;
+    // Directory-tree helper: keep only real subdirectories of `path`.
+    // Symlinks to directories are deliberately excluded: the tree never
+    // follows links, so it must not offer them as expandable nodes.
+    bool dirs_only = false;
 };
 
 struct ListResult {

@@ -7,13 +7,25 @@ type Props = {
   max?: number | null;
   label?: string;
   unit?: string;
+  /** Overlay chip with the newest value; disable when the card already shows it. */
+  showValue?: boolean;
 };
 
 /**
  * Dependency-free SVG sparkline. Null samples (missing data) are skipped, so
  * gaps are drawn as straight segments instead of fake zeros.
  */
-export function Sparkline({ values, width = 260, height = 64, color = 'var(--ed-primary)', fill = true, max, label, unit }: Props) {
+export function Sparkline({
+  values,
+  width = 260,
+  height = 64,
+  color = 'var(--ed-primary)',
+  fill = true,
+  max,
+  label,
+  unit,
+  showValue = true,
+}: Props) {
   const points = values.filter((value): value is number => value !== null && Number.isFinite(value));
   const upper = max ?? (points.length > 0 ? Math.max(...points, 1) : 1);
   const lower = 0;
@@ -67,7 +79,7 @@ export function Sparkline({ values, width = 260, height = 64, color = 'var(--ed-
           />
         ))}
       </svg>
-      {last !== null && (
+      {showValue && last !== null && (
         <span className="ed-spark-value">
           {last.toFixed(unit === '%' ? 1 : 1)}
           {unit}

@@ -43,7 +43,7 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 
 | 方法 | 路径 | 参数 | 说明 |
 | --- | --- | --- | --- |
-| `GET` | `/api/files` | `path`，`page`(默认1)，`page_size`(≤1000，默认200)，`sort`=`name\|size\|mtime\|type`，`order`=`asc\|desc`，`hidden`=0/1 | 目录列表；目录优先，返回 `permissions`/`uid`/`gid`/`mime`/`text_editable`。 |
+| `GET` | `/api/files` | `path`，`page`(默认1)，`page_size`(≤1000，默认200)，`sort`=`name\|size\|mtime\|type`，`order`=`asc\|desc`，`hidden`=0/1，`dirs_only`=0/1 | 目录列表；目录优先，返回 `permissions`/`uid`/`gid`/`mime`/`text_editable`。`dirs_only=1` 只返回 `path` 的真实子目录（符号链接不跟随、不包含），供目录树按需加载，避免递归扫描。 |
 | `GET` | `/api/files/stat` | `path` | 单条目元数据（lstat 语义，不跟随符号链接）。 |
 | `GET` | `/api/files/text` | `path` | UTF-8 文本读取；超过 `--max-text-edit-size` 或二进制 → `413/415`。 |
 | `PUT` | `/api/files/text` | `path`，body 为文本 | 原子保存（临时文件 + fsync + renameat），保留原权限；非 UTF-8 → `415`。 |

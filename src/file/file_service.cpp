@@ -142,6 +142,7 @@ Error FileService::list(const ListOptions& options, ListResult& result) const {
         FileEntry entry;
         error = entry_from_stat(name, logical, info, entry);
         if (!error.ok()) continue;
+        if (options.dirs_only && !entry.is_dir) continue;
         result.entries.push_back(std::move(entry));
         ++seen;
     }

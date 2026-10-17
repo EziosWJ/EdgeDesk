@@ -108,6 +108,36 @@ void test_list(Fixture& fixture) {
     error = fixture.service->list(ListOptions{"/a.txt", 1, 10, "name", false, true}, result);
     CHECK(!error.ok());
 
+    // Directories only (on-demand directory-tree browsing): files are
+    // filtered out, only real subdirectories remain.
+    ListOptions dirs_options;
+    dirs_options.path = "/";
+    dirs_options.dirs_only = true;
+    error = fixture.service->list(dirs_options, result);
+    CHECK(error.ok());
+    CHECK_EQ(result.total, std::uint64_t{1});
+    CHECK_EQ(result.entries.size(), std::size_t{1});
+    CHECK_STR_EQ(result.entries.front().name, "docs");
+    CHECK(result.entries.front().is_dir);
+
+    dirs_options.path = "/docs";
+    error = fixture.service->list(dirs_options, result);
+    CHECK(error.ok());
+    CHECK_EQ(result.total, std::uint64_t{1});
+    CHECK_STR_EQ(result.entries.front().name, "nested");
+
+    // A symlink to a directory is not a real subdirectory: the tree never
+    // follows links, so it must not be listed as an expandable node.
+    const fs::path dir_link = fixture.root / "docs-link";
+    std::error_code link_error;
+    fs::create_symlink(fixture.root / "docs", dir_link, link_error);
+    CHECK(!link_error);
+    dirs_options.path = "/";
+    error = fixture.service->list(dirs_options, result);
+    CHECK(error.ok());
+    CHECK_EQ(result.total, std::uint64_t{1});
+    CHECK_STR_EQ(result.entries.front().name, "docs");
+
     // Traversal is rejected.
     error = fixture.service->list(ListOptions{"/../etc", 1, 10, "name", false, true}, result);
     CHECK(!error.ok());

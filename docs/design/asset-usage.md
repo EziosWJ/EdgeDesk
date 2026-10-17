@@ -14,7 +14,7 @@ web/
       illustrations/   edge-device.svg / empty-files.svg /
                        empty-terminal.svg / monitor-unavailable.svg /
                        session-disconnected.svg
-      icons/           13 个 24x24 导航、监控与操作图标
+      icons/           20 个 24x24 导航、监控、操作、布局与文件类型图标
       decorations/     panel-grid.svg / dot-grid.svg
       asset-manifest.json
   src/
@@ -38,6 +38,9 @@ docs/design/
 | `illustrations/monitor-unavailable.svg` | 采集失败/指标不可用 | 160–240px 宽 |
 | `illustrations/session-disconnected.svg` | 会话已断开占位图 | 160–240px 宽 |
 | `icons/*.svg` | 导航、指标、工具栏 | 20x20 或 24x24 |
+| `icons/list.svg` / `icons/grid.svg` | 文件管理视图切换（列表 / 网格） | 16x16（按钮内） |
+| `icons/refresh.svg` | 列表与目录树刷新按钮 | 16x16（按钮内） |
+| `icons/file.svg` / `icons/link.svg` / `icons/image.svg` | 文件类型图标（普通文件 / 符号链接 / 图片） | 16x16（列表）、22x22（网格） |
 | `decorations/*.svg` | 指标卡/侧栏微弱纹理 | CSS background，平铺 |
 
 完整索引：`web/public/assets/asset-manifest.json`。

@@ -51,13 +51,17 @@ export const api = {
   logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
   health: () => request<{ status: string; service: string; phase: number; version: string }>('/api/health'),
 
-  listFiles: (path: string, options: { page?: number; pageSize?: number; sort?: string; desc?: boolean; hidden?: boolean } = {}) => {
+  listFiles: (
+    path: string,
+    options: { page?: number; pageSize?: number; sort?: string; desc?: boolean; hidden?: boolean; dirsOnly?: boolean } = {},
+  ) => {
     const params = new URLSearchParams({ path });
     if (options.page) params.set('page', String(options.page));
     if (options.pageSize) params.set('page_size', String(options.pageSize));
     if (options.sort) params.set('sort', options.sort);
     if (options.desc) params.set('order', 'desc');
     if (options.hidden === false) params.set('hidden', '0');
+    if (options.dirsOnly) params.set('dirs_only', '1');
     return request<FileListing>(`/api/files?${params.toString()}`);
   },
   statFile: (path: string) =>

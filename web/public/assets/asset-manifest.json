@@ -33,7 +33,14 @@
       "icons/uptime.svg",
       "icons/upload.svg",
       "icons/download.svg",
-      "icons/edit.svg"
+      "icons/edit.svg",
+      "icons/panel-left.svg",
+      "icons/list.svg",
+      "icons/grid.svg",
+      "icons/refresh.svg",
+      "icons/file.svg",
+      "icons/link.svg",
+      "icons/image.svg"
     ]
   },
   "usage": "Treat these files as static assets under web/public; with Vite, refer to import.meta.env.BASE_URL + 'assets/...' (or /assets/... for root deployment)."

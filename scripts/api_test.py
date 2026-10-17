@@ -134,6 +134,15 @@ def test_files(cookie):
     check(status == 200, f"rename status {status}")
     status, _, _ = request("GET", "/api/files/stat?path=/dir2", cookie=cookie)
     check(status == 200, "renamed directory missing")
+
+    # 目录树按需加载：dirs_only 只返回真实子目录（符号链接不算）
+    status, payload, _ = request("GET", "/api/files?path=/&dirs_only=1", cookie=cookie)
+    check(status == 200, f"dirs_only list status {status}")
+    dirs = json_body(payload)["entries"]
+    check(all(item["type"] == "dir" for item in dirs), f"dirs_only leaked non-directories: {dirs}")
+    dir_names = {item["name"] for item in dirs}
+    check("docs" in dir_names and "dir2" in dir_names, f"dirs_only entries {dir_names}")
+    check("a.txt" not in dir_names and ".hidden" not in dir_names, f"dirs_only included files {dir_names}")
     status, _, _ = request("POST", "/api/files/rename", {"from": "/dir2", "to": "/edited.txt"}, cookie=cookie,
                            headers=origin)
     check(status == 409, f"rename over existing without overwrite status {status}")

@@ -1,0 +1,568 @@
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { PromptDialog } from '../../components/PromptDialog';
+import { api, formatBytes } from '../../services/api';
+import { asset } from '../../services/assets';
+import { windowStore } from '../../stores/windowStore';
+import type { FileEntry } from '../../types';
+import { DirectoryTree } from './DirectoryTree';
+import { FileGridView } from './FileGridView';
+import { FileListView } from './FileListView';
+import { FileToolbar } from './FileToolbar';
+import {
+  breadcrumbsFor,
+  clampTreeWidth,
+  filterEntries,
+  joinPath,
+  normalizePath,
+  opensInEditor,
+  parentPath,
+  readTreeWidthPreference,
+  readViewPreference,
+  writeTreeWidthPreference,
+  writeViewPreference,
+  type SortKey,
+  type ViewMode,
+} from './fileUtils';
+import { useDirectoryListing } from './useDirectoryListing';
+
+type DialogState =
+  | { type: 'mkdir' }
+  | { type: 'rename'; entry: FileEntry }
+  | { type: 'delete'; entries: FileEntry[] }
+  | null;
+
+const EMPTY_ENTRIES: FileEntry[] = [];
+
+function describeError(caught: unknown): string {
+  return caught instanceof Error ? caught.message : String(caught);
+}
+
+/**
+ * File workspace: directory tree + breadcrumb + toolbar + list/grid views over
+ * one shared listing and one shared selection. The tree keeps its own state
+ * (on-demand children cache); neither view owns the data.
+ */
+export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
+  const [path, setPath] = useState(() => normalizePath(initialPath));
+  const [showHidden, setShowHidden] = useState(true);
+  const [view, setView] = useState<ViewMode>(readViewPreference);
+  const [sort, setSort] = useState<SortKey>('name');
+  const [desc, setDesc] = useState(false);
+  const [page, setPage] = useState(1);
+  const [filter, setFilter] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  // Narrow layouts open without the drawer so it never covers the content;
+  // desktop keeps the tree visible by default (its state is not persisted).
+  const [treeVisible, setTreeVisible] = useState(
+    () => typeof window.matchMedia !== 'function' || !window.matchMedia('(max-width: 980px)').matches,
+  );
+  const [treeWidth, setTreeWidth] = useState(readTreeWidthPreference);
+  const [revision, setRevision] = useState(0);
+  const [dialog, setDialog] = useState<DialogState>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const treeWidthRef = useRef(treeWidth);
+
+  const listing = useDirectoryListing(path, { showHidden, sort, desc, page });
+  const { reload, loading: listingLoading } = listing;
+  // Stale payloads belong to a previous directory; never mix them into the view.
+  const data = listing.requestPath === path ? listing : null;
+  const entries = data?.entries ?? EMPTY_ENTRIES;
+  const loading = !data || listingLoading;
+  const listingError = data?.error ?? null;
+
+  const visibleEntries = useMemo(() => filterEntries(entries, filter), [entries, filter]);
+  const breadcrumbs = useMemo(() => breadcrumbsFor(path), [path]);
+  const selectedEntries = useMemo(
+    () => entries.filter((entry) => selected.has(entry.path)),
+    [entries, selected],
+  );
+  const pageCount = Math.max(1, Math.ceil((data?.total ?? 0) / (data?.pageSize ?? 200)));
+
+  // Directory changes reset the selection; reloads prune entries that vanished.
+  useEffect(() => {
+    setSelected(new Set());
+  }, [path]);
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const known = new Set(entries.map((entry) => entry.path));
+      const next = new Set([...prev].filter((item) => known.has(item)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [entries]);
+
+  const navigate = useCallback(
+    (target: string) => {
+      const next = normalizePath(target);
+      if (next === path) return; // clicking the active directory must not re-request it
+      setPath(next);
+      setPage(1);
+      setFilter('');
+      setActionError(null);
+      setSelected(new Set());
+    },
+    [path],
+  );
+
+  const refresh = useCallback(() => {
+    setActionError(null);
+    reload();
+    setRevision((value) => value + 1);
+  }, [reload]);
+
+  const openInEditor = (entry: FileEntry) => {
+    windowStore.open({ kind: 'editor', title: `编辑 ${entry.name}`, payload: { path: entry.path } });
+  };
+
+  const openInPreview = (entry: FileEntry) => {
+    windowStore.open({ kind: 'preview', title: `预览 ${entry.name}`, payload: { path: entry.path } });
+  };
+
+  const openEntry = (entry: FileEntry) => {
+    if (entry.type === 'dir') {
+      navigate(entry.path);
+      return;
+    }
+    if (entry.type === 'symlink') {
+      setNotice(`符号链接 → ${entry.link_target ?? '未知目标'}（出于安全策略默认不跟随）`);
+      return;
+    }
+    if (opensInEditor(entry)) openInEditor(entry);
+    else openInPreview(entry);
+  };
+
+  const openTerminalHere = async () => {
+    setActionError(null);
+    try {
+      const data = await api.createTerminal({ cwd: path, cols: 100, rows: 30 });
+      windowStore.open({ kind: 'terminal', title: `${path} · Bash`, payload: { sessionId: data.session.id } });
+    } catch (caught) {
+      setActionError(describeError(caught));
+    }
+  };
+
+  const handleUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploadPercent(0);
+    setActionError(null);
+    setNotice(null);
+    try {
+      for (const file of Array.from(files)) {
+        await api.upload(joinPath(path, file.name), file, (percent) => setUploadPercent(percent));
+        setNotice(`已上传 ${file.name}（${formatBytes(file.size)}，原子替换完成）`);
+      }
+      reload();
+      setRevision((value) => value + 1);
+    } catch (caught) {
+      setNotice(null);
+      setActionError(describeError(caught));
+    } finally {
+      setUploadPercent(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleMkdir = async (name: string) => {
+    setActionError(null);
+    try {
+      await api.mkdir(joinPath(path, name));
+      setNotice(`已创建目录 ${name}`);
+      reload();
+      setRevision((value) => value + 1);
+    } catch (caught) {
+      setActionError(describeError(caught));
+    }
+  };
+
+  const handleRename = async (entry: FileEntry, newName: string) => {
+    if (newName === entry.name) return;
+    setActionError(null);
+    try {
+      await api.rename(entry.path, joinPath(parentPath(entry.path), newName), false);
+      setNotice(`已重命名为 ${newName}`);
+      reload();
+      setRevision((value) => value + 1);
+    } catch (caught) {
+      setActionError(describeError(caught));
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!dialog || dialog.type !== 'delete') return;
+    const targets = dialog.entries;
+    setDeleting(true);
+    setActionError(null);
+    try {
+      const result = await api.remove(targets.map((entry) => entry.path));
+      setNotice(`已删除 ${result.removed_files} 个文件、${result.removed_dirs} 个目录`);
+      setSelected(new Set());
+      setDialog(null);
+      reload();
+      setRevision((value) => value + 1);
+    } catch (caught) {
+      setDialog(null);
+      setActionError(describeError(caught));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const toggleSort = useCallback(
+    (key: SortKey) => {
+      const nextDesc = sort === key ? !desc : false;
+      setSort(key);
+      setDesc(nextDesc);
+      setPage(1);
+    },
+    [sort, desc],
+  );
+
+  const toggleEntry = (entry: FileEntry, checked: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(entry.path);
+      else next.delete(entry.path);
+      return next;
+    });
+  };
+
+  const handleEntryClick = (entry: FileEntry, event: MouseEvent<HTMLElement>) => {
+    const additive = event.metaKey || event.ctrlKey || event.shiftKey;
+    setSelected((prev) => {
+      if (additive) {
+        const next = new Set(prev);
+        if (next.has(entry.path)) next.delete(entry.path);
+        else next.add(entry.path);
+        return next;
+      }
+      return new Set([entry.path]);
+    });
+  };
+
+  const toggleAll = (checked: boolean) => {
+    setSelected(checked ? new Set(visibleEntries.map((entry) => entry.path)) : new Set());
+  };
+
+  const changeView = (next: ViewMode) => {
+    setView(next);
+    writeViewPreference(next);
+  };
+
+  const onTreeResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    resizeRef.current = { startX: event.clientX, startWidth: treeWidth };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const onTreeResizeMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const resize = resizeRef.current;
+    if (!resize) return;
+    const next = clampTreeWidth(resize.startWidth + (event.clientX - resize.startX));
+    treeWidthRef.current = next;
+    setTreeWidth(next);
+  };
+  const onTreeResizeEnd = () => {
+    if (!resizeRef.current) return;
+    resizeRef.current = null;
+    writeTreeWidthPreference(treeWidthRef.current);
+  };
+
+  const singleFileSelection =
+    selectedEntries.length === 1 && selectedEntries[0].type === 'file' ? selectedEntries[0] : null;
+  const contentState: 'loading' | 'error' | 'empty' | 'filtered' | 'ready' = listingError
+    ? 'error'
+    : loading && entries.length === 0
+      ? 'loading'
+      : entries.length === 0
+        ? 'empty'
+        : visibleEntries.length === 0
+          ? 'filtered'
+          : 'ready';
+
+  const listViewProps = {
+    selected,
+    sort,
+    desc,
+    loading,
+    onToggleSort: toggleSort,
+    onNavigateUp: () => navigate(parentPath(path)),
+    onToggleAll: toggleAll,
+    onToggleEntry: toggleEntry,
+    onEntryClick: handleEntryClick,
+    onOpen: openEntry,
+    onPreview: openInPreview,
+    onEdit: openInEditor,
+    onRename: (entry: FileEntry) => setDialog({ type: 'rename', entry }),
+    onDelete: (entry: FileEntry) => setDialog({ type: 'delete', entries: [entry] }),
+  };
+
+  return (
+    <div
+      className={`ed-files-workspace${treeVisible ? '' : ' tree-collapsed'}`}
+      style={{ '--ed-tree-width': `${treeWidth}px` } as CSSProperties}
+    >
+      {treeVisible && (
+        <button
+          type="button"
+          className="ed-tree-backdrop"
+          aria-label="关闭目录树"
+          onClick={() => setTreeVisible(false)}
+        />
+      )}
+      <aside className="ed-files-tree ed-panel" aria-label="目录树面板">
+        <DirectoryTree
+          currentPath={path}
+          showHidden={showHidden}
+          revision={revision}
+          onSelect={navigate}
+          onCollapse={() => setTreeVisible(false)}
+        />
+        <div
+          className="ed-tree-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整目录树宽度"
+          title="拖动调整目录树宽度"
+          onPointerDown={onTreeResizeStart}
+          onPointerMove={onTreeResizeMove}
+          onPointerUp={onTreeResizeEnd}
+        />
+      </aside>
+      {!treeVisible && (
+        <button
+          type="button"
+          className="ed-files-tree-rail"
+          onClick={() => setTreeVisible(true)}
+          title="展开目录树"
+          aria-label="展开目录树"
+        >
+          »
+        </button>
+      )}
+
+      <section className="ed-files-main">
+        <FileToolbar
+          path={path}
+          breadcrumbs={breadcrumbs}
+          onNavigate={navigate}
+          onUp={() => navigate(parentPath(path))}
+          filter={filter}
+          onFilterChange={setFilter}
+          view={view}
+          onViewChange={changeView}
+          sort={sort}
+          desc={desc}
+          onSortChange={toggleSort}
+          onToggleDesc={() => setDesc((value) => !value)}
+          showHidden={showHidden}
+          onToggleHidden={() => {
+            setShowHidden((value) => !value);
+            setPage(1);
+          }}
+          loading={loading}
+          onRefresh={refresh}
+          selectionCount={selected.size}
+          downloadHref={singleFileSelection ? api.downloadUrl(singleFileSelection.path) : null}
+          onDeleteSelected={() => setDialog({ type: 'delete', entries: selectedEntries })}
+          onNewFolder={() => setDialog({ type: 'mkdir' })}
+          onUpload={() => fileInputRef.current?.click()}
+          onOpenTerminal={() => void openTerminalHere()}
+        />
+
+        {actionError && (
+          <div className="ed-alert danger" role="alert">
+            <span>{actionError}</span>
+            <button type="button" className="ed-link" onClick={() => setActionError(null)}>
+              关闭
+            </button>
+          </div>
+        )}
+        {notice && (
+          <div className="ed-alert info" role="status">
+            <span>{notice}</span>
+            <button type="button" className="ed-link" onClick={() => setNotice(null)}>
+              关闭
+            </button>
+          </div>
+        )}
+        {uploadPercent !== null && (
+          <div className="ed-alert info" role="status">
+            正在上传… <progress max={100} value={uploadPercent} /> {uploadPercent}%
+          </div>
+        )}
+        {selected.size > 0 && (
+          <div className="ed-selection-bar" role="status">
+            <span>已选 {selected.size} 项</span>
+            <div className="ed-toolbar">
+              {singleFileSelection && (
+                <a className="ed-button small" href={api.downloadUrl(singleFileSelection.path)}>
+                  下载
+                </a>
+              )}
+              {selectedEntries.length === 1 && (
+                <button
+                  type="button"
+                  className="ed-button small"
+                  onClick={() => setDialog({ type: 'rename', entry: selectedEntries[0] })}
+                >
+                  重命名
+                </button>
+              )}
+              <button
+                type="button"
+                className="ed-button small danger"
+                onClick={() => setDialog({ type: 'delete', entries: selectedEntries })}
+              >
+                删除
+              </button>
+              <button type="button" className="ed-button small" onClick={() => setSelected(new Set())}>
+                取消选择
+              </button>
+            </div>
+          </div>
+        )}
+
+        {contentState === 'error' && (
+          <div className="ed-files-state ed-panel" role="alert">
+            <img src={asset('illustrations/monitor-unavailable.svg')} alt="" />
+            <strong>目录加载失败</strong>
+            <p>{listingError}</p>
+            <div className="ed-toolbar">
+              <button type="button" className="ed-button primary" onClick={refresh}>
+                重试
+              </button>
+            </div>
+          </div>
+        )}
+        {contentState === 'loading' && (
+          <div className="ed-files-state ed-panel" aria-busy="true" aria-live="polite">
+            <span className="ed-spinner large" aria-hidden="true" />
+            <span>正在加载 {path} …</span>
+          </div>
+        )}
+        {contentState === 'empty' && (
+          <div className="ed-files-state ed-panel">
+            <img src={asset('illustrations/empty-files.svg')} alt="" />
+            <strong>当前目录为空</strong>
+            <p>这里还没有文件或子目录，可以上传文件或新建文件夹。</p>
+            <div className="ed-toolbar">
+              <button type="button" className="ed-button primary" onClick={() => fileInputRef.current?.click()}>
+                上传文件
+              </button>
+              <button type="button" className="ed-button" onClick={() => setDialog({ type: 'mkdir' })}>
+                新建文件夹
+              </button>
+            </div>
+          </div>
+        )}
+        {contentState === 'filtered' && (
+          <div className="ed-files-state ed-panel">
+            <strong>没有匹配 “{filter.trim()}” 的条目</strong>
+            <p>筛选只在当前目录的当前页内生效，不会跨目录搜索。</p>
+            <button type="button" className="ed-button" onClick={() => setFilter('')}>
+              清除筛选
+            </button>
+          </div>
+        )}
+        {contentState === 'ready' &&
+          (view === 'list' ? (
+            <FileListView {...listViewProps} path={path} entries={visibleEntries} />
+          ) : (
+            <FileGridView {...listViewProps} entries={visibleEntries} />
+          ))}
+
+        <div className="ed-table-footer">
+          <span className="ed-files-status">
+            {loading && entries.length > 0 && <span className="ed-spinner" aria-hidden="true" />}
+            {listingError ? '目录不可用' : `共 ${data?.total ?? 0} 项`}
+            {filter.trim() ? ` · 已筛选 ${visibleEntries.length} / 当前页 ${entries.length} 项` : ''}
+            {selected.size > 0 ? ` · 已选 ${selected.size} 项` : ''}
+          </span>
+          <div className="ed-toolbar">
+            <button
+              type="button"
+              className="ed-button"
+              disabled={page <= 1 || loading}
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
+            >
+              上一页
+            </button>
+            <span>
+              {page} / {pageCount}
+            </span>
+            <button
+              type="button"
+              className="ed-button"
+              disabled={page >= pageCount || loading}
+              onClick={() => setPage((value) => value + 1)}
+            >
+              下一页
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(event) => void handleUpload(event.target.files)}
+      />
+
+      {dialog?.type === 'mkdir' && (
+        <PromptDialog
+          title="新建文件夹"
+          label={`在 ${path} 下创建`}
+          initial="新建文件夹"
+          confirmText="创建"
+          onCancel={() => setDialog(null)}
+          onConfirm={(value) => {
+            setDialog(null);
+            void handleMkdir(value);
+          }}
+        />
+      )}
+      {dialog?.type === 'rename' && (
+        <PromptDialog
+          title="重命名"
+          label={dialog.entry.path}
+          initial={dialog.entry.name}
+          confirmText="重命名"
+          onCancel={() => setDialog(null)}
+          onConfirm={(value) => {
+            const entry = dialog.entry;
+            setDialog(null);
+            void handleRename(entry, value);
+          }}
+        />
+      )}
+      {dialog?.type === 'delete' && (
+        <ConfirmDialog
+          title={dialog.entries.length > 1 ? `删除 ${dialog.entries.length} 个条目` : `删除 ${dialog.entries[0]?.name}`}
+          message="删除不可撤销；目录会连同其中的全部内容递归删除。"
+          details={dialog.entries.slice(0, 5).map((entry) => entry.path).concat(dialog.entries.length > 5 ? ['…'] : [])}
+          confirmText="删除"
+          danger
+          busy={deleting}
+          onCancel={() => setDialog(null)}
+          onConfirm={() => void confirmDelete()}
+        />
+      )}
+    </div>
+  );
+}

@@ -48,6 +48,7 @@ int handle_list(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     const auto order = to_lower_ascii(req->GetParam("order"));
     options.desc = order == "desc" || order == "descending";
     options.show_hidden = http::query_bool(req, "hidden", true);
+    options.dirs_only = http::query_bool(req, "dirs_only", false);
 
     ListResult result;
     Error error = ctx.files->list(options, result);
