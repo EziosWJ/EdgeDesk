@@ -1,8 +1,23 @@
 # EdgeDesk 原型拆解与 UI 实现规范
 
 - 状态：**视觉参考**，不是已实现代码，也不等于产品已决定新增功能。
-- 源：2026-10-16 生成的 4 张暗色 EdgeDesk 产品原型。
+- 源：2026-10-16 的初始原型与 2026-10-18 V1.2 桌面工作区/ NAS 风格设备监控原型。
+- 独立页面：[`prototypes/README.md`](prototypes/README.md)；原型总览为 `prototypes/index.html`。
 - 原型中的主机名、IP、时间、用量、数据库示例和活动记录全部是**虚构展示数据**。
+
+## V1.2 独立原型页
+
+| 页面 | 重点 | 共享素材 |
+| --- | --- | --- |
+| `prototypes/desktop.html` | 桌面图标、窗口、状态栏、底部 Dock | `desktop/wallpaper-mountain-lake.svg`、`desktop/app-icons.svg` |
+| `prototypes/launcher.html` | 应用网格、搜索与应用说明 | `desktop/app-icons.svg` |
+| `prototypes/dashboard.html` | CPU、内存、存储、网卡、服务状态、系统信息小组件 | 图标 sprite、现有设计 Token |
+| `prototypes/files.html` | 目录树、工具栏、列表、存储摘要 | 图标 sprite、现有文件图标组件 |
+| `prototypes/terminal.html` | 多标签终端、会话列表和状态提示 | 图标 sprite、现有 xterm.js 组件（生产实现） |
+| `prototypes/settings.html` | 主题、桌面偏好、系统信息、安全边界 | 现有设计 Token |
+| `prototypes/components.html` | 可复用指标卡、图表、状态徽标和按钮 | SVG sprite、设计 Token |
+
+以上页面是静态交互原型，示例数据不连接 API，不表示功能已实现。生产组件必须使用真实 API/WebSocket 数据。
 
 ## 页面与组件映射
 
@@ -36,6 +51,19 @@
 | 终端底色 | `#08111E` |
 
 具体变量见 `web/src/styles/edgedesk-tokens.css`。
+
+## NAS 风格设备资源小组件
+
+设备概览参考飞牛/群晖 NAS 管理界面的信息密度与状态组织方式，但不复制其品牌资产。V1.2 建议使用紧凑卡片：
+
+- CPU：总体使用率、核心数/频率/负载（仅显示 API 已提供字段）与短时趋势。
+- 内存：已用/总量、可用、缓存、Swap（仅显示可用字段）与趋势。
+- 存储：每个真实挂载点的文件系统、已用/总量、使用率进度条；多挂载点独立呈现。
+- 网络：每个接口的地址、接收/发送速率与短时趋势，方向标签保持一致。
+- 服务状态：只展示当前服务端确实能确认的服务与状态；不暗示具备 Docker/系统服务控制能力。
+- 系统信息：主机名、架构、内核、运行时间等现有 API 字段。
+
+缺失/不可用数据统一显示“—”或不可用状态，不能显示为 0。V1.2 采用固定响应式网格，不增加拖拽自定义小组件布局。
 
 ## 特别注意
 
