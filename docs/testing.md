@@ -46,7 +46,7 @@ scripts/test-pr.sh
 | `terminal_session_test` | 真实 Bash 登录 Shell、`~/.profile` 加载、UTF-8/ANSI、TIOCSWINSZ resize、CommandGuard 拦截不执行、回放缓冲有界、订阅断开不杀会话、会话上限/空闲回收、缺 Bash 报错而非回退 sh | GCC 13.3 host + /bin/bash 5.2 | 通过 |
 | `system_metrics_test` | /proc/stat、loadavg、meminfo（含旧内核回退）、net/dev 速率差分、IPv4/IPv6 地址格式化与 `getifaddrs` 枚举（排除 lo）、mounts 过滤、采样线程与环形缓冲 | GCC 13.3 host | 通过 |
 | `embed_generator_test` | `#embed` 生成器的确定性、路径校验、ETag | Python 3.12 | 通过 |
-| 前端单元测试 | windowStore（开关/层级/拖动/缩放/最大化/关闭、不可变快照）、会话持久化（仅 id/title）、metrics 窗口有界、字节/百分比/运行时间格式化、FloatingWindow DOM 交互（指针拖动、缩放把手、按钮）、Sidebar（导航选中、收起/展开与 localStorage 持久化恢复、服务状态）、仪表盘图表工具（窗口切片、变化值、速率单位、时间刻度、开机时刻）、DonutChart（可用部分绿色/已使用主色/不可用态）、DashboardView DOM 渲染（KPI 六卡、三图表面板、磁盘环形图与挂载点切换、网卡 IP 地址、在线/数据中断状态、空数据不造假）、文件管理（路径助手/视图偏好/上传名校验、按扩展名与特殊文件名解析文件类型图标、Go/C++/Markdown 渲染不同图标、目录树按需加载与缓存/祖先展开/失败重试/刷新/不跟随链接、叶子节点隐藏角标与"无子目录"文案、单击打开与仅复选框选中、选中操作在工具栏就地切换、拖拽上传确认/跳过文件夹/取消不上传、树面板收起展开与宽度调整持久化、列表↔网格共享选择、本地筛选、隐藏文件联动、分页排序、失败态与重试、批量删除确认与失败不报成功、浮动终端/编辑器窗口）、V1.1 认证页面（密码登录、初始化确认校验、提交）、设置页（系统信息、Token 状态、偏好保存）、偏好 store（加载/乐观保存/失败保留） | Node 24.14 / vitest 3.2 / happy-dom | 通过（77 项）；`npm run build`（tsc + vite，含 unplugin-icons 文件类型图标）通过 |
+| 前端单元测试 | windowStore（开关/层级/拖动/缩放/最大化/关闭、不可变快照）、会话持久化（仅 id/title）、metrics 窗口有界、字节/百分比/运行时间格式化、FloatingWindow DOM 交互（指针拖动、缩放把手、按钮）、Sidebar（导航选中、收起/展开与 localStorage 持久化恢复、服务状态）、仪表盘图表工具（窗口切片、变化值、速率单位、时间刻度、开机时刻）、DonutChart（可用部分绿色/已使用主色/不可用态）、DashboardView DOM 渲染（KPI 六卡、三图表面板、磁盘环形图与挂载点切换、网卡 IP 地址、在线/数据中断状态、空数据不造假）、文件管理（路径助手/视图偏好/上传名校验、按扩展名与特殊文件名解析文件类型图标、Go/C++/Markdown 渲染不同图标、目录树按需加载与缓存/祖先展开/失败重试/刷新/不跟随链接、叶子节点隐藏角标与"无子目录"文案、单击打开与仅复选框选中、选中操作在工具栏就地切换、拖拽上传确认/跳过文件夹/取消不上传、树面板收起展开与宽度调整持久化、列表↔网格共享选择、本地筛选、隐藏文件联动、分页排序、失败态与重试、批量删除确认与失败不报成功、浮动终端/编辑器窗口）、V1.1 认证页面（密码登录、初始化确认校验、提交）、设置页（系统信息、Token 状态、偏好保存）、偏好 store（加载/乐观保存/失败保留） | Node 24.14 / vitest 3.2 / happy-dom | 通过（80 项）；`npm run build`（tsc + vite，含 unplugin-icons 文件类型图标）通过 |
 | `auth_test.py` | 初始化状态门禁、首次设置密码、重复初始化 409、密码登录、Cookie 属性（含 `--cookie-secure`）、改密后旧 Cookie/旧密码失效、Bearer 不受影响、CSRF、设置白名单、系统信息脱敏、重启后旧 Cookie 失效、损坏状态失败关闭、本机恢复 | dev-disk / host-embed / release-embed / release-embed-arm64 / release-disk / x86_64-musl / arm64-disk / arm64-musl | 全部通过 |
 | `api_test.py` | health 契约、密码登录/会话/Bearer、CSRF、目录浏览（含 `dirs_only` 只返回直接子目录）、文本读写、mkdir/rename/delete、流式上传字节一致、Range 206/416、路径沙箱拒绝、JSON 体积限制、系统指标（含 `network[].addresses` 字段） | 见下（三种二进制） | 通过 |
 | `ws_test.py` | 未认证/异源握手拒绝、终端 create/input/输出/resize/guard、断线重连（回放）、会话存活、显式关闭、metrics 快照+增量 | 同上 | 通过 |
@@ -57,7 +57,8 @@ scripts/test-pr.sh
 
 - 逐项对照表：`docs/design/prototype-conformance.md`（每个原型页一份）。
 - 规则：业务功能通过 ≠ 页面验收通过；表中“待目视核对”的条目必须由人工在浏览器中对照原型图确认。
-- 当前状态：**未执行**（开发环境无浏览器）。代码级结构与样式已按对照表落地；仪表盘
+- 当前状态：**逐项目视核对未执行**。本机已安装 headless Chromium，可用
+  `scripts/screenshot.sh` 截图；代码级结构与样式已按对照表落地；仪表盘
   数据全部来自 `/api/system/summary` 与 `/ws/metrics` 的真实采样，文件管理页的目录树、
   列表/网格数据全部来自 `/api/files`（目录树使用 `dirs_only=1` 按需加载），不使用原型演示数值。
 - 核对步骤见该文档“人工核对步骤”一节；核对结论必须回填表格，不能口头声明通过。
@@ -158,11 +159,12 @@ libhv v1.3.4 的部分头文件依赖“隐式包含”（`struct stat`、fcntl 
 - **ARM32 与真实设备**没有运行证据；`cmake/toolchains/arm-linux-musleabihf.cmake`
   已支持 musl.cc 与 Bootlin 两种布局，但未安装工具链、未构建、未运行。
   不是“已成功”的声明。
-- 浏览器（Chrome/Firefox）手工交互未在本机执行；前端行为通过单元测试
+- Playwright headless Chromium 已安装，并完成初始化页截图冒烟验证；
+  Chrome/Firefox 手工交互与逐项目视核对仍未执行；前端行为通过单元测试
   （含 happy-dom DOM 交互测试）与 WebSocket/REST 集成测试间接覆盖，
   浮动窗口的拖拽/缩放由 DOM 测试断言状态变化。
-- 原型还原度的**目视核对未执行**（本机无浏览器）；对照表见
-  `docs/design/prototype-conformance.md`，未完成的条目不视为通过。
+- 原型还原度的**逐项目视核对未执行**；`scripts/screenshot.sh` 已可用于
+  headless 截图；对照表见 `docs/design/prototype-conformance.md`，未完成的条目不视为通过。
 - 性能与资源占用没有做基准测试，不提供数字。
 
 ## ARM64 QEMU 运行环境（复现说明）

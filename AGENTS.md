@@ -90,3 +90,27 @@ V1.1 认证由 `AuthStore`（auth.json/锁）、`PasswordHashService`（Argon2id
 - 确保生成的 `out/`、`web/dist/`、`web/node_modules/` 不进入 Git。
 - Phase 1 API 契约：`GET /api/health` => HTTP 200 JSON，且 `status=ok`、`service=edgedesk`、`phase=1`。
 - 所有后续功能在标记为完成之前，都应有针对具体议题的验收测试。
+
+### 前端样式改动（headless 截图）
+
+仓库直接使用已安装的 `web/node_modules/@playwright/test` 和
+`~/.cache/ms-playwright/chromium*`；`scripts/screenshot.sh` 不执行 `npm/npx`，
+也不下载浏览器。先启动回环地址上的真实页面（建议使用临时 `--data-dir`），
+截图后**实际打开图片检查**；只确认文件生成不算验证。
+
+```bash
+# 桌面全页，等待真实内容出现
+scripts/screenshot.sh http://127.0.0.1:8080/login \
+  /tmp/opencode/login-1440.png --viewport 1440x900 --full-page \
+  --wait-selector 'input[type="password"]'
+
+# 移动端
+scripts/screenshot.sh http://127.0.0.1:8080/ \
+  /tmp/opencode/dashboard-390.png --viewport 390x844 --full-page \
+  --wait-selector '.ed-dashboard'
+```
+
+- 至少检查 1440×900 与 390×844 两档；等待目标元素或真实数据，避免截到空骨架。
+- 检查布局、间距、颜色/token、文字溢出、中文与 emoji 字体；交互态先操作再截图。
+- 已登录页面用 `--storage <state.json>` 复用 Playwright storage state；`--color-scheme dark` 可验证深色。
+- 截图放 `/tmp` 或 `out/`，不得提交。headless 目视检查是补充，不替代 L0/L1。

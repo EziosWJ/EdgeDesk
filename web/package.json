@@ -18,6 +18,7 @@
   },
   "devDependencies": {
     "@iconify-json/vscode-icons": "1.2.90",
+    "@playwright/test": "1.64.1",
     "@svgr/core": "8.1.0",
     "@svgr/plugin-jsx": "8.1.0",
     "@types/react": "19.2.2",
