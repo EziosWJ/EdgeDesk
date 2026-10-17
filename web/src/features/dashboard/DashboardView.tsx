@@ -359,7 +359,7 @@ export function DashboardView() {
                 stacked
                 series={[
                   { label: '已使用', color: 'var(--ed-accent)', values: memoryUsed },
-                  { label: '可用', color: '#5B7392', values: memoryFree },
+                  { label: '可用', color: 'var(--ed-chart-muted)', values: memoryFree },
                 ]}
                 timestamps={timestamps}
                 max={100}
