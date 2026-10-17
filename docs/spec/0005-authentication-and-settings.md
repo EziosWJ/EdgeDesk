@@ -3,6 +3,7 @@
 - 状态：**Baseline（V1.1 产品范围已确认；实现待完成）**
 - 日期：2026-10-17
 - 关联：[ADR-0008](../adr/0008-authentication-and-settings.md)、[V1.0 产品范围](0001-product-scope.md)、[API 契约](../api.md)
+- 实施拆分：[开发任务](../tasks/0005-authentication-and-settings.md)
 
 > 本文定义 V1.1 的目标行为，不代表功能已经上线。认证实现完成前，V1.0 的运行行为以现有 API 文档和测试结果为准。
 

@@ -35,6 +35,12 @@
 | [SPEC-0004](spec/0004-device-dashboard.md) | 设备基本资源与实时曲线 |
 | [SPEC-0005](spec/0005-authentication-and-settings.md) | V1.1 管理员认证、首次初始化、系统设置与验收 |
 
+## 实施计划
+
+| 文档 | 内容 |
+| --- | --- |
+| [SPEC-0005 开发任务拆分](tasks/0005-authentication-and-settings.md) | V1.1 认证与设置的实现决策、任务依赖、测试矩阵与发布门槛 |
+
 ## 设计素材
 
 - [设计资源索引](design/README.md)
