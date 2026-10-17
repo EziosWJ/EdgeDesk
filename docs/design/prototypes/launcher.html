@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>EdgeDesk · 应用启动器</title><link rel="stylesheet" href="./prototype.css"><script defer src="./prototype.js"></script></head>
+<body class="proto-page">
+  <header class="sitebar"><a class="brand" href="./index.html"><img src="../../../web/public/assets/brand/edgedesk-mark.svg" alt=""><strong>EdgeDesk</strong><span class="muted">V1.2</span></a><nav><a href="./desktop.html">桌面</a><a class="active" href="./launcher.html">应用启动器</a><a href="./components.html">组件素材</a></nav><span class="demo-badge">静态原型</span></header>
+  <main class="page-wrap">
+    <section class="intro"><p class="eyebrow">APPLICATION LAUNCHER</p><h1>应用启动器</h1><p>应用入口来自统一 AppRegistry。支持搜索、应用说明和清晰的空结果状态；这里的点击只用于演示导航。</p></section>
+    <section class="panel" style="max-width:1040px;margin:auto">
+      <div style="max-width:700px;margin:0 auto 22px"><input class="field" data-app-search type="search" placeholder="搜索应用，例如：终端、文件、监控…" aria-label="搜索应用"></div>
+      <div class="app-grid" data-app-grid>
+        <a class="app-card" data-search="设备概览 dashboard cpu 内存 网络 存储" href="./dashboard.html"><span class="app-tile tile-blue"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#dashboard"/></svg></span><strong>设备概览</strong><p>CPU、内存、网卡与存储状态</p></a>
+        <a class="app-card" data-search="文件管理 files 文件夹 目录 上传 下载" href="./files.html"><span class="app-tile tile-yellow"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#files"/></svg></span><strong>文件管理</strong><p>浏览和管理设备文件</p></a>
+        <a class="app-card" data-search="终端 terminal bash shell 命令" href="./terminal.html"><span class="app-tile tile-dark"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#terminal"/></svg></span><strong>终端</strong><p>Bash 会话与多标签终端</p></a>
+        <a class="app-card" data-search="系统设置 settings 外观 主题" href="./settings.html"><span class="app-tile tile-gray"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#settings"/></svg></span><strong>系统设置</strong><p>外观、桌面和系统偏好</p></a>
+        <a class="app-card" data-search="文本编辑器 editor 配置文件" href="./files.html"><span class="app-tile tile-purple"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#editor"/></svg></span><strong>文本编辑器</strong><p>编辑配置文件与文本</p></a>
+        <a class="app-card" data-search="日志查看 logs 系统日志" href="./terminal.html"><span class="app-tile tile-green"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#logs"/></svg></span><strong>日志查看</strong><p>查看终端和服务输出</p></a>
+        <a class="app-card" data-search="网络 network 网卡诊断" href="./dashboard.html"><span class="app-tile tile-blue"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#network"/></svg></span><strong>网络状态</strong><p>网卡地址与吞吐趋势</p></a>
+        <a class="app-card" data-search="组件素材 components design" href="./components.html"><span class="app-tile tile-purple"><svg><use href="../../../web/public/assets/desktop/app-icons.svg#launcher"/></svg></span><strong>组件素材</strong><p>可复用 UI 组件目录</p></a>
+      </div>
+      <p class="secondary" data-search-empty hidden style="text-align:center;padding:28px">没有找到匹配的应用。请尝试其他关键词。</p>
+    </section>
+  </main>
+</body></html>
