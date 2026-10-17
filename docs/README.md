@@ -12,11 +12,18 @@
 - [Coding Agent 开发规范](../AGENTS.md)
 - [Phase 1 工程骨架（历史记录）](phase1.md)
 
+## V1.2 规划：桌面工作区
+
+- [SPEC-0006：桌面工作区与应用窗口管理](spec/0006-desktop-workspace.md)（产品决策已确认，尚未实施）
+- [ADR-0009：桌面工作区与应用窗口管理架构](adr/0009-desktop-workspace-architecture.md)（已接受，尚未实施）
+- [ADR-0010：桌面布局持久化与终端会话恢复](adr/0010-desktop-persistence-and-recovery.md)（已接受，尚未实施）
+- [V1.2 实施计划与 Issue 拆分](tasks/0006-desktop-workspace.md)
+
 ## ADR（为什么这样做）
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
-| [ADR-0001](adr/0001-technology-stack.md) | C++17、GCC 15+、libhv、musl、`#embed`、React + xterm.js | 已确认基线 |
+| [ADR-0001](adr/0001-technology-stack.md) | C++17、GCC 15+、libhv、musl、#embed、React + xterm.js | 已确认基线 |
 | [ADR-0002](adr/0002-architecture-security.md) | 业务模块分层、PTY 生命周期与安全边界 | 已确认 |
 | [ADR-0003](adr/0003-v1-auth-api-protocol.md) | V1.0 认证（密钥 + 会话 Cookie）、API 面、实时协议、限流与审计 | 历史契约（V1.1 由 ADR-0008 取代登录方式） |
 | [ADR-0004](adr/0004-path-sandbox.md) | 目录 FD + openat 路径沙箱、符号链接策略 | 已确认 |
@@ -24,6 +31,8 @@
 | [ADR-0006](adr/0006-system-metrics.md) | 指标采集、内存窗口与增量推送 | 已确认 |
 | [ADR-0007](adr/0007-frontend-icon-library.md) | 前端图标库：Lucide（ISC，全站 UI）+ VS Code Icons 按需编译（文件类型） | 已确认（2026-10-17） |
 | [ADR-0008](adr/0008-authentication-and-settings.md) | V1.1 单管理员密码认证、首次初始化、独立 API Token 与系统设置 | 已实现（V1.1.0） |
+| [ADR-0009](adr/0009-desktop-workspace-architecture.md) | 桌面壳层、应用注册表、统一窗口管理与自研交互 | 已接受（V1.2 规划） |
+| [ADR-0010](adr/0010-desktop-persistence-and-recovery.md) | 浏览器本地桌面布局、窗口恢复与终端会话重连 | 已接受（V1.2 规划） |
 
 ## Spec（要做什么）
 
@@ -34,12 +43,14 @@
 | [SPEC-0003](spec/0003-terminal-workspace.md) | Bash、终端 Tab、刷新重连、浮动窗口 |
 | [SPEC-0004](spec/0004-device-dashboard.md) | 设备基本资源与实时曲线 |
 | [SPEC-0005](spec/0005-authentication-and-settings.md) | V1.1 管理员认证、首次初始化、系统设置与验收 |
+| [SPEC-0006](spec/0006-desktop-workspace.md) | V1.2 桌面图标、Dock、启动器、窗口管理、持久化与恢复 |
 
 ## 实施计划
 
 | 文档 | 内容 |
 | --- | --- |
 | [SPEC-0005 开发任务拆分](tasks/0005-authentication-and-settings.md) | V1.1 认证与设置的实现决策、任务依赖、测试矩阵与发布门槛 |
+| [SPEC-0006 V1.2 实施计划](tasks/0006-desktop-workspace.md) | 桌面化分阶段实施、Issue 拆分、通用完成定义与发布门槛 |
 
 ## 设计素材
 
@@ -52,7 +63,7 @@
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
-| [本地 GCC 15 工具链（免 sudo）](dev/gcc15-local-toolchain.md) | Ubuntu 24.04 上用 `scripts/install-gcc15-local.sh` 安装 GCC 15 到用户目录 | 已验证（2026-10-16） |
+| [本地 GCC 15 工具链（免 sudo）](dev/gcc15-local-toolchain.md) | Ubuntu 24.04 上用 scripts/install-gcc15-local.sh 安装 GCC 15 到用户目录 | 已验证（2026-10-16） |
 | [测试与验证矩阵](testing.md) | 各平台构建/运行/交叉验证的真实结果 | 持续更新 |
 
 ## 仍然待确认（不影响 V1.1 已实现范围）
@@ -61,11 +72,11 @@
 - OpenHarmony ARM64 是否作为正式发行平台。
 - V1.1 首期是否开放高级部署配置的网页写入（当前决定为只读展示，后续逐项评估）。
 - 多用户/角色不在当前规划内；会话不跨服务进程重启持久化。
-- 浮动窗口布局在跨刷新后的自动恢复策略（当前仅恢复会话列表，不自动重开窗口）。
+- V1.1 现有浮动窗口布局不自动恢复；V1.2 规划的桌面布局恢复以 SPEC-0006 为准，尚未实施。
 
 ## 变更约定
 
 1. 产品决策有变化：更新相关 Spec 与 ADR 的状态和日期。
 2. 编程 Agent 实现时应提供可验证的验收证据，未验证的平台不得声明通过。
-3. 将建议项改为“已确认”之前必须取得明确的产品决策。
+3. 将建议项改为已确认之前必须取得明确的产品决策。
 4. V1.0 不引入数据库、ORM、云端设备管理控制平面或完整 SSH/SFTP 兼容。
