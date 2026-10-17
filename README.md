@@ -17,7 +17,7 @@ Node/Python/Java 运行时，也不使用数据库。
 | Web 终端 | `/bin/bash -l` 真实登录 Shell、多 Tab、多独立会话、刷新/导航/断线重连不中断、CommandGuard 危险命令提示 |
 | 浮动工作区 | 终端 / 编辑器 / 预览均可作为可拖动、可缩放、可最大化/最小化的浮动窗口打开 |
 | 仪表盘 | CPU（使用率、load、核心数）、内存、磁盘、网络速率、运行时间 + 实时曲线（WebSocket 增量推送） |
-| 安全 | 单管理员密码登录（Argon2id、首次初始化码、本机恢复）、可选 Bearer API Token、CSRF/CSWSH 校验、每 IP 限流、请求体积与并发限制、JSON Lines 审计日志 |
+| 安全 | 单管理员密码登录（Argon2id、首次初始化、本机恢复）、可选 Bearer API Token、CSRF/CSWSH 校验、每 IP 限流、请求体积与并发限制、JSON Lines 审计日志 |
 | 系统设置 | 修改密码、会话/Token 状态、系统信息、主题/文件视图/隐藏文件/终端字体/仪表盘窗口偏好；部署级配置只读 |
 | 资源模式 | GCC 15 `#embed` 单二进制 / 磁盘模式，共用同一套静态资源抽象 |
 
@@ -37,8 +37,8 @@ ctest --preset dev-disk
 
 # 3) 运行（首次进入初始化页）
 ./out/build/dev-disk/bin/edgedesk --port 8080 --file-root /srv --data-dir ~/.local/share/edgedesk
-# 初始化码默认写在 <data-dir>/init-code（0600）；TTY 启动时会打印一次。
-# 浏览器打开 http://127.0.0.1:8080，输入初始化码并设置管理员密码。
+# 首次打开浏览器时会进入初始化页；直接设置管理员密码即可。
+# 浏览器打开 http://127.0.0.1:8080
 ```
 
 正式发布使用 GCC 15+ 的 `#embed` 单二进制（运行期不需要 `web/`）：
@@ -59,7 +59,7 @@ bash scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19091 web/dist
 
 - 认证始终开启；默认只监听 `127.0.0.1`。远程部署必须显式配置 `--host`，并置于
   TLS/VPN 或可信网关之后；HTTPS 部署应加 `--cookie-secure`。
-- 浏览器使用单管理员密码登录；密码以 Argon2id 哈希保存，最少 12 个字符。
+- 浏览器使用单管理员密码登录；密码以 Argon2id 哈希保存，最少 6 个字符。
 - 未配置 `--auth-token-file` / `EDGEDESK_AUTH_TOKEN` / `--auth-token` 时 Bearer
   API Token 不可用，但网页密码登录不受影响；V1.1 不再自动生成 Token。
 - Web 会话 Cookie 为 `HttpOnly; SameSite=Strict`，签发基于进程内随机密钥；
@@ -83,7 +83,7 @@ bash scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19091 web/dist
 | `cd web && npm test` | 前端单元测试（浮窗存储 / 会话持久化 / 格式化） |
 
 单元测试覆盖：配置解析、SHA-256/HMAC 与会话签名、Argon2id 密码哈希、
-认证状态机（auth.json/init-code/损坏状态/flock）、设置白名单、限流、审计轮转、
+认证状态机（auth.json/损坏状态/flock）、设置白名单、限流、审计轮转、
 `PathSandbox`（穿越、符号链接逃逸、前缀欺骗、循环）、`FileService`
 （列表/排序/分页、原子保存、保留权限、上传/中止、删除计数、Range 解析）、
 `CommandGuard`、终端会话（真实 Bash、登录语义、resize、重放、上限、空闲回收）、

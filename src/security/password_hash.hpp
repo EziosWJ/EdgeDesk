@@ -19,10 +19,10 @@ namespace edgedesk {
 constexpr std::uint32_t kPasswordMemoryKiB = 64 * 1024;
 constexpr std::uint32_t kPasswordIterations = 3;
 constexpr std::uint32_t kPasswordParallelism = 1;
-constexpr std::size_t kPasswordMinCodepoints = 12;
+constexpr std::size_t kPasswordMinCodepoints = 6;
 constexpr std::size_t kPasswordMaxBytes = 1024;
 
-// Validates UTF-8, printable characters and the 12..1024 length policy.
+// Validates UTF-8, printable characters and the 6..1024 length policy.
 bool validate_password(std::string_view password, std::string& error);
 
 // Synchronous primitives used by tests and the worker pool.

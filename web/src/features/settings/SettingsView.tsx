@@ -60,8 +60,8 @@ export function SettingsView({ onLogout }: { onLogout: () => void }) {
       setError('两次输入的新密码不一致');
       return;
     }
-    if ([...newPassword].length < 12) {
-      setError('新密码至少需要 12 个字符');
+    if ([...newPassword].length < 6) {
+      setError('新密码至少需要 6 个字符');
       return;
     }
     setBusy(true);
@@ -129,7 +129,7 @@ export function SettingsView({ onLogout }: { onLogout: () => void }) {
               onChange={(event) => setCurrentPassword(event.target.value)}
               required
             />
-            <label htmlFor="ed-new-password">新密码（至少 12 个字符）</label>
+            <label htmlFor="ed-new-password">新密码（至少 6 个字符）</label>
             <input
               id="ed-new-password"
               type="password"

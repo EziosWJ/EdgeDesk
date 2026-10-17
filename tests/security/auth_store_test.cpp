@@ -1,8 +1,6 @@
 #include "security/auth_store.hpp"
 #include "test_util.hpp"
 
-#include <ctime>
-#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <sys/stat.h>
@@ -43,27 +41,8 @@ int main() {
         CHECK(store->state() == AuthState::uninitialized);
         CHECK(mode_of(data) == 0700);
 
-        std::string code;
-        CHECK(store->ensure_init_code(true, code, error));
-        CHECK(code.size() == 64);
-        CHECK(mode_of(store->init_code_path()) == 0600);
-        std::string read_code;
-        CHECK(store->read_init_code(read_code, error));
-        CHECK_STR_EQ(read_code, code);
-        CHECK(store->verify_init_code(code, error));
-        CHECK(!store->verify_init_code("wrong", error));
-
-        // Codes older than the 24 hour TTL are rejected; rotating replaces it.
-        const auto old = std::time(nullptr) - 25 * 3600;
-        struct timespec times[2] = {{old, 0}, {old, 0}};
-        CHECK(::utimensat(AT_FDCWD, store->init_code_path().c_str(), times, 0) == 0);
-        CHECK(!store->read_init_code(read_code, error));
-        CHECK(store->ensure_init_code(true, code, error));
-        CHECK(store->verify_init_code(code, error));
-
         CHECK(store->save_record(dummy_record(), error));
         CHECK(store->state() == AuthState::initialized);
-        CHECK(!std::filesystem::exists(store->init_code_path()));
         CHECK(mode_of(data + "/auth.json") == 0600);
         AuthRecord loaded;
         CHECK(store->read_record(loaded, error));
@@ -81,12 +60,8 @@ int main() {
         CHECK(store != nullptr);
         if (!store) return test::finish("auth_store_test");
         CHECK(store->state() == AuthState::initialized);
-        std::string code;
-        CHECK(!store->ensure_init_code(false, code, error)); // initialized
-        CHECK(store->reset_for_recovery(code, error));
+        CHECK(store->reset_for_recovery(error));
         CHECK(store->state() == AuthState::uninitialized);
-        CHECK(!code.empty());
-        CHECK(store->verify_init_code(code, error));
     }
 
     // Corrupt auth.json must not be interpreted as a fresh install.
@@ -101,9 +76,7 @@ int main() {
         if (!store) return test::finish("auth_store_test");
         CHECK(store->state() == AuthState::corrupt);
         CHECK(!store->last_error().empty());
-        std::string code;
-        CHECK(!store->ensure_init_code(false, code, error));
-        CHECK(store->reset_for_recovery(code, error));
+        CHECK(store->reset_for_recovery(error));
         CHECK(store->state() == AuthState::uninitialized);
     }
 

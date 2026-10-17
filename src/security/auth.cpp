@@ -37,19 +37,9 @@ AuthState Auth::state() const {
     return store_->state();
 }
 
-std::string Auth::init_code_path() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return store_->init_code_path();
-}
-
 std::string Auth::last_error() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return store_->last_error();
-}
-
-bool Auth::ensure_init_code(bool rotate, std::string& code, std::string& error) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return store_->ensure_init_code(rotate, code, error);
 }
 
 bool Auth::verify_token(std::string_view candidate) const {
@@ -125,10 +115,10 @@ bool Auth::rotate_session_key_locked() {
     return true;
 }
 
-bool Auth::setup_async(std::string code, std::string password, SetupCallback callback) {
+bool Auth::setup_async(std::string password, SetupCallback callback) {
     std::string validation_error;
-    if (code.empty() || password.empty()) {
-        if (callback) callback(Error::make(ErrorCode::invalid_argument, "initialization code and password are required"));
+    if (password.empty()) {
+        if (callback) callback(Error::make(ErrorCode::invalid_argument, "password is required"));
         return false;
     }
     if (!validate_password(password, validation_error)) {
@@ -149,17 +139,11 @@ bool Auth::setup_async(std::string code, std::string password, SetupCallback cal
             if (callback) callback(auth_unavailable("authentication state is corrupt; use local recovery"));
             return false;
         }
-        std::string code_error;
-        if (!store_->verify_init_code(code, code_error)) {
-            if (callback) callback(Error::make(ErrorCode::permission_denied, "initialization code is invalid or expired"));
-            return false;
-        }
         setup_in_progress_ = true;
     }
 
     const bool queued = hasher_->hash_async(
-        password, [this, code = std::move(code), callback](
-                      Error hash_error, std::string salt_hex, std::string hash_hex) mutable {
+        password, [this, callback](Error hash_error, std::string salt_hex, std::string hash_hex) mutable {
             if (!hash_error.ok()) {
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
@@ -172,18 +156,15 @@ bool Auth::setup_async(std::string code, std::string password, SetupCallback cal
             bool saved = false;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                std::string store_error;
                 if (store_->state() != AuthState::uninitialized) {
                     save_error = Error::make(ErrorCode::conflict, "authentication is already initialized");
-                } else if (!store_->verify_init_code(code, store_error)) {
-                    save_error = Error::make(ErrorCode::permission_denied,
-                                             "initialization code is invalid or expired");
                 } else {
                     AuthRecord record;
                     record.salt_hex = std::move(salt_hex);
                     record.hash_hex = std::move(hash_hex);
                     record.credential_version = 1;
                     record.created_at = now_unix_seconds();
+                    std::string store_error;
                     saved = store_->save_record(record, store_error);
                     if (!saved) {
                         save_error = Error::make(ErrorCode::io_error, store_error);

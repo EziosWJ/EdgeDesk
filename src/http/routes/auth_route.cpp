@@ -101,16 +101,14 @@ void register_auth_routes(hv::HttpService& router, RouteContext& ctx) {
             http::write_error_to(writer, parse_error);
             return;
         }
-        std::string code;
         std::string password;
         std::string confirm;
-        if (!string_field(body, "code", code) || !string_field(body, "password", password) ||
-            !string_field(body, "confirm_password", confirm)) {
+        if (!string_field(body, "password", password) || !string_field(body, "confirm_password", confirm)) {
             write_api_error(writer, 400, "invalid_request", "setup fields must be strings");
             return;
         }
-        if (code.empty() || password.empty()) {
-            write_api_error(writer, 400, "invalid_request", "fields 'code' and 'password' are required");
+        if (password.empty()) {
+            write_api_error(writer, 400, "invalid_request", "field 'password' is required");
             return;
         }
         if (password != confirm) {
@@ -119,7 +117,7 @@ void register_auth_routes(hv::HttpService& router, RouteContext& ctx) {
         }
         const auto ip = http::client_ip(*ctx.config, req.get());
         ctx.auth->setup_async(
-            code, password,
+            password,
             [&ctx, writer, ip](Error error) {
                 if (!error.ok()) {
                     ctx.audit->record("auth.setup", "denied", error.message, ip);

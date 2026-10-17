@@ -41,9 +41,7 @@ public:
     static const char* cookie_name() { return "edgedesk_session"; }
 
     AuthState state() const;
-    std::string init_code_path() const;
     std::string last_error() const;
-    bool ensure_init_code(bool rotate, std::string& code, std::string& error);
 
     bool token_configured() const { return !options_.token.empty(); }
     bool verify_token(std::string_view candidate) const;
@@ -58,7 +56,7 @@ public:
     int ttl_seconds() const { return options_.session_ttl_seconds; }
 
     // Asynchronous flows. Callbacks run on the bounded password worker pool.
-    bool setup_async(std::string code, std::string password, SetupCallback callback);
+    bool setup_async(std::string password, SetupCallback callback);
     bool login_async(std::string password, LoginCallback callback);
     bool change_password_async(std::string current_password, std::string new_password,
                                ChangeCallback callback);

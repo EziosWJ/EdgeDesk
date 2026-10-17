@@ -4,7 +4,6 @@
 #include "security/auth_store.hpp"
 
 #include <iostream>
-#include <unistd.h>
 
 namespace edgedesk {
 
@@ -15,8 +14,7 @@ int run_reset_admin_password(const Config& config) {
         std::cerr << "Reset failed: " << error << "\n";
         return 1;
     }
-    std::string code;
-    if (!store->reset_for_recovery(code, error)) {
+    if (!store->reset_for_recovery(error)) {
         std::cerr << "Reset failed: " << error << "\n";
         return 1;
     }
@@ -38,12 +36,7 @@ int run_reset_admin_password(const Config& config) {
     std::cout << "EdgeDesk admin authentication was reset.\n"
               << "  data dir: " << config.data_dir << "\n"
               << "  settings, audit log and business files were preserved.\n"
-              << "  start the service again and open the initialization page.\n";
-    if (::isatty(STDOUT_FILENO)) {
-        std::cout << "  initialization code: " << code << "\n";
-    } else {
-        std::cout << "  initialization code file: " << store->init_code_path() << " (0600)\n";
-    }
+              << "  start the service again and set a new administrator password in the web UI.\n";
     return 0;
 }
 

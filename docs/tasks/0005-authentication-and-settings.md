@@ -14,12 +14,12 @@
 V1.1 认证与设置只有同时满足以下条件才算完成：
 
 1. SPEC-0005 第 9 节 12 条验收标准全部有自动化或可复现证据。
-2. 全新数据目录可以完成“初始化码 → 设置密码 → 登录 → 修改设置”的完整流程。
+2. 全新数据目录可以完成“设置密码 → 登录 → 修改设置”的完整流程。
 3. 已初始化实例在重启后保留管理员密码和应用设置；旧 Cookie 会话因进程重启失效。
 4. 未初始化、未登录、已登录、认证损坏四种状态在服务端和前端都得到明确处理。
 5. 旧版 `POST /api/auth/login {"token": ...}` 不再签发 Cookie；Bearer Token 仍可直接访问受保护 API。
-6. 认证文件损坏、数据目录不可写、初始化码错误/过期、服务运行中执行恢复命令等失败路径都有测试。
-7. Argon2id、初始化码、会话 Cookie、CSRF/CSWSH、登录限流、审计脱敏均通过安全测试。
+6. 认证文件损坏、数据目录不可写、密码过短/确认不一致、服务运行中执行恢复命令等失败路径都有测试。
+7. Argon2id、密码策略、会话 Cookie、CSRF/CSWSH、登录限流、审计脱敏均通过安全测试。
 8. 下列命令全部通过，且 `docs/testing.md` 记录真实结果：
 
    ```bash
@@ -40,8 +40,8 @@ V1.1 认证与设置只有同时满足以下条件才算完成：
 | ID | 问题 | 建议值 | 影响 |
 | --- | --- | --- | --- |
 | D1 | `--data-dir` 默认路径 | 优先 `$XDG_DATA_HOME/edgedesk`（绝对路径），否则 `$HOME/.local/share/edgedesk`；两者都不可用时启动失败并提示显式 `--data-dir`。禁止回退到 `state-dir`、`/tmp`、`XDG_RUNTIME_DIR`。systemd 示例使用 `StateDirectory=edgedesk` + `--data-dir=/var/lib/edgedesk`。 | 配置、部署、恢复命令 |
-| D2 | 初始化码生命周期与输出 | 32 字节 CSPRNG → base64url；文件 `init-code` 权限 `0600`，`O_CREAT\|O_EXCL` 创建；默认 TTL 24 小时，未初始化状态下服务重启时轮换旧码；仅在 stdout/stderr 是 TTY 时打印码，否则只打印文件路径；比较使用常量时间；成功初始化后删除文件。 | 初始化流程、审计、运维 |
-| D3 | 密码长度与编码 | 最少 12 个 Unicode 码点，最多 1024 个 UTF-8 字节；允许空格和任意可打印 Unicode；不强制组合规则；不做隐式 Unicode 归一化，前端提示“按输入原样处理”。超长返回 400/413，不进入哈希。 | 登录/初始化/改密、前端校验 |
+| D2 | 首次初始化 | 未初始化实例只要求设置管理员密码和确认密码；接口限流；已初始化后重复 setup 返回 409。不生成、不校验本机初始化码。 | 初始化流程、前端、审计 |
+| D3 | 密码长度与编码 | 最少 6 个 Unicode 码点，最多 1024 个 UTF-8 字节；允许空格和任意可打印 Unicode；不强制组合规则；不做隐式 Unicode 归一化，前端提示“按输入原样处理”。超长返回 400/413，不进入哈希。 | 登录/初始化/改密、前端校验 |
 | D4 | Argon2id 参数与并发 | 基线 `m=64 MiB, t=3, p=1`，盐 16 字节，输出 32 字节；在 x86_64 与 ARM64 目标实测后定稿。哈希在**有界 worker** 中执行（默认 1 个并发，最大 2），不得阻塞 libhv 事件循环；队列满时快速返回 503，不无限排队。 | 安全、性能、线程模型 |
 | D5 | Cookie `Secure` 与可信代理 | 新增 `--cookie-secure`（默认关闭）；HTTPS 部署必须显式开启。新增 `--trusted-proxy <IP/CIDR>`（可重复，默认空）；只有来自可信代理的请求才解析 `X-Forwarded-For`/`X-Forwarded-Proto`。未配置时一律使用 peer IP。 | 认证、限流、审计、部署 |
 | D6 | 设置的服务端/浏览器边界 | 写入 `settings.json`：`theme`、`files.view`、`files.show_hidden`、`terminal.font_size`、`dashboard.metrics_window`。继续放 `localStorage`：侧栏折叠、目录树宽度、浮窗位置/尺寸、当前 Tab、最近路径、终端会话 id。高级配置只读。 | 设置 API、前端状态 |
@@ -76,7 +76,7 @@ T01 决策定稿
 ### T01 — 决策定稿与契约补充（P0，S）
 
 - **依赖：** 无。
-- **目标：** 把第 2 节 D1–D10 的结论写回 SPEC-0005/ADR-0008（或新增一份决策记录），消除“过期初始化码”“设置字段边界”“损坏状态 API”等歧义。
+- **目标：** 把第 2 节 D1–D10 的结论写回 SPEC-0005/ADR-0008（或新增一份决策记录），消除“首次初始化”“设置字段边界”“损坏状态 API”等歧义。
 - **改动：**
   - `docs/spec/0005-authentication-and-settings.md`
   - `docs/adr/0008-authentication-and-settings.md`
@@ -127,7 +127,7 @@ T01 决策定稿
 ### T04 — 认证持久化与状态机（P0，M）
 
 - **依赖：** T03、T01（D2/D7/D10）。
-- **目标：** 实现 `auth.json`、`init-code`、锁文件和四种认证状态；为上层提供稳定的读写/恢复原语。
+- **目标：** 实现 `auth.json`、锁文件和四种认证状态；为上层提供稳定的读写/恢复原语。
 - **改动：**
   - 新增 `src/security/auth_store.{hpp,cpp}`（或等价命名）。
   - 新增 `src/core/atomic_file.{hpp,cpp}`：目录 FD、`O_NOFOLLOW`、临时文件、`fsync`、`renameat`、目录 `fsync`、权限设置。
@@ -144,10 +144,10 @@ T01 决策定稿
     }
     ```
   - 状态枚举：`uninitialized`、`initialized`、`corrupt`；启动时读取并校验，损坏时进入 D7 降级态。
-  - `init-code` 文件（0600、`O_EXCL`、TTL、重启轮换）与 `.lock`（`flock`）生命周期。
+  - `.lock`（`flock`）生命周期；旧版本遗留的 `init-code` 文件在启动时尽力清理。
   - 严格限制文件大小（例如 64 KiB），拒绝未知 schema/算法/参数、重复键和越界值。
 - **验收：**
-  - 新目录 → `uninitialized` 并生成初始化码；成功写入 → `initialized` 并删除初始化码。
+  - 新目录 → `uninitialized`；成功写入 `auth.json` → `initialized`。
   - `auth.json` 缺失、损坏、不可读、版本不支持分别有测试；损坏不会自动变成未初始化。
   - 写入是原子的：模拟中途失败不会留下半写文件；目录权限 0700、文件 0600。
   - 恢复原语只重置认证状态，不动 `settings.json`、审计日志和业务文件。
@@ -202,11 +202,11 @@ T01 决策定稿
   - `src/http/middleware.{hpp,cpp}`：按状态维护公共路径。始终公共：静态资源、`GET /api/health`、`GET /api/auth/session`（D8）、`POST /api/auth/logout`。未初始化额外允许 `setup-status`、`setup`；已初始化额外允许 `login`。损坏状态允许静态资源、健康检查、`session`、`logout` 和通用故障响应，拒绝 `setup`/`login` 与全部业务 API/WS，返回 `503 setup_required` 或 `503 auth_state_corrupt`。
   - `src/http/http_util.*`：`client_ip()` 默认使用 peer IP；仅当 peer 在 `--trusted-proxy` 中才解析 `X-Forwarded-For`；补测试。
   - 请求体限制、JSON 解析失败、统一错误结构、`Retry-After`。
-  - 审计事件：`auth.setup`、`auth.login`、`auth.logout`、`auth.password_change`、`auth.state_corrupt`、`auth.rate_limit`；不记录密码/初始化码/Cookie/Token。
+  - 审计事件：`auth.setup`、`auth.login`、`auth.logout`、`auth.password_change`、`auth.state_corrupt`、`auth.rate_limit`；不记录密码/Cookie/Token。
   - 删除旧 `{"token":...}` 登录分支；保留 Bearer 直接认证。
 - **验收：**
   - 未初始化时直接访问 `/api/files`、`/api/terminal/*`、`/api/system/*`、`/api/settings`、`/ws/*` 全部被拒绝，且不泄露数据。
-  - 初始化码错误/已用/过期/超限分别返回明确但无秘密的错误；成功初始化后再次 setup 返回 409。
+  - 密码过短、确认不一致和超限分别返回明确但无秘密的错误；成功初始化后再次 setup 返回 409。
   - 密码登录失败统一错误，5 次/分钟限流实际触发；伪造 `X-Forwarded-For` 不能绕过。
   - Cookie 非安全方法必须同源 Origin；WS 握手继续校验认证和 Origin。
   - `GET /api/auth/session` 行为符合 D8。
@@ -218,8 +218,8 @@ T01 决策定稿
 - **目标：** 实现 `edgedesk --reset-admin-password`，作为认证损坏或忘记密码时的唯一恢复路径。
 - **改动：**
   - `src/app/main.cpp`：在启动服务前识别 `--reset-admin-password`，加载配置、创建/检查 data-dir，执行恢复后退出（不启动 HTTP）。
-  - `src/security/auth_store.*`：`reset_for_recovery()`：持有 `.lock`（`LOCK_EX|LOCK_NB`），删除/替换 `auth.json`，生成新 `init-code`，保留其他文件。
-  - 输出：新初始化码仅在 TTY 打印；否则打印文件路径；明确提示“服务已停止、数据未删除、重启后进入初始化页”。
+  - `src/security/auth_store.*`：`reset_for_recovery()`：持有 `.lock`（`LOCK_EX|LOCK_NB`），删除/替换 `auth.json`，保留其他文件。
+  - 输出：明确提示“服务已停止、数据未删除、重启后进入初始化页设置新密码”。
   - 审计：若审计日志可用，追加 `auth.reset`（不含秘密）。
   - `docs/config.md`：恢复命令与停止服务要求。
 - **验收：**
@@ -236,7 +236,7 @@ T01 决策定稿
 - **改动：**
   - 新增 `src/security/settings_store.{hpp,cpp}`（或 `src/core/settings.*`）：`settings.json` schema 1、白名单字段、类型/枚举/范围校验、原子写入、0600。
   - 新增 `src/http/routes/settings_route.{hpp,cpp}`；在 `src/http/server.cpp` 注册。
-  - `src/http/routes/system_route.cpp`：新增 `/api/system/info`；返回版本、构建信息、主机名、架构、内核、运行时间、监听地址/端口、文件根目录、Bash 路径、审计状态、API Token 是否配置；不返回 Token、密码哈希、Cookie、初始化码、环境变量全集、完整命令行。
+  - `src/http/routes/system_route.cpp`：新增 `/api/system/info`；返回版本、构建信息、主机名、架构、内核、运行时间、监听地址/端口、文件根目录、Bash 路径、审计状态、API Token 是否配置；不返回 Token、密码哈希、Cookie、环境变量全集、完整命令行。
   - `PUT /api/settings` 只接受 D6 白名单；未知字段 400，不静默忽略；返回完整设置。
   - 设置文件损坏时回退默认值并返回可诊断状态，不影响认证。
 - **验收：**
@@ -252,7 +252,7 @@ T01 决策定稿
 - **改动：**
   - `web/src/app/App.tsx`：启动时先请求 `setup-status`，再请求 `session`；按状态渲染 `SetupView`/`LoginView`/`CorruptStateView`/主界面。
   - `web/src/features/auth/LoginView.tsx`：改为密码登录；更新文案，移除“访问密钥/启动日志”描述。
-  - 新增 `web/src/features/auth/SetupView.tsx`：初始化码、密码、确认密码、客户端长度校验、错误展示。
+  - 新增 `web/src/features/auth/SetupView.tsx`：密码、确认密码、客户端长度校验、错误展示。
   - 新增 `web/src/features/auth/CorruptStateView.tsx`：通用故障提示与本机恢复命令，不提供网页重置。
   - `web/src/services/api.ts`：新增 setup/login/password/logout/session 类型；统一处理 401（回到登录页，避免循环）。
   - 更新前端测试：状态切换、setup 成功/失败、登录失败、401 处理、登出。
@@ -293,7 +293,7 @@ T01 决策定稿
   - AuthService：登录/登出/改密/会话轮换/重启失效/Bearer 不受影响/无 token 配置。
   - 中间件：未初始化门禁、损坏门禁、CSRF、WS Origin、`X-Forwarded-For` 伪造、限流。
   - SettingsStore：未知字段/非法枚举/越界/损坏文件/原子写入。
-  - 审计：不含密码/Token/Cookie/初始化码。
+  - 审计：不含密码/Token/Cookie。
 - **验收：** 新增测试全部通过；`ctest --preset host-offline-tests` 与 `ctest --preset dev-disk` 通过；关键安全用例在 CI 中运行。
 - **验证：**
   ```bash
@@ -308,7 +308,7 @@ T01 决策定稿
 - **改动：**
   - 新增 `scripts/auth_test.py`（或扩展 `api_test.py`）：setup-status/setup/login/logout/session/password/settings/system-info。
   - 更新 `scripts/integration_test.sh`：
-    - 使用临时 `--data-dir`，从 `init-code` 文件读取初始化码，完成 setup，再登录。
+    - 使用临时 `--data-dir`，直接设置密码完成 setup，再登录。
     - 保留 Bearer Token 测试（启动参数提供 token）。
     - 增加重启后凭据/设置保留、旧 Cookie 失效。
     - 增加恢复命令：停止服务 → `--reset-admin-password` → 重启 → 新码初始化。
@@ -356,7 +356,7 @@ T01 决策定稿
 | 编号 | 场景 | 期望 |
 | --- | --- | --- |
 | S01 | 未初始化访问 `/api/files`、`/api/terminal/sessions`、`/api/system/summary`、`/ws/metrics` | 拒绝，不返回业务数据 |
-| S02 | 错误初始化码、已用初始化码、超过 TTL 的初始化码 | 拒绝；不泄露正确码/哈希 |
+| S02 | 密码过短、确认不一致、重复初始化 | 拒绝；不泄露密码/哈希 |
 | S03 | 初始化成功后再次 `POST /api/auth/setup` | 409；原密码不变 |
 | S04 | 认证文件损坏/不可读/版本不支持 | 降级态；不自动进入初始化；恢复命令可修复 |
 | S05 | 密码错误、超长密码、空密码 | 通用失败/400；不进入无限哈希 |
@@ -364,17 +364,17 @@ T01 决策定稿
 | S07 | 旧 Cookie、篡改 Cookie、过期 Cookie、重启后 Cookie | 401；不泄露会话内容 |
 | S08 | 改密后旧 Cookie、Bearer Token | 旧 Cookie 401；Bearer 不变 |
 | S09 | Cookie 非安全方法缺少 Origin、异源 WS 握手 | 403；WS 不进入 101 |
-| S10 | 审计日志、错误响应、系统信息 | 不含密码、哈希、Token、Cookie、初始化码 |
+| S10 | 审计日志、错误响应、系统信息 | 不含密码、哈希、Token、Cookie |
 | S11 | `--reset-admin-password` 在服务运行时执行 | 非零退出；auth 文件不变 |
 | S12 | 恢复/重启后 `settings.json`、审计日志、业务文件 | 保留；认证状态按预期重置/保留 |
 
 ## 6. 迁移与回滚
 
-- **V1.0 → V1.1：** 没有 `auth.json` 的实例进入未初始化状态，必须用初始化码创建管理员密码；已有 `--auth-token` 配置继续作为 Bearer，不再用于网页登录。
+- **V1.0 → V1.1：** 没有 `auth.json` 的实例进入未初始化状态，直接在 Web UI 设置管理员密码；已有 `--auth-token` 配置继续作为 Bearer，不再用于网页登录。
 - **脚本迁移：** 自动化客户端改用 `Authorization: Bearer <token>`；依赖 `POST /api/auth/login {"token":...}` 的脚本必须修改。
 - **数据备份：** 升级前备份 `data-dir/auth.json`、`data-dir/settings.json`（如有）；`state-dir` 的审计日志按现有策略保留。
 - **回滚：** 回退到 V1.0 二进制时，V1.0 不读取 `auth.json`/`settings.json`，仍按其 Token 逻辑运行；升级后的数据文件保留，不自动删除。回滚前应停止服务并备份。
-- **恢复：** 忘记密码或认证文件损坏时，停止服务 → `edgedesk --reset-admin-password --data-dir ...` → 重启 → 用新初始化码设置密码。
+- **恢复：** 忘记密码或认证文件损坏时，停止服务 → `edgedesk --reset-admin-password --data-dir ...` → 重启 → 在 Web UI 设置新密码。
 
 ## 7. 风险与缓解
 
@@ -383,9 +383,9 @@ T01 决策定稿
 | Argon2 内存/耗时超出嵌入式目标 | 登录慢、OOM、事件循环卡顿 | T02 基准；有界 worker；参数可升级；必要时经 ADR 调整 |
 | Argon2 在 musl/ARM 静态链接失败 | 无法发布目标平台 | T02 早期验证；源码构建；CI 覆盖 |
 | `X-Forwarded-For` 伪造 | 登录限流被绕过、审计 IP 失真 | D5 可信代理白名单；默认 peer IP；S06 |
-| 初始化码进入 journald | 本机低权限用户可读 | D2 TTY-only；文件 0600；不写审计；恢复后删除 |
+| 未初始化实例被不可信访问者抢先设置密码 | 远程首次访问被劫持 | 默认回环；远程部署在初始化完成前限制访问；文档明确提示 |
 | auth.json 损坏被当成新安装 | 认证绕过 | T04 失败关闭；S04；本机恢复 |
-| 升级后管理员被锁在门外 | 无法使用 Web UI | 恢复命令 + 初始化码文件路径提示；升级文档 |
+| 升级后管理员被锁在门外 | 无法使用 Web UI | 恢复命令；升级文档 |
 | 前后端迁移不同步 | 登录/设置不可用 | 长期分支；最终单 PR；T13 全流程 |
 | 设置覆盖部署配置 | 远程/文件边界被改变 | 白名单 + 只读高级配置 + 后端校验 |
 

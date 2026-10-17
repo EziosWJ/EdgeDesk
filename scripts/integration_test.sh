@@ -104,7 +104,7 @@ if [ -d "$WEB_ROOT" ]; then
   log "frontend shell + hashed asset OK"
 fi
 
-python3 scripts/auth_test.py --host 127.0.0.1 --port "$PORT" --data-dir "$AUTH_DATA" \
+python3 scripts/auth_test.py --host 127.0.0.1 --port "$PORT" \
   --password "$PASSWORD" --new-password "$NEW_PASSWORD" --token "$TOKEN" --cookie-out "$ROOT/old-cookie.txt"
 
 log "restart persistence + old session invalidation"
@@ -154,7 +154,6 @@ stop_pid "$RATE_PID"
 run_binary --reset-admin-password --data-dir "$AUTH_DATA" --state-dir "$STATE" --auth-token "$TOKEN" \
   > "$ROOT/recovery.log" 2>&1
 grep -q "authentication was reset" "$ROOT/recovery.log"
-test -f "$AUTH_DATA/init-code"
 test -f "$AUTH_DATA/settings.json"
 grep -q '"theme":"light"' "$AUTH_DATA/settings.json"
 
@@ -162,7 +161,7 @@ start_server "$((PORT + 2))" --file-root "$DATA" --auth-token "$TOKEN" --data-di
   --state-dir "$STATE" --login-rate-limit 200 --rate-limit 500 --rate-limit-burst 500
 RECOVERY_PID=$SERVER_PID
 wait_health "$((PORT + 2))"
-python3 scripts/auth_test.py --host 127.0.0.1 --port "$((PORT + 2))" --data-dir "$AUTH_DATA" \
+python3 scripts/auth_test.py --host 127.0.0.1 --port "$((PORT + 2))" \
   --password "$RECOVERY_PASSWORD" --token "$TOKEN"
 stop_pid "$RECOVERY_PID"
 
@@ -181,7 +180,7 @@ start_server "$((PORT + 3))" --file-root "$DATA" --auth-token "$TOKEN" --data-di
   --state-dir "$STATE" --login-rate-limit 200 --rate-limit 500 --rate-limit-burst 500
 CORRUPT_PID=$SERVER_PID
 wait_health "$((PORT + 3))"
-python3 scripts/auth_test.py --host 127.0.0.1 --port "$((PORT + 3))" --data-dir "$CORRUPT_DATA" \
+python3 scripts/auth_test.py --host 127.0.0.1 --port "$((PORT + 3))" \
   --password "$CORRUPT_PASSWORD" --setup-only
 stop_pid "$CORRUPT_PID"
 
