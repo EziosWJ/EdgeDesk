@@ -55,6 +55,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   $$("[data-desktop-icon]").forEach(icon => {
     icon.addEventListener("click", event => {
+      event.preventDefault();
       if (event.detail > 1) return;
       $$("[data-desktop-icon]").forEach(item => item.classList.toggle("selected", item === icon));
     });
