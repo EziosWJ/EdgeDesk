@@ -74,7 +74,7 @@ bash scripts/integration_test.sh out/build/arm64-disk/bin/edgedesk 19591 "" \
 | GCC 15 + musl + `#embed` 组合 | 需要 GCC 15 的 musl 交叉工具链 | **未验证**（预编译 musl 工具链当前最高 GCC 13.3；`#embed` 管线已在 glibc GCC 15.2 上验证，musl 静态链路已在 GCC 11.2 / 13.3 上验证，两者交集未验证） |
 | OpenHarmony ARM64 | 需要对应 SDK | **未验证** |
 | 真实设备（工控板/网关） | 目标硬件 | **未验证**（当前仅有 QEMU 运行证据） |
-| GitHub Actions CI | 本仓库 workflow：host-build / gcc15-embed / arm64-cross / x86_64-musl-static 四个 job | **已执行并通过**（2026-10-16，main 分支；见仓库 Actions） |
+| GitHub Actions CI | 本仓库 workflow：host-build / gcc15-embed / arm64-cross / x86_64-musl-static 四个 job | **已执行并通过**（2026-10-17，V1.1 PR #2；见仓库 Actions） |
 
 ### libhv 依赖的已知构建适配
 
