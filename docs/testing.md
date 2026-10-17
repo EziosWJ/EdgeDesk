@@ -12,10 +12,10 @@
 | `file_service_test` | 列表/排序/分页/隐藏文件、`dirs_only` 直接子目录（符号链接不跟随）、文本读写与原子保存保留权限、二进制拒绝、上传/中止/超限、递归删除计数、Range 解析、MIME 判定 | GCC 13.3 host | 通过 |
 | `command_guard_test` | 危险命令命中（rm -rf 根、块设备写入、fork 炸弹、关机…）与安全命令不误报 | GCC 13.3 host | 通过 |
 | `terminal_session_test` | 真实 Bash 登录 Shell、`~/.profile` 加载、UTF-8/ANSI、TIOCSWINSZ resize、CommandGuard 拦截不执行、回放缓冲有界、订阅断开不杀会话、会话上限/空闲回收、缺 Bash 报错而非回退 sh | GCC 13.3 host + /bin/bash 5.2 | 通过 |
-| `system_metrics_test` | /proc/stat、loadavg、meminfo（含旧内核回退）、net/dev 速率差分、mounts 过滤、采样线程与环形缓冲 | GCC 13.3 host | 通过 |
+| `system_metrics_test` | /proc/stat、loadavg、meminfo（含旧内核回退）、net/dev 速率差分、IPv4/IPv6 地址格式化与 `getifaddrs` 枚举（排除 lo）、mounts 过滤、采样线程与环形缓冲 | GCC 13.3 host | 通过 |
 | `embed_generator_test` | `#embed` 生成器的确定性、路径校验、ETag | Python 3.12 | 通过 |
-| 前端单元测试 | windowStore（开关/层级/拖动/缩放/最大化/关闭、不可变快照）、会话持久化（仅 id/title）、metrics 窗口有界、字节/百分比/运行时间格式化、FloatingWindow DOM 交互（指针拖动、缩放把手、按钮）、Sidebar（导航选中、收起/展开与 localStorage 持久化恢复、服务状态）、仪表盘图表工具（窗口切片、变化值、速率单位、时间刻度、开机时刻）、DashboardView DOM 渲染（KPI 六卡、三图表面板、磁盘环形图与挂载点切换、在线/数据中断状态、空数据不造假）、文件管理（路径助手/视图偏好/上传名校验、按扩展名与特殊文件名解析文件类型图标、Go/C++/Markdown 渲染不同图标、目录树按需加载与缓存/祖先展开/失败重试/刷新/不跟随链接、叶子节点隐藏角标与"无子目录"文案、单击打开与仅复选框选中、选中操作在工具栏就地切换、拖拽上传确认/跳过文件夹/取消不上传、树面板收起展开与宽度调整持久化、列表↔网格共享选择、本地筛选、隐藏文件联动、分页排序、失败态与重试、批量删除确认与失败不报成功、浮动终端/编辑器窗口） | Node 24.14 / vitest 3.2 / happy-dom | 通过（68 项）；`npm run build`（tsc + vite，含 unplugin-icons 文件类型图标）通过 |
-| `api_test.py` | health 契约、认证/会话/Bearer、CSRF、目录浏览（含 `dirs_only` 只返回直接子目录）、文本读写、mkdir/rename/delete、流式上传字节一致、Range 206/416、路径沙箱拒绝、JSON 体积限制、系统指标 | 见下（三种二进制） | 通过 |
+| 前端单元测试 | windowStore（开关/层级/拖动/缩放/最大化/关闭、不可变快照）、会话持久化（仅 id/title）、metrics 窗口有界、字节/百分比/运行时间格式化、FloatingWindow DOM 交互（指针拖动、缩放把手、按钮）、Sidebar（导航选中、收起/展开与 localStorage 持久化恢复、服务状态）、仪表盘图表工具（窗口切片、变化值、速率单位、时间刻度、开机时刻）、DonutChart（可用部分绿色/已使用主色/不可用态）、DashboardView DOM 渲染（KPI 六卡、三图表面板、磁盘环形图与挂载点切换、网卡 IP 地址、在线/数据中断状态、空数据不造假）、文件管理（路径助手/视图偏好/上传名校验、按扩展名与特殊文件名解析文件类型图标、Go/C++/Markdown 渲染不同图标、目录树按需加载与缓存/祖先展开/失败重试/刷新/不跟随链接、叶子节点隐藏角标与"无子目录"文案、单击打开与仅复选框选中、选中操作在工具栏就地切换、拖拽上传确认/跳过文件夹/取消不上传、树面板收起展开与宽度调整持久化、列表↔网格共享选择、本地筛选、隐藏文件联动、分页排序、失败态与重试、批量删除确认与失败不报成功、浮动终端/编辑器窗口） | Node 24.14 / vitest 3.2 / happy-dom | 通过（70 项）；`npm run build`（tsc + vite，含 unplugin-icons 文件类型图标）通过 |
+| `api_test.py` | health 契约、认证/会话/Bearer、CSRF、目录浏览（含 `dirs_only` 只返回直接子目录）、文本读写、mkdir/rename/delete、流式上传字节一致、Range 206/416、路径沙箱拒绝、JSON 体积限制、系统指标（含 `network[].addresses` 字段） | 见下（三种二进制） | 通过 |
 | `ws_test.py` | 未认证/异源握手拒绝、终端 create/input/输出/resize/guard、断线重连（回放）、会话存活、显式关闭、metrics 快照+增量 | 同上 | 通过 |
 | `rate_limit_test.py` | 登录限流与通用限流在严格配置下触发 429 | 同上 | 通过 |
 | 审计校验 | `login`、`file.upload`、`terminal.create` 事件落盘 | 同上 | 通过 |
@@ -39,10 +39,11 @@
 | `arm64-disk`（gcc-aarch64-linux-gnu 13，qemu-user 8.2.2 运行） | 磁盘资源，AArch64 原生 Bash PTY | 全部通过 |
 | `arm64-musl`（musl cross GCC 11.2，`-static-pie`，qemu 运行） | 磁盘资源，AArch64 Bash PTY | 全部通过 |
 
-> 注：上述条目为实际执行记录。2026-10-17 前端图标库迁移与交互调整后，已在
-> 宿主 `dev-disk`（磁盘模式）与 `release-embed`（`#embed` 单二进制，13 个指令）
-> 上重新执行集成测试；`x86_64-musl` 与 `arm64-*` 行为迁移前记录，本次未重跑
-> （迁移仅涉及前端构建产物，未新增原生代码）。
+> 注：上述条目为实际执行记录。2026-10-17 新增仪表盘圆环可用部分绿色显示与
+> `network[].addresses`（网卡 IP）后，已在宿主 `dev-disk`（磁盘模式）与
+> `release-embed`（`#embed` 单二进制，13 个指令）上重新执行单元测试与集成测试；
+> `x86_64-musl` 与 `arm64-*` 行为本次未重跑（本次原生改动仅使用 POSIX
+> `getifaddrs()`，但尚未在新提交上验证交叉/静态链接）。
 
 ```bash
 bash scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19091 web/dist

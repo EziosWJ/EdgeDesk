@@ -77,6 +77,7 @@ hv::Json metrics_json(const MetricsSample& sample) {
     for (const auto& interface : sample.network) {
         hv::Json item;
         item["name"] = interface.name;
+        item["addresses"] = interface.addresses;
         item["rx_bytes_per_second"] = interface.rx_bytes_per_second;
         item["tx_bytes_per_second"] = interface.tx_bytes_per_second;
         item["rx_bytes_total"] = interface.rx_bytes_total;

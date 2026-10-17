@@ -59,6 +59,11 @@ function ProgressBar({ value, tone }: { value: number | null; tone: 'primary' | 
   );
 }
 
+/** Prefer the IPv4 address for the compact network rows; fall back to IPv6. */
+function primaryInterfaceAddress(addresses: readonly string[]): string | null {
+  return addresses.find((address) => !address.includes(':')) ?? addresses[0] ?? null;
+}
+
 function RangeSelect({ value, onChange }: { value: number; onChange: (seconds: number) => void }) {
   return (
     <select className="ed-range-select" value={value} onChange={(event) => onChange(Number(event.target.value))} aria-label="曲线时间范围">
@@ -113,6 +118,14 @@ export function DashboardView() {
   const networkTotal = latest && latest.network.length > 0
     ? latest.network.reduce((sum, item) => sum + item.rx_bytes_per_second + item.tx_bytes_per_second, 0)
     : null;
+  const primaryNetworkAddress = latest?.network
+    .map((item) => primaryInterfaceAddress(item.addresses))
+    .find((address) => address !== null) ?? null;
+  const networkAddressSummary = latest
+    ? latest.network
+        .map((item) => `${item.name} ${item.addresses.length > 0 ? item.addresses.join(' / ') : 'IP 未分配'}`)
+        .join('，')
+    : '';
 
   const disks = latest?.disks ?? [];
   const primaryDisk = disks.find((disk) => disk.mount === '/') ?? disks[0] ?? null;
@@ -251,8 +264,12 @@ export function DashboardView() {
                   </b>
                 </div>
                 <div>
-                  <span>接口</span>
-                  <b>{latest.network.length > 0 ? `${latest.network.length} 个` : '—'}</b>
+                  <span>接口 / IP</span>
+                  <b title={networkAddressSummary || undefined}>
+                    {latest.network.length > 0
+                      ? `${latest.network.length} 个${primaryNetworkAddress ? ` · ${primaryNetworkAddress}` : ' · IP 未分配'}`
+                      : '—'}
+                  </b>
                 </div>
               </div>
             </KpiCard>
@@ -362,13 +379,27 @@ export function DashboardView() {
               />
               <table className="ed-mini-table">
                 <tbody>
-                  {latest.network.map((item) => (
-                    <tr key={item.name}>
-                      <td>{item.name}</td>
-                      <td>↓ {formatRate(item.rx_bytes_per_second)}</td>
-                      <td>↑ {formatRate(item.tx_bytes_per_second)}</td>
-                    </tr>
-                  ))}
+                  {latest.network.map((item) => {
+                    const address = primaryInterfaceAddress(item.addresses);
+                    return (
+                      <tr key={item.name}>
+                        <td className="ed-net-interface">
+                          <span className="ed-net-name">{item.name}</span>
+                          <span
+                            className="ed-net-ip"
+                            title={item.addresses.length > 0 ? `IP 地址：${item.addresses.join('、')}` : '该网卡未分配 IP 地址'}
+                          >
+                            {address ?? 'IP 未分配'}
+                            {item.addresses.length > 1 && (
+                              <em className="ed-net-ip-more">+{item.addresses.length - 1}</em>
+                            )}
+                          </span>
+                        </td>
+                        <td>↓ {formatRate(item.rx_bytes_per_second)}</td>
+                        <td>↑ {formatRate(item.tx_bytes_per_second)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </article>

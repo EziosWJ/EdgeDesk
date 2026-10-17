@@ -128,13 +128,15 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
   "memory": {"total_kb":...,"available_kb":...,"used_kb":...,"used_percent":...,
              "swap_total_kb":...,"swap_free_kb":...},
   "disks": [{"mount":"/","filesystem":"ext4","total_bytes":...,"used_bytes":...,"available_bytes":...,"used_percent":...}],
-  "network": [{"name":"eth0","rx_bytes_per_second":...,"tx_bytes_per_second":...,"rx_bytes_total":...,"tx_bytes_total":...}],
+  "network": [{"name":"eth0","addresses":["192.168.1.10"],"rx_bytes_per_second":...,"tx_bytes_per_second":...,"rx_bytes_total":...,"tx_bytes_total":...}],
   "unavailable": ["network_rate_initial"]
 }
 ```
 
 `unavailable` 列出当前无法采集的维度；对应字段为 `null` 或空数组，前端显示
 “不可用/采样中”，绝不虚构为 0。慢客户端在队列超过 1 MiB 时丢弃该次样本。
+`network[].addresses` 为除 `lo` 外各网卡已配置的 IPv4/IPv6 地址（来自 `getifaddrs()`）；
+网卡未分配地址时为空数组。
 
 ## 系统 API
 

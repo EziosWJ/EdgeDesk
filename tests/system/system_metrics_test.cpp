@@ -7,9 +7,11 @@
 #include "system/system_metrics.hpp"
 
 #include <atomic>
+#include <arpa/inet.h>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <netinet/in.h>
 #include <thread>
 
 using namespace edgedesk;
@@ -116,6 +118,26 @@ void test_netdev() {
     CHECK(compute_network_rates(previous, current, 0.0).empty());
 }
 
+void test_interface_addresses() {
+    in_addr ipv4{};
+    CHECK(::inet_pton(AF_INET, "192.0.2.10", &ipv4) == 1);
+    CHECK_STR_EQ(format_ip_address(AF_INET, &ipv4), "192.0.2.10");
+
+    in6_addr ipv6{};
+    CHECK(::inet_pton(AF_INET6, "2001:db8::1", &ipv6) == 1);
+    CHECK_STR_EQ(format_ip_address(AF_INET6, &ipv6), "2001:db8::1");
+
+    CHECK(format_ip_address(AF_INET, nullptr).empty());
+    CHECK(format_ip_address(-1, &ipv4).empty());
+
+    const auto interfaces = read_interface_addresses();
+    for (const auto& interface : interfaces) {
+        CHECK(!interface.name.empty());
+        CHECK(interface.name != "lo");
+        CHECK(!interface.addresses.empty());
+    }
+}
+
 void test_mounts() {
     const std::string content =
         "/dev/sda1 / ext4 rw,relatime 0 0\n"
@@ -184,6 +206,7 @@ int main() {
     test_loadavg_uptime();
     test_meminfo();
     test_netdev();
+    test_interface_addresses();
     test_mounts();
     test_sampler();
     return edgedesk::test::finish("system_metrics_test");

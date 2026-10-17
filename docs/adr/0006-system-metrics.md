@@ -14,7 +14,7 @@
    - CPU：`/proc/stat`（累计 jiffies，两次采样差分）；负载 `<sys/loadavg>`；核心数 `sysconf(_SC_NPROCESSORS_ONLN)`。
    - 内存：`/proc/meminfo`（total/available/free/buffers/cached/swap）。
    - 磁盘：`statvfs`（逐个挂载点，默认读取 `/proc/mounts` 中真实块设备挂载；可配置 `--disk-mount` 列表覆盖）。
-   - 网络：`/proc/net/dev`（累计 RX/TX 字节，差分得到速率；排除 lo，无接口时返回空列表）。
+   - 网络：`/proc/net/dev`（累计 RX/TX 字节，差分得到速率；排除 lo，无接口时返回空列表）；`getifaddrs()` 读取各网卡 IPv4/IPv6 地址。
    - 运行时间：`/proc/uptime`；主机名 `gethostname`；内核 `uname`。
 2. 内存中维护固定长度环形缓冲（`--metrics-history`，默认 300 点），只保存标量样本，不落盘、不跨重启。
 3. 传输：`GET /api/system/summary`（当前值 + 可选 `history=N` 返回最近 N 点快照）与 `WS /ws/metrics` 增量推送（见 ADR-0003、API 文档）。

@@ -200,6 +200,8 @@ def test_system(cookie):
     check(body["sample"]["cpu"]["cores"] >= 1, f"cpu cores {body['sample']}")
     check("memory" in body["sample"], "memory missing")
     check("disks" in body["sample"], "disks missing")
+    for interface in body["sample"].get("network", []):
+        check(isinstance(interface.get("addresses"), list), f"network addresses missing: {interface}")
 
     status, payload, _ = request("GET", "/api/system/history?window=10", cookie=cookie)
     check(status == 200 and "samples" in json_body(payload), "history failed")

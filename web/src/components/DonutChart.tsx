@@ -23,9 +23,18 @@ export function DonutChart({ percent, size = 148, label = '已使用' }: Props) 
         role="img"
         aria-label={percent === null ? `磁盘使用率不可用` : `磁盘${label} ${formatPercent(percent, 0)}`}
       >
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="var(--ed-donut-track)" strokeWidth={stroke} />
+        <circle
+          className="ed-donut-available"
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke={percent === null ? 'var(--ed-donut-track)' : 'var(--ed-accent)'}
+          strokeWidth={stroke}
+        />
         {percent !== null && (
           <circle
+            className="ed-donut-used"
             cx={size / 2}
             cy={size / 2}
             r={radius}

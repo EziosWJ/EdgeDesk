@@ -74,6 +74,7 @@ export type MetricsSample = {
   }[];
   network: {
     name: string;
+    addresses: string[];
     rx_bytes_per_second: number;
     tx_bytes_per_second: number;
     rx_bytes_total: number;

@@ -36,7 +36,7 @@ src/
 │   ├── cpu_metrics.*         /proc/stat、/proc/loadavg、/proc/uptime
 │   ├── memory_metrics.*      /proc/meminfo
 │   ├── disk_metrics.*        /proc/mounts + statvfs
-│   ├── network_metrics.*     /proc/net/dev 与速率差分
+│   ├── network_metrics.*     /proc/net/dev、getifaddrs 与速率差分
 │   └── system_metrics.*      采样线程 + 定长环形缓冲 + 订阅推送
 ├── security/
 │   ├── auth.*                访问密钥 + 签名会话 Cookie（HMAC-SHA256）

@@ -39,7 +39,16 @@ function sample(index: number, ts: number): MetricsSample {
         used_percent: 38,
       },
     ],
-    network: [{ name: 'eth0', rx_bytes_per_second: 1024, tx_bytes_per_second: 512, rx_bytes_total: 1, tx_bytes_total: 1 }],
+    network: [
+      {
+        name: 'eth0',
+        addresses: ['192.0.2.10'],
+        rx_bytes_per_second: 1024,
+        tx_bytes_per_second: 512,
+        rx_bytes_total: 1,
+        tx_bytes_total: 1,
+      },
+    ],
     unavailable: [],
   };
 }
@@ -83,6 +92,7 @@ describe('DashboardView', () => {
     expect(container.textContent).toContain('网络收发（KiB/s）');
     expect(container.textContent).toContain('已使用');
     expect(container.textContent).toContain('下行（接收）');
+    expect(container.textContent).toContain('192.0.2.10');
   });
 
   it('shows the disk donut, legend and mount chips for the real mount points', () => {

@@ -1,6 +1,10 @@
 #include "system/network_metrics.hpp"
 
+#include <algorithm>
+#include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <map>
+#include <netinet/in.h>
 
 namespace edgedesk {
 namespace {
@@ -18,7 +22,66 @@ bool read_u64(std::string_view text, std::size_t& pos, std::uint64_t& out) {
     return any;
 }
 
+struct IfAddrsGuard {
+    ifaddrs* list = nullptr;
+    ~IfAddrsGuard() {
+        if (list != nullptr) ::freeifaddrs(list);
+    }
+};
+
 } // namespace
+
+std::string format_ip_address(int family, const void* address) {
+    if (address == nullptr || (family != AF_INET && family != AF_INET6)) return {};
+    char text[INET6_ADDRSTRLEN] = {0};
+    if (::inet_ntop(family, address, text, sizeof(text)) == nullptr) return {};
+    return text;
+}
+
+std::vector<NetInterfaceAddress> read_interface_addresses() {
+    std::vector<NetInterfaceAddress> result;
+    IfAddrsGuard guard;
+    if (::getifaddrs(&guard.list) != 0) return result;
+
+    std::map<std::string, std::vector<std::string>> addresses_by_name;
+    for (const ifaddrs* item = guard.list; item != nullptr; item = item->ifa_next) {
+        if (item->ifa_addr == nullptr || item->ifa_name == nullptr) continue;
+        const std::string name = item->ifa_name;
+        if (name == "lo") continue;
+        const int family = item->ifa_addr->sa_family;
+        const void* address = nullptr;
+        if (family == AF_INET) {
+            address = &reinterpret_cast<const sockaddr_in*>(item->ifa_addr)->sin_addr;
+        } else if (family == AF_INET6) {
+            address = &reinterpret_cast<const sockaddr_in6*>(item->ifa_addr)->sin6_addr;
+        } else {
+            continue;
+        }
+        const std::string text = format_ip_address(family, address);
+        if (text.empty()) continue;
+        auto& addresses = addresses_by_name[name];
+        if (std::find(addresses.begin(), addresses.end(), text) == addresses.end()) {
+            addresses.push_back(text);
+        }
+    }
+
+    result.reserve(addresses_by_name.size());
+    for (auto& entry : addresses_by_name) {
+        // IPv4 first so the compact UI can show the most familiar address.
+        std::stable_sort(entry.second.begin(), entry.second.end(),
+                         [](const std::string& left, const std::string& right) {
+                             const bool left_v4 = left.find(':') == std::string::npos;
+                             const bool right_v4 = right.find(':') == std::string::npos;
+                             if (left_v4 != right_v4) return left_v4;
+                             return left < right;
+                         });
+        NetInterfaceAddress interface;
+        interface.name = entry.first;
+        interface.addresses = std::move(entry.second);
+        if (!interface.addresses.empty()) result.push_back(std::move(interface));
+    }
+    return result;
+}
 
 bool parse_proc_net_dev(std::string_view content, std::vector<NetInterfaceCounters>& out) {
     out.clear();

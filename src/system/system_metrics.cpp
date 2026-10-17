@@ -145,6 +145,14 @@ MetricsSample SystemMetrics::sample_once(bool refresh_disks) {
         } else {
             const double elapsed = static_cast<double>(sample.timestamp_ms - previous_net_timestamp_ms_) / 1000.0;
             sample.network = compute_network_rates(previous_net_, counters, elapsed);
+            const auto addresses = read_interface_addresses();
+            for (auto& rate : sample.network) {
+                const auto match = std::find_if(addresses.begin(), addresses.end(),
+                                                [&rate](const NetInterfaceAddress& entry) {
+                                                    return entry.name == rate.name;
+                                                });
+                if (match != addresses.end()) rate.addresses = match->addresses;
+            }
         }
         previous_net_ = counters;
         previous_net_timestamp_ms_ = sample.timestamp_ms;
