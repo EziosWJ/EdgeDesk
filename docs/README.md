@@ -54,10 +54,16 @@
 
 ## 设计素材
 
-- [设计资源索引](design/README.md)
-- [浏览器素材画廊](design/asset-gallery.html)
-- [素材引用与 #embed 打包说明](design/asset-usage.md)
-- [四页原型拆解及视觉规范](design/prototype-guidelines.md)
+- [V1.2 独立页面原型总览](design/prototypes/index.html)：桌面、启动器、设备概览、文件管理、终端、设置与组件素材
+- [原型本地运行说明](design/prototypes/README.md)
+- [浏览器素材画廊](design/asset-gallery.html)：品牌、插画和装饰 SVG
+- [素材使用指南](design/asset-usage.md)：资源清单、React 引用、打包与验收
+- [原型实现规范](design/prototype-guidelines.md)：视觉 Token、NAS 风格资源小组件和功能/展示边界
+- [原型还原度对照表](design/prototype-conformance.md)：视觉验收清单
+
+可复用素材位于 [web/public/assets](../web/public/assets/)，其中新增桌面壁纸与应用图标 sprite 位于 [web/public/assets/desktop](../web/public/assets/desktop/)；设计 Token 位于 [web/src/styles/edgedesk-tokens.css](../web/src/styles/edgedesk-tokens.css)。
+
+> 静态原型使用演示数据，不连接设备 API，也不代表功能已实现。生产 UI 必须使用真实 API/WebSocket 数据。
 
 ## 开发环境
 
