@@ -15,6 +15,7 @@ web/
                        empty-terminal.svg / monitor-unavailable.svg /
                        session-disconnected.svg
       decorations/     panel-grid.svg / dot-grid.svg
+      desktop/         wallpaper-mountain-lake.svg / app-icons.svg
       asset-manifest.json
   src/
     components/
@@ -45,11 +46,13 @@ docs/design/
 | `illustrations/monitor-unavailable.svg` | 采集失败/指标不可用 | 160–240px 宽 |
 | `illustrations/session-disconnected.svg` | 会话已断开占位图 | 160–240px 宽 |
 | `decorations/*.svg` | 指标卡/侧栏微弱纹理 | CSS background，平铺 |
+| `desktop/wallpaper-mountain-lake.svg` | 桌面壁纸 | background-size: cover，避免作为高对比内容背景 |
+| `desktop/app-icons.svg` | 桌面应用与资源小组件图标 sprite | 通过 `<svg><use href="/assets/desktop/app-icons.svg#cpu"></use></svg>` 引用 |
 
 界面图标使用 `lucide-react` 组件（导航、指标、工具栏、文件类型、操作与窗口控制），
 不在此表中列出；图标名与用法见各组件源码和 ADR-0007。
 
-完整索引：`web/public/assets/asset-manifest.json`。
+完整索引：`web/public/assets/asset-manifest.json`。V1.2 静态原型页与使用方式见 [`prototypes/README.md`](prototypes/README.md)。
 
 ## React / Vite 引用示例（React 目前仍是候选）
 
