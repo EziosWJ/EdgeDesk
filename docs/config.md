@@ -142,6 +142,44 @@ edgedesk --reset-admin-password --data-dir /var/lib/edgedesk
 - 浏览器桌面布局仍在 localStorage；扩展窗口记录只保存 `appId` 与几何，恢复时重新校验安装、
   启用和宿主 API 兼容状态。
 
+## 本地开发运行（VS Code / 桌面用户）
+
+生产默认扩展数据根是 `/var/lib/edgedesk/apps`，普通桌面用户通常没有写权限；直接运行会看到
+`extension platform is unavailable; configure a writable --apps-root`，核心 API 仍可用。
+这不是 CMake 预设问题，`--apps-root` 是**运行时参数**。
+
+本地开发使用仓库内脚本，它把运行时状态放到已被 `.gitignore` 忽略的 `out/dev-data/`：
+
+```bash
+scripts/run-dev.sh                 # http://127.0.0.1:8080/
+EDGEDESK_PORT=8090 scripts/run-dev.sh
+```
+
+在 VS Code 中调试时，把同样的参数加入 launch/run 配置（示例）：
+
+```json
+{
+  "name": "EdgeDesk dev-disk",
+  "type": "cppdbg",
+  "request": "launch",
+  "program": "${workspaceFolder}/out/build/dev-disk/bin/edgedesk",
+  "cwd": "${workspaceFolder}",
+  "preLaunchTask": "edgedesk: prepare dev dirs",
+  "args": [
+    "--host", "127.0.0.1", "--port", "8080",
+    "--web-root", "${workspaceFolder}/web/dist",
+    "--file-root", "${workspaceFolder}/out/dev-data/files",
+    "--data-dir", "${workspaceFolder}/out/dev-data/data",
+    "--state-dir", "${workspaceFolder}/out/dev-data/state",
+    "--apps-root", "${workspaceFolder}/out/dev-data/apps"
+  ]
+}
+```
+
+其中 `edgedesk: prepare dev dirs` 只需执行
+`mkdir -p out/dev-data/files out/dev-data/data out/dev-data/state out/dev-data/apps`。
+生产部署仍应使用默认 `/var/lib/edgedesk/apps`（或 systemd `StateDirectory` 提供的可写路径）。
+
 ## 信号与退出
 
 `SIGINT` / `SIGTERM` 触发优雅退出：停止 HTTP 事件循环 → 关闭全部 PTY 会话

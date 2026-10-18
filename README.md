@@ -38,8 +38,8 @@ cmake --preset dev-disk
 cmake --build --preset dev-disk
 ctest --preset dev-disk
 
-# 3) 运行（首次进入初始化页）
-./out/build/dev-disk/bin/edgedesk --port 8080 --file-root /srv --data-dir ~/.local/share/edgedesk
+# 3) 运行（首次进入初始化页；本地开发使用可写 apps-root）
+scripts/run-dev.sh
 # 首次打开浏览器时会进入初始化页；直接设置管理员密码即可。
 # 浏览器打开 http://127.0.0.1:8080
 ```
