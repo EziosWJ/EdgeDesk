@@ -422,7 +422,7 @@ code { font-family: "JetBrains Mono", Menlo, Consolas, monospace; font-size: 12p
 .ed-status-panel .ed-info-list { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); column-gap: 28px; }
 
 /* settings view */
-.ed-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.ed-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 16px; }
 .ed-metric-list { margin: 0; display: grid; gap: 6px; }
 .ed-metric-list div { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
 .ed-metric-list dt { color: var(--ed-muted); }

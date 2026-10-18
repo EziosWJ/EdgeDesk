@@ -112,9 +112,13 @@ export function DesktopShell({ onLogout, health }: Props) {
   }, [focusedId, narrow]);
 
   const healthText = health === 'online' ? '服务在线' : health === 'offline' ? '服务离线' : '检测中';
+  const fullscreen = !narrow && windows.some((item) => item.state === 'maximized');
 
   return (
-    <div className={`ed-desktop${narrow ? ' narrow' : ''}`} data-testid="desktop-shell">
+    <div
+      className={`ed-desktop${narrow ? ' narrow' : ''}${fullscreen ? ' has-fullscreen' : ''}`}
+      data-testid="desktop-shell"
+    >
       <div
         className="ed-desktop-wallpaper"
         aria-hidden="true"

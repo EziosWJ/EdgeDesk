@@ -218,6 +218,13 @@ export class WindowStore {
       this.viewport,
       app.minSize,
     );
+    // A newly opened window should be fully visible when it fits. constrainGeometry
+    // only guarantees a reachable title bar, which leaves the close button clipped
+    // on medium viewports once the default size is clamped to the viewport width.
+    const maxFittingX = this.viewport.width - geometry.width - WINDOW_MARGIN;
+    if (maxFittingX >= WINDOW_MARGIN) {
+      geometry.x = Math.min(geometry.x, maxFittingX);
+    }
     const window: WindowState = {
       id,
       appId: app.id,

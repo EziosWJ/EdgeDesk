@@ -21,6 +21,8 @@ export function FloatingWindow({ window: state, children, narrow = false, focuse
   const resizeRef = useRef<{ startX: number; startY: number; width: number; height: number } | null>(null);
   const app = appRegistry.get(state.appId);
   const minimized = state.state === 'minimized';
+  /** Explicit maximize fills the whole desktop viewport, not just the work area. */
+  const fullscreen = state.state === 'maximized' && !narrow;
   const maximized = state.state === 'maximized' || narrow;
   const dragEnabled = !maximized && !minimized;
 
@@ -91,6 +93,7 @@ export function FloatingWindow({ window: state, children, narrow = false, focuse
         'ed-floating',
         'ed-window',
         maximized ? 'maximized' : '',
+        fullscreen ? 'fullscreen' : '',
         minimized ? 'ed-window--minimized' : '',
         focused ? 'focused' : '',
       ]

@@ -130,6 +130,15 @@ describe('windowStore', () => {
     expect(item.y).toBeLessThanOrEqual(420 - 40 - 12);
   });
 
+  it('opens clamped windows fully inside medium viewports', () => {
+    windowStore.setViewport({ width: 900, height: 700 });
+    const id = windowStore.launch('files');
+    const item = windowStore.getSnapshot().find((entry) => entry.id === id)!;
+    expect(item.width).toBe(900 - 24);
+    expect(item.x).toBeGreaterThanOrEqual(12);
+    expect(item.x + item.width).toBeLessThanOrEqual(900 - 12);
+  });
+
   it('toggles maximize, restores geometry and closes windows', () => {
     const id = windowStore.open({ kind: 'preview', title: '预览 /x', payload: { path: '/x' } });
     const before = windowStore.getSnapshot().find((item) => item.id === id)!;

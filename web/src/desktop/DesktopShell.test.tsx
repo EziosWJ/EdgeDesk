@@ -112,8 +112,21 @@ describe('DesktopShell', () => {
     expect(container.querySelector<HTMLElement>('.ed-window')?.style.display).not.toBe('none');
   });
 
-  it('opens the launcher, filters by name and shows an explicit empty state', () => {
+  it('turns an explicitly maximized window into true fullscreen', () => {
     render();
+    act(() => windowStore.launch('dashboard'));
+    render();
+    act(() => click(container.querySelector('[aria-label="最大化 设备概览"]')!));
+    render();
+    expect(container.querySelector('.ed-desktop')?.classList.contains('has-fullscreen')).toBe(true);
+    expect(container.querySelector<HTMLElement>('.ed-window')?.classList.contains('fullscreen')).toBe(true);
+
+    act(() => click(container.querySelector('[aria-label="最小化 设备概览"]')!));
+    render();
+    expect(container.querySelector('.ed-desktop')?.classList.contains('has-fullscreen')).toBe(false);
+  });
+
+  it('opens the launcher, filters by name and shows an explicit empty state', () => {    render();
     const launcherButton = container.querySelector<HTMLButtonElement>('[aria-label="打开应用启动器"]')!;
     launcherButton.focus();
     act(() => click(launcherButton));
