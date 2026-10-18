@@ -19,6 +19,14 @@
 未执行/未验证：L2 平台矩阵（`release-embed`、musl、ARM64/qemu、真实硬件）本轮未重新运行；
 本机无 GitHub Actions 运行记录更新。不得把上表当作跨平台发布验收。
 
+
+## 2026-10-18 SPEC-0008 复核：当前跨平台 CI 阻断
+
+- 复核提交：`308325a3f5d57e0879b58566cca495406a4b191e`；[GitHub Actions run #39132868799](https://github.com/EziosWJ/EdgeDesk/actions/runs/39132868799)。
+- 结果：5 个 job 中 3 个通过（`frontend`、`host-build`、`gcc15-embed`），2 个失败（`x86_64-musl-static`、`arm64-cross`）。
+- 两个失败目标在 CMake 配置阶段均未找到目标 ZLIB 头文件/库；跟踪于 [Issue #24](https://github.com/EziosWJ/EdgeDesk/issues/24)。
+- 该结果不否定旧 PR #14 当时的 5/5 通过记录，但旧 PR 的通过不能代替当前提交的跨平台验收。SPEC-0008 的安全与可靠性修复另见 [总任务 #16](https://github.com/EziosWJ/EdgeDesk/issues/16)。
+
 ## 测试分层（本地入口）
 
 | 层级 | 入口 | 覆盖 | 何时运行 |
