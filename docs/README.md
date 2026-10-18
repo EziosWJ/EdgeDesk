@@ -41,7 +41,7 @@
 | --- | --- |
 | [SPEC-0001](spec/0001-product-scope.md) | 项目定位、V1.0 范围及验收 |
 | [SPEC-0002](spec/0002-file-management.md) | 文件管理与文件工作区 |
-| [SPEC-0003](spec/0003-terminal-workspace.md) | Bash、终端 Tab、刷新重连、浮动窗口 |
+| [SPEC-0003](spec/0003-terminal-workspace.md) | Bash 单页面终端、会话管理、刷新重连、浮动窗口 |
 | [SPEC-0004](spec/0004-device-dashboard.md) | 设备基本资源与实时曲线 |
 | [SPEC-0005](spec/0005-authentication-and-settings.md) | V1.1 管理员认证、首次初始化、系统设置与验收 |
 | [SPEC-0006](spec/0006-desktop-workspace.md) | V1.2 桌面图标、Dock、启动器、窗口管理、持久化与恢复 |

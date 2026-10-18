@@ -2,6 +2,7 @@ import type { WindowState } from '../types';
 import { DashboardView } from '../features/dashboard/DashboardView';
 import { FilesView } from '../features/files/FilesView';
 import { TerminalView } from '../features/terminal/TerminalView';
+import { TerminalSessionsView } from '../features/terminal/TerminalSessionsView';
 import { SettingsView } from '../features/settings/SettingsView';
 import { EditorPane } from '../features/files/EditorPane';
 import { PreviewPane } from '../features/files/PreviewPane';
@@ -26,6 +27,8 @@ export function AppSurface({ window, onLogout }: Props) {
           windowId={window.id}
         />
       );
+    case 'sessions':
+      return <TerminalSessionsView />;
     case 'settings':
       return <SettingsView onLogout={onLogout} />;
     case 'editor':

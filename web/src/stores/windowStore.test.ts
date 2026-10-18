@@ -37,6 +37,24 @@ describe('windowStore', () => {
     expect(windowStore.getSnapshot()).toHaveLength(2);
   });
 
+  it('focuses the existing standalone terminal for a session instead of attaching twice', () => {
+    const first = windowStore.launch('terminal', { payload: { sessionId: 's1' }, instanceKey: 's1' });
+    const second = windowStore.launch('terminal', { payload: { sessionId: 's1' }, instanceKey: 'other' });
+    expect(second).toBe(first);
+    expect(windowStore.getSnapshot()).toHaveLength(1);
+    expect(windowStore.getFocusedId()).toBe(first);
+  });
+
+  it('keeps the session manager single-instance and separate from standalone terminals', () => {
+    const manager = windowStore.launch('sessions');
+    const again = windowStore.launch('sessions');
+    expect(again).toBe(manager);
+
+    const terminal = windowStore.launch('terminal');
+    expect(terminal).not.toBe(manager);
+    expect(windowStore.getSnapshot()).toHaveLength(2);
+  });
+
   it('enforces single-instance apps and allows multi-instance apps', () => {
     const dashboard = windowStore.launch('dashboard');
     const dashboardAgain = windowStore.launch('dashboard');

@@ -34,7 +34,7 @@ function layout(overrides: Partial<DesktopLayoutV1> = {}): DesktopLayoutV1 {
       { appId: 'dashboard', col: 0, row: 0 },
       { appId: 'files', col: 1, row: 0 },
     ],
-    dock: ['dashboard', 'files', 'terminal', 'settings'],
+    dock: ['dashboard', 'files', 'terminal', 'sessions', 'settings'],
     windows: [
       {
         id: 'dashboard:solo',
@@ -80,7 +80,7 @@ describe('DesktopPersistence', () => {
       { appId: 'terminal', col: 2, row: 1 },
       { appId: 'files', col: 0, row: 3 },
     ]);
-    expect(loaded.layout?.dock).toEqual(['dashboard', 'files', 'terminal', 'settings']);
+    expect(loaded.layout?.dock).toEqual(['dashboard', 'files', 'terminal', 'sessions', 'settings']);
     expect(loaded.layout?.windows[0]).toMatchObject({
       appId: 'files',
       state: 'maximized',
@@ -180,7 +180,7 @@ describe('DesktopPersistence', () => {
     const warning = restoreDesktop({ storage, sessions: [], viewport: { width: 1200, height: 800 } });
     expect(warning).toBeNull();
     expect(desktopStore.getSnapshot().icons).toHaveLength(2);
-    expect(desktopStore.getSnapshot().dock).toEqual(['dashboard', 'files', 'terminal', 'settings']);
+    expect(desktopStore.getSnapshot().dock).toEqual(['dashboard', 'files', 'terminal', 'sessions', 'settings']);
     const windows = windowStore.getSnapshot();
     expect(windows).toHaveLength(2);
     expect(windows[1].restoreError).toBe('session_ended');
@@ -189,10 +189,37 @@ describe('DesktopPersistence', () => {
     expect(windows[0].width).toBeLessThanOrEqual(1200 - 24);
   });
 
+  it('migrates a legacy multi-tab terminal window to the session manager', () => {
+    const storage = new MemoryStorage();
+    saveLayout(
+      layout({
+        windows: [
+          {
+            id: 'terminal:workspace',
+            appId: 'terminal',
+            title: '终端工作区',
+            x: 200,
+            y: 120,
+            width: 800,
+            height: 500,
+            state: 'normal',
+            payload: {},
+          },
+        ],
+      }),
+      storage,
+    );
+    restoreDesktop({ storage, sessions: [], viewport: { width: 1200, height: 800 } });
+    const windows = windowStore.getSnapshot();
+    expect(windows).toHaveLength(1);
+    expect(windows[0].appId).toBe('sessions');
+    expect(windows[0].restoreError).toBeNull();
+  });
+
   it('starts from defaults when no layout exists', () => {
     const storage = new MemoryStorage();
     expect(restoreDesktop({ storage, sessions: [] })).toBeNull();
-    expect(desktopStore.getSnapshot().icons.map((icon) => icon.appId)).toEqual(['dashboard', 'files', 'terminal']);
+    expect(desktopStore.getSnapshot().icons.map((icon) => icon.appId)).toEqual(['dashboard', 'files', 'terminal', 'sessions']);
     expect(windowStore.getSnapshot()).toHaveLength(0);
     expect(desktopStore.isRestored()).toBe(true);
   });

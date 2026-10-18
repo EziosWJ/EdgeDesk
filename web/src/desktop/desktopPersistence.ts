@@ -103,13 +103,16 @@ function sanitizeDock(raw: unknown): AppId[] {
 function sanitizeWindow(raw: unknown): PersistedWindow | null {
   if (!isRecord(raw)) return null;
   const appId = typeof raw.appId === 'string' ? raw.appId : '';
-  const app = appRegistry.get(appId);
+  let app = appRegistry.get(appId);
   if (!app) return null;
   const id = cleanString(raw.id, 200);
   if (!id) return null;
   if (!finite(raw.x) || !finite(raw.y) || !finite(raw.width) || !finite(raw.height)) return null;
   if (raw.width <= 0 || raw.height <= 0) return null;
   const payload = sanitizePayload(raw.payload);
+  // v1 layouts written before the app split stored the multi-tab workspace as
+  // `terminal` without a bound session; migrate those to the session manager.
+  if (app.id === 'terminal' && !payload.sessionId) app = appRegistry.require('sessions');
   if ((app.id === 'editor' || app.id === 'preview') && !payload.path) return null;
   const state = STATUSES.includes(raw.state as WindowStatus) ? (raw.state as WindowStatus) : 'normal';
   return {

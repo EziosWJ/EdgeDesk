@@ -171,6 +171,18 @@ export class WindowStore {
     }
 
     const payload: WindowPayload = { ...(request.payload ?? {}) };
+    // One standalone terminal per backend session: opening a session that is
+    // already displayed should focus that window instead of attaching twice.
+    if (app.id === 'terminal' && payload.sessionId) {
+      const bound = this.windows.find(
+        (item) => item.appId === 'terminal' && item.payload.sessionId === payload.sessionId,
+      );
+      if (bound) {
+        this.update(bound.id, { title: sanitizeTitle(request.title, bound.title) });
+        this.focus(bound.id);
+        return bound.id;
+      }
+    }
     // Document windows and session-bound terminals are naturally keyed by their
     // resource so reopening focuses the same window. App launchers (files) get a
     // fresh instance each time unless the caller supplies an explicit key.
@@ -357,18 +369,28 @@ export class WindowStore {
     const sessions = options.sessions;
     const sessionsById = sessions ? new Map(sessions.map((session) => [session.id, session])) : null;
     const singleSeen = new Set<AppId>();
+    const sessionSeen = new Set<string>();
     const next: WindowState[] = [];
     const seenIds = new Set<string>();
 
     for (const record of records) {
-      const app = appRegistry.get(record.appId);
+      let app = appRegistry.get(record.appId);
       if (!app) continue;
+      const payload: WindowPayload = { ...(record.payload ?? {}) };
+      // Before the terminal/session-manager split, the multi-tab workspace was
+      // registered as `terminal` without a bound session. Keep those windows
+      // usable by restoring them as the session manager.
+      if (app.id === 'terminal' && !payload.sessionId) app = appRegistry.require('sessions');
       if (app.instancePolicy === 'single') {
         if (singleSeen.has(app.id)) continue;
         singleSeen.add(app.id);
       }
-      if (record.appId === 'editor' || record.appId === 'preview') {
-        if (!record.payload?.path) continue;
+      if (app.id === 'terminal' && payload.sessionId) {
+        if (sessionSeen.has(payload.sessionId)) continue;
+        sessionSeen.add(payload.sessionId);
+      }
+      if (app.id === 'editor' || app.id === 'preview') {
+        if (!payload.path) continue;
       }
       const id = record.id ?? `${record.appId}:r${next.length + 1}`;
       if (seenIds.has(id)) continue;
@@ -379,7 +401,6 @@ export class WindowStore {
         app.minSize,
       );
       const state: WindowStatus = record.state === 'minimized' || record.state === 'maximized' ? record.state : 'normal';
-      const payload: WindowPayload = { ...(record.payload ?? {}) };
       let restoreError: WindowState['restoreError'] = null;
       if (app.id === 'terminal' && payload.sessionId && sessionsById && !sessionsById.has(payload.sessionId)) {
         restoreError = 'session_ended';

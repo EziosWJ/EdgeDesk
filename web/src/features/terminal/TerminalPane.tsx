@@ -15,6 +15,8 @@ type Props = {
   subscribers?: number;
   onSessionCreated?: (session: TerminalSessionInfo) => void;
   onExited?: (sessionId: string | null, code: number) => void;
+  /** The attached backend session no longer exists (e.g. after a restore). */
+  onMissingSession?: () => void;
 };
 
 /**
@@ -31,6 +33,7 @@ export function TerminalPane({
   subscribers,
   onSessionCreated,
   onExited,
+  onMissingSession,
 }: Props) {
   const preferences = usePreferences();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -110,6 +113,7 @@ export function TerminalPane({
       setStatus('error');
       terminal.writeln('\r\n\x1b[31m[edgedesk] 会话已结束或不可恢复，不会自动创建替代会话。\x1b[0m');
       socket.disconnect();
+      onMissingSession?.();
     };
     terminal.onData((data) => socket.input(data));
 

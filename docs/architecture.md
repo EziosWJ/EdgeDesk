@@ -69,14 +69,14 @@ web/src/
 │   ├── DesktopIcons.tsx     单击选中、双击启动、拖拽换位
 │   ├── Dock.tsx             固定应用、运行指示、最小化恢复、多窗口选择器
 │   ├── Launcher.tsx         AppRegistry 搜索、应用说明、空结果、焦点返回
-│   ├── AppSurface.tsx       appId → 业务组件（dashboard/files/terminal/settings/editor/preview）
+│   ├── AppSurface.tsx       appId → 业务组件（dashboard/files/terminal/sessions/settings/editor/preview）
 │   └── desktop.css          桌面/窗口/Dock/启动器/NAS 小组件样式与浅色主题覆盖
 ├── stores/windowStore.ts    统一窗口生命周期、实例规则、z-index、几何约束、关闭守卫
 ├── stores/sessionStore.ts   服务端会话列表与指标窗口镜像
 ├── components/
 │   ├── WindowLayer.tsx      渲染所有窗口；最小化隐藏但不卸载
 │   └── FloatingWindow.tsx   标题栏拖动、缩放、最小化/最大化/关闭、焦点反馈
-└── features/                既有 dashboard/files/terminal/settings 业务组件
+└── features/                 既有 dashboard/files/terminal/sessions/settings 业务组件
 ```
 
 关键不变量：
@@ -87,6 +87,8 @@ web/src/
 - 最小化只设置状态并隐藏视觉层；组件保持挂载，编辑器缓冲与终端 WebSocket 订阅不被销毁。
 - 关闭终端窗口只卸载 UI；后端 `TerminalSession` 独立存活。恢复时按服务端真实会话列表校验，
   会话不存在只显示“已结束/不可恢复”，绝不自动 `create` 替代会话。
+- `terminal` 应用是单窗口单会话的单页面终端；`sessions` 应用是多 Tab 会话管理器。
+  两者共享同一后端会话集合，只有会话管理器提供显式“结束会话”。
 - `DesktopPersistence` 只保存非敏感的桌面布局与重连标识；认证 Cookie、Token、文件正文不落盘。
 
 ## 认证与持久化边界

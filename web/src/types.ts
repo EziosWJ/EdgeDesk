@@ -134,7 +134,7 @@ export type SystemInfo = {
 };
 
 /** Registered applications plus the two internal document window types. */
-export type AppId = 'dashboard' | 'files' | 'terminal' | 'settings' | 'editor' | 'preview';
+export type AppId = 'dashboard' | 'files' | 'terminal' | 'sessions' | 'settings' | 'editor' | 'preview';
 
 export type WindowKind = AppId;
 
