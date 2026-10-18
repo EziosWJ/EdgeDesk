@@ -2,7 +2,7 @@ import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { appRegistry } from './appRegistry';
 import { AppTile } from './AppIcon';
 import { slotFromPoint, moveIcon, ICON_CELL_WIDTH, ICON_CELL_HEIGHT } from './iconLayout';
-import { desktopStore, type IconSlot } from './desktopStore';
+import { desktopStore, ICON_COLUMNS, type IconSlot } from './desktopStore';
 
 type Props = {
   icons: readonly IconSlot[];
@@ -82,7 +82,7 @@ export function DesktopIcons({ icons, onLaunch }: Props) {
       return;
     }
     const order = icons.map((icon) => icon.appId);
-    const columns = Math.max(1, Math.floor((containerRef.current?.clientWidth ?? ICON_CELL_WIDTH * 4) / ICON_CELL_WIDTH));
+    const columns = ICON_COLUMNS;
     let delta = 0;
     if (event.key === 'ArrowDown') delta = columns;
     else if (event.key === 'ArrowUp') delta = -columns;
