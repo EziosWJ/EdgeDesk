@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -33,6 +33,12 @@ type PendingUpload = {
   restoreData: boolean;
 };
 
+type PendingDrop = {
+  file: File;
+  appId?: string;
+  targetName?: string;
+};
+
 const STATUS_LABEL: Record<string, string> = {
   pending_review: '待审批',
   enabled: '已启用',
@@ -58,6 +64,10 @@ function requestedPermissionList(app: ExtensionApp): string[] {
   return [...app.requested_permissions].sort();
 }
 
+function isZipFile(file: File): boolean {
+  return file.type === 'application/zip' || /\.zip$/i.test(file.name);
+}
+
 export function ExtensionManagerView({ onExtensionsChanged }: Props) {
   const [apps, setApps] = useState<ExtensionApp[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
@@ -73,8 +83,11 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
   const [uninstallDialog, setUninstallDialog] = useState<ExtensionApp | null>(null);
   const [activateDialog, setActivateDialog] = useState<{ app: ExtensionApp; revision: ExtensionRevision } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const [pendingDrop, setPendingDrop] = useState<PendingDrop | null>(null);
   const installInput = useRef<HTMLInputElement | null>(null);
   const upgradeInput = useRef<HTMLInputElement | null>(null);
+  const dragDepth = useRef(0);
 
   const selected = detail?.app ?? apps.find((item) => item.app_id === selectedId) ?? null;
 
@@ -198,6 +211,54 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
     if (upgradeInput.current) upgradeInput.current.value = '';
   };
 
+  // 拖放上传：默认作用于当前选中的应用（升级），没有可升级目标时按新应用安装；
+  // 实际上传前弹出确认窗口。
+  const onDragEnter = (event: ReactDragEvent) => {
+    if (!event.dataTransfer.types.includes('Files')) return;
+    event.preventDefault();
+    dragDepth.current += 1;
+    setDragActive(true);
+  };
+
+  const onDragOver = (event: ReactDragEvent) => {
+    if (!event.dataTransfer.types.includes('Files')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  };
+
+  const onDragLeave = (event: ReactDragEvent) => {
+    if (!event.dataTransfer.types.includes('Files')) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragActive(false);
+  };
+
+  const onDrop = (event: ReactDragEvent) => {
+    event.preventDefault();
+    dragDepth.current = 0;
+    setDragActive(false);
+    if (busy !== null) return;
+    const file = event.dataTransfer.files?.[0];
+    if (!file) return;
+    if (!isZipFile(file)) {
+      setError('仅支持上传 ZIP 安装包。');
+      return;
+    }
+    const target = selected && selected.status !== 'uninstalled' ? selected : null;
+    setPendingDrop(
+      target
+        ? { file, appId: target.app_id, targetName: target.display_name }
+        : { file },
+    );
+  };
+
+  const confirmDrop = () => {
+    const pending = pendingDrop;
+    setPendingDrop(null);
+    if (pending) {
+      void upload(pending.file, pending.appId, false, false, pending.appId ? false : restoreData);
+    }
+  };
+
   const savePermissions = () =>
     selected &&
     run('permissions', async () => {
@@ -272,7 +333,24 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
   const revisionList = useMemo(() => detail?.revisions ?? [], [detail]);
 
   return (
-    <div className="ed-ext-view">
+    <div
+      className="ed-ext-view"
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {dragActive && (
+        <div className="ed-ext-drop-overlay" aria-hidden="true">
+          <Icon icon={FileArchive} size={28} />
+          <strong>
+            {selected && selected.status !== 'uninstalled'
+              ? `松开以上传「${selected.display_name}」的升级包`
+              : '松开以安装 ZIP 扩展应用'}
+          </strong>
+          <p>上传前会弹出确认窗口。</p>
+        </div>
+      )}
       <header className="ed-ext-toolbar">
         <div>
           <p className="ed-ext-eyebrow">EXTENSION PLATFORM</p>
@@ -624,6 +702,20 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
             }
           }}
           onCancel={() => setPendingUpload(null)}
+        />
+      )}
+
+      {pendingDrop && (
+        <ConfirmDialog
+          title={pendingDrop.appId ? `升级 ${pendingDrop.targetName}？` : '安装扩展应用？'}
+          message={
+            pendingDrop.appId
+              ? `将把 ${pendingDrop.file.name} 作为「${pendingDrop.targetName}」的升级包上传。每次上传都会生成新的不可变修订，升级会关闭该应用全部窗口。`
+              : `将上传 ${pendingDrop.file.name} 并创建新的扩展应用。安装后需管理员审批权限才可启动。`
+          }
+          confirmText={pendingDrop.appId ? '上传升级包' : '上传并安装'}
+          onConfirm={confirmDrop}
+          onCancel={() => setPendingDrop(null)}
         />
       )}
 

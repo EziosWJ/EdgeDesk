@@ -1,10 +1,43 @@
 .ed-ext-view {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
   color: var(--ed-text);
   background: var(--ed-bg);
+}
+
+/* 拖放 ZIP 时的全视图提示层；pointer-events:none 让 drop 事件落回根容器。 */
+.ed-ext-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  border: 2px dashed var(--ed-primary);
+  background: color-mix(in srgb, var(--ed-bg) 82%, transparent);
+  color: var(--ed-text-strong);
+  text-align: center;
+  pointer-events: none;
+}
+
+.ed-ext-drop-overlay strong {
+  font-size: 15px;
+}
+
+.ed-ext-drop-overlay p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ed-muted);
+}
+
+.ed-ext-drop-overlay > svg {
+  color: var(--ed-primary);
 }
 
 .ed-ext-toolbar {

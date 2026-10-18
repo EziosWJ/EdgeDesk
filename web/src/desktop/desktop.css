@@ -134,7 +134,8 @@
 .ed-window-body { background: var(--ed-bg); min-width: 0; min-height: 0; overflow: hidden; container: ed-window / inline-size; }
 /* Every app view fills the window; without this a block/grid view collapses to
    its content width and leaves a blank strip plus a horizontal scrollbar. */
-.ed-window-body > .ed-view { flex: 1 1 auto; width: 100%; min-width: 0; }
+.ed-window-body > .ed-view,
+.ed-window-body > .ed-ext-view { flex: 1 1 auto; width: 100%; min-width: 0; }
 .ed-window-body > .ed-empty { flex: 1 1 auto; width: 100%; min-width: 0; }
 .ed-window-body .ed-view { padding: 14px 16px 18px; min-height: 0; overflow: auto; }
 .ed-window-body .ed-files-view,
