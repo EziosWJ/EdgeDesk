@@ -21,6 +21,16 @@ and ARM cross builds do not require network access at configure time.
 - Used for small schema-versioned state files (`auth.json`, `settings.json`)
   and the extension platform's manifest/KV/integrity metadata.
 
+## zlib (system dependency, not vendored)
+
+- Upstream: https://zlib.net/
+- License: zlib
+- Used by `src/extensions/zip_reader.cpp` for raw DEFLATE extraction.
+- `CMakeLists.txt` uses `find_package(ZLIB REQUIRED)`; host builds use the
+  distribution package. Static musl/ARM cross builds must provide `libz.a` in
+  the selected toolchain/sysroot. This impact has not yet been verified on the
+  L2 matrix; see `docs/testing.md`.
+
 ## sqlite
 
 - Upstream: https://www.sqlite.org/download.html
