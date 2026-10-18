@@ -6,7 +6,7 @@
 
 > 本清单区分“已确认且首期接受的风险”与“实现必须防止的缺陷”。登记风险不等于授权实现人员删除既有核心防护，也不代表相关功能已实现。Grill 已停止；如要改变已确认选择，必须走后续 ADR/产品变更流程。
 >
-> 代码复核发现的实现缺陷统一跟踪于 [SPEC-0008](../spec/0008-extension-platform-hardening.md) 和 [GitHub 总任务 #16](https://github.com/EziosWJ/EdgeDesk/issues/16)，子任务为 [#17–#24](https://github.com/EziosWJ/EdgeDesk/issues/17)。这些 Ticket 不会自动重开本清单已接受的 HTTP、重定向、opener、固定包配额及 JSON-RPC 资源限制决策；若修复必须改变这些决策，应先提交 ADR。
+> 代码复核发现的实现缺陷统一跟踪于 [SPEC-0008](../spec/0008-extension-platform-hardening.md) 和 [GitHub 总任务 #16](https://github.com/EziosWJ/EdgeDesk/issues/16)，子任务为 [#17](https://github.com/EziosWJ/EdgeDesk/issues/17)–[#24](https://github.com/EziosWJ/EdgeDesk/issues/24)。这些 Ticket 不会自动重开本清单已接受的 HTTP、重定向、opener、固定包配额及 JSON-RPC 资源限制决策；若修复必须改变这些决策，应先提交 ADR。
 
 ## 2026-10-18 V1.3 实现证据
 
