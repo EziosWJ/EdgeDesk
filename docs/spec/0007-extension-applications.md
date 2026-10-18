@@ -22,6 +22,7 @@ EdgeDesk 在现有桌面、WindowManager、C++ HTTP 服务、认证、文件服�
 - 扩展静态资源由现有 C++ HTTP 服务提供独立路由，与特权 API 路由严格隔离。
 - WindowManager 是所有扩展应用窗口的统一管理者。
 - 扩展管理元数据和应用 KV 数据使用独立的 SQLite 数据库；这是扩展平台的明确范围例外，不代表现有认证、设置、终端或指标模块改用数据库。
+- 首期仍是单管理员产品模型，不实现多用户、角色或按用户隔离的桌面。扩展数据模型不得把当前管理员身份硬编码进应用 ID 或数据键结构，应保留未来增加用户作用域的演进空间。
 - 应用包、各修订版资源、用户数据和隔离保留数据存放在可配置数据根目录下，默认 /var/lib/edgedesk/apps，与可执行文件和内嵌资源分离。
 - 开发 SDK、模板和 CLI 是独立开发工具，不嵌入 EdgeDesk 主程序。
 
@@ -37,9 +38,9 @@ ZIP 包必须包含 manifest.json、index.html 及其构建后的 JS、CSS、图
 
 ### 2.2 manifest
 
-核心清单字段为稳定应用 ID、显示名称、SemVer 版本和入口。应用 ID 使用反向域名风格，例如 io.github.ezioswj.docker-manager；安装后不得随意改变。显示名称可以修改。入口首期为 index.html。
+核心清单字段为稳定应用 ID、显示名称、SemVer 版本和入口。应用 ID 使用反向域名风格，例如 io.github.ezioswj.docker-manager；安装后不得随意改变。显示名称仅用于展示，不得作为授权或资源路径判定依据。入口首期为 index.html。
 
-宿主 API 兼容模块要求 minHostApiVersion 和 maxHostApiVersion，二者均使用 SemVer，范围端点包含在兼容范围内。缺失、格式错误或不匹配时不得默认兼容，应用不得启用。核心 manifest 校验只负责核心必填字段；权限、窗口、网络和其他模块字段由对应模块解析和校验，不建立一个把所有扩展配置强行耦合的巨型解析器。
+宿主 API 兼容模块要求 minHostApiVersion 和 maxHostApiVersion，二者均使用 SemVer，范围端点包含在兼容范围内。缺失、格式错误或不匹配时不得默认兼容，应用不得启用。宿主 API 版本独立于 EdgeDesk 产品版本：新增能力优先保持向后兼容；破坏性变更必须升级宿主 API 主版本或提供新方法，并明确旧版本兼容窗口。核心升级不得被扩展阻塞；不兼容应用自动禁用并关闭窗口，但保留应用包和用户数据。核心 manifest 校验只负责核心必填字段；权限、窗口、网络和其他模块字段由对应模块解析和校验，不建立一个把所有扩展配置强行耦合的巨型解析器。
 
 manifest 可声明：
 - 功能模块权限，例如 files.manage、terminal.access；未获授权的模块能力默认拒绝。
@@ -105,6 +106,17 @@ manifest 可声明：
 宿主桥接层对每次 JSON-RPC 请求检查方法、参数、当前运行实例权限快照和会话状态。C++ 后端继续执行现有用户认证和 API 权限；首期不承诺 C++ 后端能在每条请求上识别扩展应用身份并执行应用级授权。所有特权 EdgeDesk API（文件、终端等）必须经宿主桥接调用，不向扩展开放 Origin:null 特权 API 直连路径。
 
 首期权限按功能模块授权，例如 files.manage、terminal.access。文件操作仍按读取、写入、上传、下载、删除等方法分别校验操作类型并记录审计，但首期不提供每个文件动作单独的管理员授权开关。管理员授予 terminal.access 后，应用可创建终端会话、发送输入和读取输出，不逐次确认；只记录终端审计元数据，不记录原始输入输出。获得 files.manage 后，文件删除和覆盖无需逐次确认，相关操作必须审计。
+
+首期宿主 API 至少提供以下方法族；具体 JSON-RPC 参数、结果 schema 和错误码必须与本 SPEC 的行为一致，并在实现前通过契约测试固定：
+
+- `platform.getInfo`：宿主 API 版本与有限平台信息。
+- `auth.getStatus`：仅返回必要的登录/认证状态，不返回 Cookie、Bearer Token 或其他可重用秘密。
+- `storage.get`、`storage.set`、`storage.delete`、`storage.list`、`storage.transaction`：应用隔离的 KV 与原子批量更新。
+- `files.list`、`files.stat`、`files.read`、`files.upload.*`、`files.download.*`、`files.mkdir`、`files.rename`、`files.delete`：虚拟路径文件能力；大文件传输按本 SPEC 的 1 MiB 二进制分块契约执行。
+- `terminal.sessions.list`、`terminal.sessions.create`、`terminal.sessions.input`、`terminal.sessions.resize`、`terminal.sessions.close`：受 terminal.access 权限保护的终端会话能力。
+- `events.subscribe`、`events.unsubscribe`：当前运行实例的实时事件订阅；事件不持久化、不重放。
+
+所有方法均须通过专属 MessagePort 和 JSON-RPC 2.0 桥接调用，不向扩展开放特权 API 直连路径。
 
 平台提供应用隔离的 JSON 键值存储 API：get、set、delete、list，以及用于多键原子变更的 storage.transaction/批量操作。数据按 appId 隔离，SQLite 作为底层实现，扩展不得直接访问数据库。默认每应用最多 5 MiB，每键 JSON 值最多 256 KiB；超限写入返回明确错误且不得覆盖旧值；list 支持分页或结果数上限。浏览器 localStorage、IndexedDB 等不作为扩展应用受支持的持久化能力。
 
