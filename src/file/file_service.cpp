@@ -2,6 +2,7 @@
 
 #include "core/types.hpp"
 #include "core/util.hpp"
+#include "file/file_lock.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -62,6 +63,48 @@ struct ScopedDir {
 bool text_candidate(std::string_view mime, std::uint64_t size, std::uint64_t limit) {
     return size <= limit && is_text_mime(mime);
 }
+
+// Releases every token it obtained on scope exit. Operations that need the
+// lock to outlive the call (download handles, uploads) manage tokens directly.
+class FileLockGuard {
+public:
+    FileLockGuard() = default;
+    ~FileLockGuard() {
+        if (manager_ == nullptr) return;
+        for (const auto token : tokens_) manager_->release(token);
+    }
+    FileLockGuard(const FileLockGuard&) = delete;
+    FileLockGuard& operator=(const FileLockGuard&) = delete;
+
+    Error shared(const PathSandbox& sandbox, FileLockManager* manager, std::string_view path) {
+        return acquire(sandbox, manager, path, false);
+    }
+    Error exclusive(const PathSandbox& sandbox, FileLockManager* manager, std::string_view path) {
+        return acquire(sandbox, manager, path, true);
+    }
+    Error exclusive_many(const PathSandbox& sandbox, FileLockManager* manager,
+                         const std::vector<std::string>& paths) {
+        if (manager == nullptr) return Error::none();
+        manager_ = manager;
+        Error error = manager->acquire_exclusive_many(sandbox, paths, tokens_);
+        return error;
+    }
+
+private:
+    Error acquire(const PathSandbox& sandbox, FileLockManager* manager, std::string_view path,
+                  bool exclusive) {
+        if (manager == nullptr) return Error::none();
+        manager_ = manager;
+        std::uint64_t token = 0;
+        Error error = exclusive ? manager->acquire_exclusive(sandbox, path, token)
+                                : manager->acquire_shared(sandbox, path, token);
+        if (error.ok()) tokens_.push_back(token);
+        return error;
+    }
+
+    FileLockManager* manager_ = nullptr;
+    std::vector<std::uint64_t> tokens_;
+};
 
 } // namespace
 
@@ -208,6 +251,9 @@ Error FileService::mkdir(std::string_view path) const {
     if (normalized == "/") {
         return Error::make(ErrorCode::already_exists, "directory already exists: /");
     }
+    FileLockGuard lock_guard;
+    Error lock_error = lock_guard.exclusive(sandbox_, locks_, normalized);
+    if (!lock_error.ok()) return lock_error;
     UniqueFd dir;
     std::string name;
     Error error = sandbox_.open_parent(normalized, dir, name);
@@ -231,6 +277,9 @@ Error FileService::rename(std::string_view from, std::string_view to, bool overw
     if (normalized_from == "/" || normalized_to == "/") {
         return Error::make(ErrorCode::permission_denied, "cannot rename the sandbox root");
     }
+    FileLockGuard lock_guard;
+    Error lock_error = lock_guard.exclusive_many(sandbox_, locks_, {normalized_from, normalized_to});
+    if (!lock_error.ok()) return lock_error;
     UniqueFd from_dir;
     UniqueFd to_dir;
     std::string from_name;
@@ -340,6 +389,9 @@ Error FileService::remove(const std::vector<std::string>& paths, RemoveResult& r
         if (normalized == "/") {
             return Error::make(ErrorCode::permission_denied, "cannot delete the sandbox root");
         }
+        FileLockGuard lock_guard;
+        Error lock_error = lock_guard.exclusive(sandbox_, locks_, normalized);
+        if (!lock_error.ok()) return lock_error;
         UniqueFd dir;
         std::string name;
         Error error = sandbox_.open_parent(normalized, dir, name);
@@ -363,6 +415,9 @@ Error FileService::remove(const std::vector<std::string>& paths, RemoveResult& r
 }
 
 Error FileService::read_text(std::string_view path, std::string& content, FileEntry& info) const {
+    FileLockGuard lock_guard;
+    Error lock_error = lock_guard.shared(sandbox_, locks_, path);
+    if (!lock_error.ok()) return lock_error;
     UniqueFd fd;
     Error error = sandbox_.open_file(path, O_RDONLY, fd);
     if (!error.ok()) return error;
@@ -428,6 +483,9 @@ Error FileService::write_text(std::string_view path, std::string_view content, b
     if (normalized == "/") {
         return Error::make(ErrorCode::permission_denied, "cannot write the sandbox root");
     }
+    FileLockGuard lock_guard;
+    Error lock_error = lock_guard.exclusive(sandbox_, locks_, normalized);
+    if (!lock_error.ok()) return lock_error;
     UniqueFd dir;
     std::string name;
     Error error = sandbox_.open_parent(normalized, dir, name);
@@ -500,29 +558,127 @@ Error FileService::write_text(std::string_view path, std::string_view content, b
     return entry_from_stat(base_name(normalized), normalized, st, info);
 }
 
+FileService::ReadHandle::ReadHandle(ReadHandle&& other) noexcept
+    : fd(std::move(other.fd)),
+      size(other.size),
+      mtime(other.mtime),
+      mode(other.mode),
+      mime(std::move(other.mime)),
+      lock_manager(other.lock_manager),
+      lock_token(other.lock_token) {
+    other.lock_manager = nullptr;
+    other.lock_token = 0;
+}
+
+FileService::ReadHandle& FileService::ReadHandle::operator=(ReadHandle&& other) noexcept {
+    if (this != &other) {
+        if (lock_manager != nullptr && lock_token != 0) lock_manager->release(lock_token);
+        fd = std::move(other.fd);
+        size = other.size;
+        mtime = other.mtime;
+        mode = other.mode;
+        mime = std::move(other.mime);
+        lock_manager = other.lock_manager;
+        lock_token = other.lock_token;
+        other.lock_manager = nullptr;
+        other.lock_token = 0;
+    }
+    return *this;
+}
+
+FileService::ReadHandle::~ReadHandle() {
+    if (lock_manager != nullptr && lock_token != 0) lock_manager->release(lock_token);
+}
+
 Error FileService::open_for_read(std::string_view path, ReadHandle& handle) const {
     std::string normalized;
     std::string message;
     if (!PathSandbox::normalize(path, normalized, message)) {
         return Error::make(ErrorCode::invalid_argument, message);
     }
+    std::uint64_t lock_token = 0;
+    if (locks_ != nullptr) {
+        Error lock_error = locks_->acquire_shared(sandbox_, normalized, lock_token);
+        if (!lock_error.ok()) return lock_error;
+    }
+    auto release_on_error = [&](const Error& error) {
+        if (locks_ != nullptr && lock_token != 0) locks_->release(lock_token);
+        return error;
+    };
     UniqueFd fd;
     Error error = sandbox_.open_file(normalized, O_RDONLY, fd);
-    if (!error.ok()) return error;
+    if (!error.ok()) return release_on_error(error);
     struct stat st {};
-    if (::fstat(fd.get(), &st) != 0) return errno_error("cannot stat " + normalized);
+    if (::fstat(fd.get(), &st) != 0) return release_on_error(errno_error("cannot stat " + normalized));
     if (S_ISDIR(st.st_mode)) {
-        return Error::make(ErrorCode::is_a_directory, "use the listing API for directories");
+        return release_on_error(Error::make(ErrorCode::is_a_directory, "use the listing API for directories"));
     }
     if (!S_ISREG(st.st_mode)) {
-        return Error::make(ErrorCode::unsupported, "only regular files can be downloaded");
+        return release_on_error(Error::make(ErrorCode::unsupported, "only regular files can be downloaded"));
     }
     handle.fd = std::move(fd);
     handle.size = static_cast<std::uint64_t>(st.st_size);
     handle.mtime = static_cast<std::int64_t>(st.st_mtime);
     handle.mode = static_cast<std::uint32_t>(st.st_mode & 07777);
     handle.mime = mime_for_file_name(base_name(normalized));
+    handle.lock_manager = locks_;
+    handle.lock_token = lock_token;
     return Error::none();
+}
+
+FileService::Upload::Upload(Upload&& other) noexcept
+    : dir_fd_(std::move(other.dir_fd_)),
+      fd_(std::move(other.fd_)),
+      temp_name_(std::move(other.temp_name_)),
+      final_name_(std::move(other.final_name_)),
+      destination_(std::move(other.destination_)),
+      directory_path_(std::move(other.directory_path_)),
+      final_mode_(other.final_mode_),
+      written_(other.written_),
+      limit_(other.limit_),
+      text_limit_(other.text_limit_),
+      finished_(other.finished_),
+      lock_manager_(other.lock_manager_),
+      lock_token_(other.lock_token_),
+      target_existed_(other.target_existed_),
+      target_dev_(other.target_dev_),
+      target_ino_(other.target_ino_),
+      target_size_(other.target_size_),
+      target_mtime_sec_(other.target_mtime_sec_),
+      target_mtime_nsec_(other.target_mtime_nsec_) {
+    // The moved-from object must not abort and release the transferred lock.
+    other.finished_ = true;
+    other.lock_manager_ = nullptr;
+    other.lock_token_ = 0;
+}
+
+FileService::Upload& FileService::Upload::operator=(Upload&& other) noexcept {
+    if (this != &other) {
+        if (!finished_) abort();
+        dir_fd_ = std::move(other.dir_fd_);
+        fd_ = std::move(other.fd_);
+        temp_name_ = std::move(other.temp_name_);
+        final_name_ = std::move(other.final_name_);
+        destination_ = std::move(other.destination_);
+        directory_path_ = std::move(other.directory_path_);
+        final_mode_ = other.final_mode_;
+        written_ = other.written_;
+        limit_ = other.limit_;
+        text_limit_ = other.text_limit_;
+        finished_ = other.finished_;
+        lock_manager_ = other.lock_manager_;
+        lock_token_ = other.lock_token_;
+        target_existed_ = other.target_existed_;
+        target_dev_ = other.target_dev_;
+        target_ino_ = other.target_ino_;
+        target_size_ = other.target_size_;
+        target_mtime_sec_ = other.target_mtime_sec_;
+        target_mtime_nsec_ = other.target_mtime_nsec_;
+        other.finished_ = true;
+        other.lock_manager_ = nullptr;
+        other.lock_token_ = 0;
+    }
+    return *this;
 }
 
 FileService::Upload::~Upload() {
@@ -538,23 +694,39 @@ Error FileService::begin_upload(std::string_view path, Upload& upload) const {
     if (normalized == "/") {
         return Error::make(ErrorCode::permission_denied, "cannot upload over the sandbox root");
     }
+    std::uint64_t lock_token = 0;
+    if (locks_ != nullptr) {
+        Error lock_error = locks_->acquire_exclusive(sandbox_, normalized, lock_token);
+        if (!lock_error.ok()) return lock_error;
+    }
+    auto release_on_error = [&](const Error& error) {
+        if (locks_ != nullptr && lock_token != 0) locks_->release(lock_token);
+        return error;
+    };
     UniqueFd dir;
     std::string name;
     Error error = sandbox_.open_parent(normalized, dir, name);
-    if (!error.ok()) return error;
+    if (!error.ok()) return release_on_error(error);
 
     struct stat existing {};
     if (::fstatat(dir.get(), name.c_str(), &existing, AT_SYMLINK_NOFOLLOW) == 0) {
         if (S_ISDIR(existing.st_mode)) {
-            return Error::make(ErrorCode::is_a_directory, "destination is a directory: " + normalized);
+            return release_on_error(Error::make(ErrorCode::is_a_directory, "destination is a directory: " + normalized));
         }
         if (S_ISLNK(existing.st_mode)) {
-            return Error::make(ErrorCode::permission_denied,
-                               "refusing to upload through a symbolic link: " + normalized);
+            return release_on_error(Error::make(ErrorCode::permission_denied,
+                                                "refusing to upload through a symbolic link: " + normalized));
         }
         upload.final_mode_ = static_cast<std::uint32_t>(existing.st_mode & 07777);
+        upload.target_existed_ = true;
+        upload.target_dev_ = static_cast<std::uint64_t>(existing.st_dev);
+        upload.target_ino_ = static_cast<std::uint64_t>(existing.st_ino);
+        upload.target_size_ = static_cast<std::uint64_t>(existing.st_size);
+        upload.target_mtime_sec_ = static_cast<std::int64_t>(existing.st_mtim.tv_sec);
+        upload.target_mtime_nsec_ = static_cast<std::int64_t>(existing.st_mtim.tv_nsec);
     } else {
         upload.final_mode_ = 0644;
+        upload.target_existed_ = false;
     }
 
     UniqueFd temp;
@@ -567,10 +739,11 @@ Error FileService::begin_upload(std::string_view path, Upload& upload) const {
             temp.reset(fd);
             break;
         }
-        if (errno != EEXIST) return errno_error("cannot create temporary upload file for " + normalized);
+        if (errno != EEXIST) return release_on_error(errno_error("cannot create temporary upload file for " + normalized));
     }
     if (!temp.valid()) {
-        return Error::make(ErrorCode::io_error, "cannot create temporary upload file for " + normalized);
+        return release_on_error(Error::make(ErrorCode::io_error,
+                                            "cannot create temporary upload file for " + normalized));
     }
 
     upload.dir_fd_ = std::move(dir);
@@ -582,6 +755,15 @@ Error FileService::begin_upload(std::string_view path, Upload& upload) const {
     upload.limit_ = options_.max_upload_size;
     upload.text_limit_ = options_.max_text_edit_size;
     upload.finished_ = false;
+    upload.lock_manager_ = locks_;
+    upload.lock_token_ = lock_token;
+    char proc_path[64];
+    std::snprintf(proc_path, sizeof(proc_path), "/proc/self/fd/%d", upload.dir_fd_.get());
+    char directory_buffer[4096];
+    const auto directory_length = ::readlink(proc_path, directory_buffer, sizeof(directory_buffer) - 1);
+    if (directory_length > 0 && directory_buffer[0] == '/') {
+        upload.directory_path_.assign(directory_buffer, static_cast<std::size_t>(directory_length));
+    }
     return Error::none();
 }
 
@@ -610,6 +792,21 @@ Error FileService::Upload::finish(FileEntry& info) {
     if (!fd_.valid()) {
         return Error::make(ErrorCode::conflict, "upload is not active");
     }
+    // Best-effort detection of an external writer between begin and commit.
+    struct stat current {};
+    const bool exists_now = ::fstatat(dir_fd_.get(), final_name_.c_str(), &current, AT_SYMLINK_NOFOLLOW) == 0;
+    const bool changed =
+        exists_now != target_existed_ ||
+        (exists_now && (static_cast<std::uint64_t>(current.st_dev) != target_dev_ ||
+                        static_cast<std::uint64_t>(current.st_ino) != target_ino_ ||
+                        static_cast<std::uint64_t>(current.st_size) != target_size_ ||
+                        static_cast<std::int64_t>(current.st_mtim.tv_sec) != target_mtime_sec_ ||
+                        static_cast<std::int64_t>(current.st_mtim.tv_nsec) != target_mtime_nsec_));
+    if (changed) {
+        abort();
+        return Error::make(ErrorCode::conflict,
+                           "target file changed outside EdgeDesk during upload; original preserved");
+    }
     if (::fchmod(fd_.get(), static_cast<mode_t>(final_mode_)) != 0) {
         abort();
         return errno_error("cannot set upload permissions");
@@ -621,10 +818,12 @@ Error FileService::Upload::finish(FileEntry& info) {
     fd_.reset();
     if (::renameat(dir_fd_.get(), temp_name_.c_str(), dir_fd_.get(), final_name_.c_str()) != 0) {
         const auto rename_error = errno_error("cannot finalize upload");
-        ::unlinkat(dir_fd_.get(), temp_name_.c_str(), 0);
+        abort();
         return rename_error;
     }
     finished_ = true;
+    release_lock();
+    temp_name_.clear();
     const int dir_dup = duplicate_fd(dir_fd_.get());
     if (dir_dup >= 0) {
         ::fsync(dir_dup);
@@ -652,12 +851,21 @@ Error FileService::Upload::finish(FileEntry& info) {
     return Error::none();
 }
 
+void FileService::Upload::release_lock() {
+    if (lock_manager_ != nullptr && lock_token_ != 0) {
+        lock_manager_->release(lock_token_);
+    }
+    lock_manager_ = nullptr;
+    lock_token_ = 0;
+}
+
 void FileService::Upload::abort() {
     fd_.reset();
     if (!temp_name_.empty() && dir_fd_.valid()) {
         ::unlinkat(dir_fd_.get(), temp_name_.c_str(), 0);
     }
     temp_name_.clear();
+    release_lock();
     finished_ = true;
 }
 

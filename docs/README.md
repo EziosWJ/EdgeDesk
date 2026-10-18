@@ -3,11 +3,12 @@
 > 所有文档用于记录已确认的决策、需求、实现状态与待确认问题。文档完成 != 功能完成。
 > 功能完成情况以代码、自动化测试与 [验证矩阵](testing.md) 的实际结果为准。
 
-## 当前实现（V1.2）
+## 当前实现（V1.3）
 
 - [架构、线程模型与资源边界](architecture.md)
 - [API 与 WebSocket 协议](api.md)
 - [配置与部署](config.md)
+- [扩展应用平台实现契约（Host API 1.0）](extension-platform-contracts.md)
 - [测试与验证矩阵](testing.md)（含各平台真实验证结果与未验证项）
 - [Coding Agent 开发规范](../AGENTS.md)
 - [Phase 1 工程骨架（历史记录）](phase1.md)
@@ -20,7 +21,7 @@
 - [V1.2 实施计划与 Issue 拆分](tasks/0006-desktop-workspace.md)
 - [桌面快捷键与焦点规则](design/desktop-keyboard-shortcuts.md)
 
-## 扩展应用平台（计划中，尚未实现）
+## 扩展应用平台（V1.3 已实现首期）
 
 - [SPEC-0007：扩展应用平台与静态 Web 应用运行时](spec/0007-extension-applications.md)：完整记录第 1～98 轮已确认决策及验收标准。
 - [ADR-0011：扩展应用包、运行时与数据存储](adr/0011-extension-runtime-and-packages.md)
@@ -29,7 +30,7 @@
 - [扩展应用安全风险清单](security/extension-app-risk-register.md)：已接受风险、强制安全边界和发布门槛。
 - [扩展应用分阶段实施计划](tasks/0007-extension-applications.md)：阶段、建议 Issue 依赖、验收与发布门槛。
 
-> 本节文档仅冻结需求与技术决策；扩展运行时、安装器、SQLite 管理器和文件桥接尚未因此实现。不得将计划文档当作功能完成证明。
+> V1.3 已实现静态 Web 应用运行时：ZIP 安装、审批、SQLite 管理、iframe 沙箱、JSON-RPC/MessagePort、KV、文件传输、锁、管理 UI、SDK/CLI。数字签名、应用间通信、秘密存储与后端/脚本运行时不在首期范围。实现状态与证据见 [实现契约](extension-platform-contracts.md) 与 [测试矩阵](testing.md)。
 
 ## ADR（为什么这样做）
 
@@ -45,9 +46,9 @@
 | [ADR-0008](adr/0008-authentication-and-settings.md) | V1.1 单管理员密码认证、首次初始化、独立 API Token 与系统设置 | 已实现（V1.1.0） |
 | [ADR-0009](adr/0009-desktop-workspace-architecture.md) | 桌面壳层、应用注册表、统一窗口管理与自研交互 | 已实现（V1.2.0） |
 | [ADR-0010](adr/0010-desktop-persistence-and-recovery.md) | 浏览器本地桌面布局、窗口恢复与终端会话重连 | 已实现（V1.2.0） |
-| [ADR-0011](adr/0011-extension-runtime-and-packages.md) | 扩展应用包、静态 iframe 运行时、SQLite 局部存储与版本修订 | 已确认；待实施 |
-| [ADR-0012](adr/0012-extension-security-and-communication.md) | 扩展权限快照、JSON-RPC/MessagePort、CSP 与网络安全边界 | 已确认；含已接受风险 |
-| [ADR-0013](adr/0013-extension-file-api-and-transfer.md) | 扩展文件 API、1 MiB 分块、原子上传与文件锁 | 已确认；待实施 |
+| [ADR-0011](adr/0011-extension-runtime-and-packages.md) | 扩展应用包、静态 iframe 运行时、SQLite 局部存储与版本修订 | 已实现（V1.3） |
+| [ADR-0012](adr/0012-extension-security-and-communication.md) | 扩展权限快照、JSON-RPC/MessagePort、CSP 与网络安全边界 | 已实现（V1.3）；含已接受风险 |
+| [ADR-0013](adr/0013-extension-file-api-and-transfer.md) | 扩展文件 API、1 MiB 分块、原子上传与文件锁 | 已实现（V1.3） |
 
 ## Spec（要做什么）
 
@@ -67,7 +68,7 @@
 | --- | --- |
 | [SPEC-0005 开发任务拆分](tasks/0005-authentication-and-settings.md) | V1.1 认证与设置的实现决策、任务依赖、测试矩阵与发布门槛 |
 | [SPEC-0006 V1.2 实施计划](tasks/0006-desktop-workspace.md) | 桌面化分阶段实施、Issue 拆分、通用完成定义与发布门槛 |
-| [SPEC-0007 扩展应用平台实施计划](tasks/0007-extension-applications.md) | Phase 0～9、建议 Issue 依赖、验收标准与发布门槛（待实施） |
+| [SPEC-0007 扩展应用平台实施计划](tasks/0007-extension-applications.md) | Phase 0～9、建议 Issue 依赖、验收标准与发布门槛（已实现；L2 待 CI） |
 
 ## 设计素材
 
@@ -97,6 +98,7 @@
 - V1.1 首期是否开放高级部署配置的网页写入（当前决定为只读展示，后续逐项评估）。
 - 多用户/角色不在当前规划内；会话不跨服务进程重启持久化。
 - V1.2 桌面布局已在浏览器 localStorage 中恢复（schema v1，见 ADR-0010）；跨浏览器同步不在范围内。
+- V1.3 扩展应用为未签名本地 ZIP；公共市场、签名发布者、秘密存储与应用间通信仍不在范围内。
 
 ## 变更约定
 

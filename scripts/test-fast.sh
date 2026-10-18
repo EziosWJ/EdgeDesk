@@ -62,4 +62,11 @@ if [ "$RUN_FRONTEND" -eq 1 ]; then
   fi
 fi
 
+if command -v node >/dev/null 2>&1 && [ -f tools/ext-sdk/package.json ]; then
+  log "L0 extension SDK/CLI tests"
+  (cd tools/ext-sdk && node --test test/*.test.js)
+else
+  log "node missing; skipping extension SDK/CLI tests"
+fi
+
 log "L0 passed in $((SECONDS - START))s"

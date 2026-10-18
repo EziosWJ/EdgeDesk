@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { SetupView } from '../features/auth/SetupView';
 import { CorruptStateView } from '../features/auth/CorruptStateView';
 import { LoginView } from '../features/auth/LoginView';
 import { DesktopShell, type HealthState } from '../desktop/DesktopShell';
 import { restoreDesktop } from '../desktop/desktopPersistence';
 import { desktopStore } from '../desktop/desktopStore';
+import { clearExtensionRegistry, syncExtensionRegistry } from '../extensions/extensionRegistry';
 import { api } from '../services/api';
 import { MetricsSocket } from '../services/metricsSocket';
 import { sessionStore } from '../stores/sessionStore';
 import { preferencesStore, usePreferences } from '../stores/preferencesStore';
 import { windowStore } from '../stores/windowStore';
+import '../extensions/extensions.css';
 
 type AuthView = 'checking' | 'setup' | 'anonymous' | 'authenticated' | 'corrupt';
 
@@ -24,6 +26,8 @@ function applyTheme(theme: 'light' | 'dark' | 'system'): void {
 export default function App() {
   const [authView, setAuthView] = useState<AuthView>('checking');
   const [health, setHealth] = useState<HealthState>('checking');
+  const [extensionsReady, setExtensionsReady] = useState(false);
+  const [registryVersion, setRegistryVersion] = useState(0);
   const metricsSocketRef = useRef<MetricsSocket | null>(null);
   const restoredRef = useRef(false);
   const preferences = usePreferences();
@@ -101,17 +105,24 @@ export default function App() {
           return null;
         });
 
-    // Restore after authentication and after the first real session list so a
-    // stale saved session is marked ended instead of being silently replaced.
-    windowStore.setViewport({ width: window.innerWidth, height: window.innerHeight });
-    void refreshTerminals().then((sessions) => {
-      if (cancelled || restoredRef.current) return;
-      restoredRef.current = true;
-      restoreDesktop({
-        viewport: { width: window.innerWidth, height: window.innerHeight },
-        sessions,
+    // Enabled extension apps must be registered before the desktop layout is
+    // restored, otherwise saved extension windows would be dropped as unknown.
+    void syncExtensionRegistry()
+      .catch(() => undefined)
+      .then(() => {
+        if (cancelled) return;
+        setRegistryVersion((value) => value + 1);
+        setExtensionsReady(true);
+        windowStore.setViewport({ width: window.innerWidth, height: window.innerHeight });
+        return refreshTerminals().then((sessions) => {
+          if (cancelled || restoredRef.current) return;
+          restoredRef.current = true;
+          restoreDesktop({
+            viewport: { width: window.innerWidth, height: window.innerHeight },
+            sessions,
+          });
+        });
       });
-    });
 
     const interval = window.setInterval(refreshTerminals, 30000);
 
@@ -123,8 +134,15 @@ export default function App() {
     };
   }, [authView]);
 
+  const handleExtensionsChanged = useCallback(() => {
+    void syncExtensionRegistry()
+      .catch(() => undefined)
+      .finally(() => setRegistryVersion((value) => value + 1));
+  }, []);
+
   const handleAuthenticated = () => {
     restoredRef.current = false;
+    setExtensionsReady(false);
     setAuthView('authenticated');
     api.health().then(() => setHealth('online')).catch(() => setHealth('offline'));
   };
@@ -141,6 +159,8 @@ export default function App() {
       // the next login still re-validates terminal sessions and files.
       preferencesStore.reset();
       desktopStore.reset();
+      clearExtensionRegistry();
+      setExtensionsReady(false);
       restoredRef.current = false;
       setAuthView('anonymous');
     });
@@ -159,5 +179,16 @@ export default function App() {
     return <LoginView onSuccess={handleAuthenticated} />;
   }
 
-  return <DesktopShell onLogout={handleLogout} health={health} />;
+  if (!extensionsReady) {
+    return <div className="ed-boot">正在加载扩展应用…</div>;
+  }
+
+  return (
+    <DesktopShell
+      onLogout={handleLogout}
+      health={health}
+      registryVersion={registryVersion}
+      onExtensionsChanged={handleExtensionsChanged}
+    />
+  );
 }

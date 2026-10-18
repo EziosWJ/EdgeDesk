@@ -18,5 +18,14 @@ and ARM cross builds do not require network access at configure time.
 - Upstream: https://github.com/nlohmann/json
 - Version: 3.12.0 (the copy shipped by libhv v1.3.4 under `cpputil/json.hpp`)
 - License: MIT (SPDX header is retained in `json.hpp`)
-- Used by `src/security` only for small, schema-versioned state files
-  (`auth.json`, `settings.json`). It is not exposed through public headers.
+- Used for small schema-versioned state files (`auth.json`, `settings.json`)
+  and the extension platform's manifest/KV/integrity metadata.
+
+## sqlite
+
+- Upstream: https://www.sqlite.org/download.html
+- Version: 3.54.1 (`sqlite-amalgamation-3540100.zip`)
+- License: public domain
+- Used only by `src/extensions/` for extension metadata and application KV
+  (ADR-0011 local scope exception). Loadable extensions are disabled.
+- Details and checksums: `sqlite/README.md`.

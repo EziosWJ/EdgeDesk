@@ -1,6 +1,6 @@
 # SPEC-0007：扩展应用平台与静态 Web 应用运行时
 
-- 状态：**Approved for implementation（已确认需求基线，尚未实现）**
+- 状态：**Implemented（V1.3 首期静态 Web 运行时；宿主 L0/L1、集成与浏览器已验证，L2 平台矩阵待 CI）**
 - 目标版本：V1.3（计划版本，最终发布版本号以项目版本管理为准）
 - 日期：2026-10-18
 - 前置基线：[SPEC-0006 桌面工作区](0006-desktop-workspace.md)、[ADR-0004 文件路径沙箱](../adr/0004-path-sandbox.md)、[ADR-0009 桌面架构](../adr/0009-desktop-workspace-architecture.md)、[ADR-0010 桌面状态与恢复](../adr/0010-desktop-persistence-and-recovery.md)

@@ -1,0 +1,17 @@
+{
+  "id": "dev.edgedesk.react-sample",
+  "name": "React 扩展示例",
+  "description": "React + Vite 静态扩展示例",
+  "version": "1.0.0",
+  "entry": "index.html",
+  "minHostApiVersion": "1.0.0",
+  "maxHostApiVersion": "1.9.9",
+  "permissions": ["storage"],
+  "window": {
+    "defaultWidth": 760,
+    "defaultHeight": 520,
+    "minWidth": 360,
+    "minHeight": 260,
+    "instances": "single"
+  }
+}

@@ -1,5 +1,7 @@
 #include "core/utf8.hpp"
 
+#include <cstdint>
+
 namespace edgedesk {
 namespace {
 
@@ -71,6 +73,45 @@ std::string Utf8StreamSanitizer::finish() {
     if (pending_.empty()) return {};
     pending_.clear();
     return std::string(kReplacement, kReplacementLength);
+}
+
+bool is_valid_utf8(std::string_view input) {
+    std::size_t index = 0;
+    while (index < input.size()) {
+        const auto lead = static_cast<unsigned char>(input[index]);
+        if (lead < 0x80) {
+            ++index;
+            continue;
+        }
+        std::size_t length = 0;
+        std::uint32_t codepoint = 0;
+        std::uint32_t minimum = 0;
+        if ((lead & 0xE0) == 0xC0) {
+            length = 2;
+            codepoint = lead & 0x1F;
+            minimum = 0x80;
+        } else if ((lead & 0xF0) == 0xE0) {
+            length = 3;
+            codepoint = lead & 0x0F;
+            minimum = 0x800;
+        } else if ((lead & 0xF8) == 0xF0) {
+            length = 4;
+            codepoint = lead & 0x07;
+            minimum = 0x10000;
+        } else {
+            return false;
+        }
+        if (index + length > input.size()) return false;
+        for (std::size_t offset = 1; offset < length; ++offset) {
+            const auto continuation = static_cast<unsigned char>(input[index + offset]);
+            if ((continuation & 0xC0) != 0x80) return false;
+            codepoint = (codepoint << 6) | (continuation & 0x3F);
+        }
+        if (codepoint < minimum || codepoint > 0x10FFFF) return false;
+        if (codepoint >= 0xD800 && codepoint <= 0xDFFF) return false;
+        index += length;
+    }
+    return true;
 }
 
 std::string sanitize_utf8(std::string_view input) {

@@ -6,17 +6,23 @@ import { TerminalSessionsView } from '../features/terminal/TerminalSessionsView'
 import { SettingsView } from '../features/settings/SettingsView';
 import { EditorPane } from '../features/files/EditorPane';
 import { PreviewPane } from '../features/files/PreviewPane';
+import { ExtensionManagerView } from '../extensions/ExtensionManagerView';
+import { ExtensionAppView } from '../extensions/ExtensionAppView';
+import { getInstalledExtension } from '../extensions/extensionRegistry';
 
 type Props = {
   window: WindowState;
   onLogout: () => void;
+  onExtensionsChanged: () => void;
 };
 
 /** Maps an app window to its business component. Launch decisions stay in AppRegistry. */
-export function AppSurface({ window, onLogout }: Props) {
+export function AppSurface({ window, onLogout, onExtensionsChanged }: Props) {
   switch (window.appId) {
     case 'dashboard':
       return <DashboardView />;
+    case 'extensions':
+      return <ExtensionManagerView onExtensionsChanged={onExtensionsChanged} />;
     case 'files':
       return <FilesView initialPath={window.payload.initialPath ?? '/'} windowId={window.id} />;
     case 'terminal':
@@ -44,6 +50,10 @@ export function AppSurface({ window, onLogout }: Props) {
         <div className="ed-empty small">缺少文件路径，无法预览。</div>
       );
     default:
-      return <div className="ed-empty small">未知应用：{window.appId}</div>;
+      return getInstalledExtension(window.appId) ? (
+        <ExtensionAppView appId={window.appId} windowId={window.id} />
+      ) : (
+        <div className="ed-empty small">未知应用：{window.appId}</div>
+      );
   }
 }

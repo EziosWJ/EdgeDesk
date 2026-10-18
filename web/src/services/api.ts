@@ -20,7 +20,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     credentials: 'same-origin',
     headers:
@@ -46,21 +46,21 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  setupStatus: () => request<SetupStatus>('/api/auth/setup-status'),
+  setupStatus: () => apiRequest<SetupStatus>('/api/auth/setup-status'),
   setup: (password: string, confirmPassword: string) =>
-    request<{ ok: boolean; initialized: boolean }>('/api/auth/setup', {
+    apiRequest<{ ok: boolean; initialized: boolean }>('/api/auth/setup', {
       method: 'POST',
       body: JSON.stringify({ password, confirm_password: confirmPassword }),
     }),
-  session: () => request<SessionInfo>('/api/auth/session'),
+  session: () => apiRequest<SessionInfo>('/api/auth/session'),
   login: (password: string) =>
-    request<{ ok: boolean; expires_in: number; expires_at: number }>('/api/auth/login', {
+    apiRequest<{ ok: boolean; expires_in: number; expires_at: number }>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ password }),
     }),
-  logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+  logout: () => apiRequest<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
   changePassword: (currentPassword: string, newPassword: string, confirmPassword: string) =>
-    request<{ ok: boolean; reauthenticate: boolean }>('/api/auth/password', {
+    apiRequest<{ ok: boolean; reauthenticate: boolean }>('/api/auth/password', {
       method: 'POST',
       body: JSON.stringify({
         current_password: currentPassword,
@@ -69,14 +69,14 @@ export const api = {
       }),
     }),
   settings: () =>
-    request<{ ok: boolean; settings: AppSettings; api_token_configured: boolean }>('/api/settings'),
+    apiRequest<{ ok: boolean; settings: AppSettings; api_token_configured: boolean }>('/api/settings'),
   updateSettings: (patch: Partial<AppSettings>) =>
-    request<{ ok: boolean; settings: AppSettings }>('/api/settings', {
+    apiRequest<{ ok: boolean; settings: AppSettings }>('/api/settings', {
       method: 'PUT',
       body: JSON.stringify(patch),
     }),
-  systemInfo: () => request<SystemInfo>('/api/system/info'),
-  health: () => request<{ status: string; service: string; phase: number; version: string }>('/api/health'),
+  systemInfo: () => apiRequest<SystemInfo>('/api/system/info'),
+  health: () => apiRequest<{ status: string; service: string; phase: number; version: string }>('/api/health'),
 
   listFiles: (
     path: string,
@@ -89,32 +89,32 @@ export const api = {
     if (options.desc) params.set('order', 'desc');
     if (options.hidden === false) params.set('hidden', '0');
     if (options.dirsOnly) params.set('dirs_only', '1');
-    return request<FileListing>(`/api/files?${params.toString()}`);
+    return apiRequest<FileListing>(`/api/files?${params.toString()}`);
   },
   statFile: (path: string) =>
-    request<{ ok: boolean; entry: FileEntry }>(`/api/files/stat?path=${encodeURIComponent(path)}`),
+    apiRequest<{ ok: boolean; entry: FileEntry }>(`/api/files/stat?path=${encodeURIComponent(path)}`),
   readText: (path: string) =>
-    request<{ ok: boolean; content: string; entry: FileEntry }>(
+    apiRequest<{ ok: boolean; content: string; entry: FileEntry }>(
       `/api/files/text?path=${encodeURIComponent(path)}`,
     ),
   writeText: (path: string, content: string) =>
-    request<{ ok: boolean; entry: FileEntry }>(`/api/files/text?path=${encodeURIComponent(path)}`, {
+    apiRequest<{ ok: boolean; entry: FileEntry }>(`/api/files/text?path=${encodeURIComponent(path)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       body: content,
     }),
   mkdir: (path: string) =>
-    request<{ ok: boolean; path: string }>('/api/files/mkdir', {
+    apiRequest<{ ok: boolean; path: string }>('/api/files/mkdir', {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
   rename: (from: string, to: string, overwrite = false) =>
-    request<{ ok: boolean }>('/api/files/rename', {
+    apiRequest<{ ok: boolean }>('/api/files/rename', {
       method: 'POST',
       body: JSON.stringify({ from, to, overwrite }),
     }),
   remove: (paths: string[]) =>
-    request<{ ok: boolean; removed_files: number; removed_dirs: number }>('/api/files/delete', {
+    apiRequest<{ ok: boolean; removed_files: number; removed_dirs: number }>('/api/files/delete', {
       method: 'POST',
       body: JSON.stringify({ paths }),
     }),
@@ -149,7 +149,7 @@ export const api = {
     }),
 
   terminalSessions: () =>
-    request<{
+    apiRequest<{
       ok: boolean;
       shell: string;
       shell_available: boolean;
@@ -159,18 +159,18 @@ export const api = {
       sessions: TerminalSessionInfo[];
     }>('/api/terminal/sessions'),
   createTerminal: (options: { cwd?: string; cols?: number; rows?: number; title?: string }) =>
-    request<{ ok: boolean; session: TerminalSessionInfo }>('/api/terminal/sessions', {
+    apiRequest<{ ok: boolean; session: TerminalSessionInfo }>('/api/terminal/sessions', {
       method: 'POST',
       body: JSON.stringify(options),
     }),
   closeTerminal: (sessionId: string) =>
-    request<{ ok: boolean }>('/api/terminal/sessions/close', {
+    apiRequest<{ ok: boolean }>('/api/terminal/sessions/close', {
       method: 'POST',
       body: JSON.stringify({ session_id: sessionId }),
     }),
 
   systemSummary: (history = 0) =>
-    request<{ ok: boolean; interval_ms: number; sample: MetricsSample; history?: MetricsSample[] }>(
+    apiRequest<{ ok: boolean; interval_ms: number; sample: MetricsSample; history?: MetricsSample[] }>(
       `/api/system/summary?history=${history}`,
     ),
 };

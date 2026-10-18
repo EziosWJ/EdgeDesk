@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <sys/stat.h>
+#include <vector>
 
 namespace edgedesk {
 namespace {
@@ -59,6 +60,75 @@ std::unique_ptr<AuditLog> AuditLog::create(const AuditOptions& options, Error& e
 AuditLog::~AuditLog() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (stream_.is_open()) stream_.flush();
+}
+
+bool AuditLog::prune_older_than(std::int64_t cutoff_seconds, std::size_t& removed,
+                                std::string& error) {
+    removed = 0;
+    error.clear();
+    if (!enabled_) return true;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stream_.is_open()) {
+        stream_.flush();
+        stream_.close();
+    }
+    std::vector<std::string> paths{options_.path};
+    for (int index = 1; index <= options_.max_files; ++index) {
+        paths.push_back(options_.path + "." + std::to_string(index));
+    }
+    for (const auto& path : paths) {
+        std::ifstream input(path);
+        if (!input) continue;
+        const std::string temporary = path + ".prune.tmp";
+        std::ofstream output(temporary, std::ios::out | std::ios::trunc);
+        if (!output) {
+            error = "cannot write audit prune temporary file: " + temporary;
+            open_locked(true);
+            return false;
+        }
+        std::string line;
+        while (std::getline(input, line)) {
+            std::int64_t stamp = 0;
+            bool keep = true;
+            // Records start with {"ts":"YYYY-MM-DDTHH:MM:SSZ".
+            if (line.size() >= 28 && line.rfind("{\"ts\":\"", 0) == 0) {
+                if (parse_iso8601_utc(std::string_view(line).substr(7, 20), stamp)) {
+                    keep = stamp >= cutoff_seconds;
+                }
+            }
+            if (keep) {
+                output << line << '\n';
+            } else {
+                ++removed;
+            }
+        }
+        output.flush();
+        if (!output) {
+            error = "cannot rewrite audit log: " + path;
+            input.close();
+            ::remove(temporary.c_str());
+            open_locked(true);
+            return false;
+        }
+        output.close();
+        input.close();
+        struct stat info {};
+        if (::stat(path.c_str(), &info) == 0) {
+            ::chmod(temporary.c_str(), info.st_mode & 07777);
+        }
+        if (::rename(temporary.c_str(), path.c_str()) != 0) {
+            error = "cannot replace audit log: " + path;
+            ::remove(temporary.c_str());
+            open_locked(true);
+            return false;
+        }
+    }
+    open_locked(true);
+    if (!stream_.is_open()) {
+        error = "cannot reopen audit log after pruning";
+        return false;
+    }
+    return true;
 }
 
 void AuditLog::open_locked(bool append) {

@@ -66,7 +66,7 @@ describe('editor window lifecycle', () => {
       instanceKey: FILE.path,
     });
     act(() => {
-      root.render(<WindowLayer onLogout={() => {}} />);
+      root.render(<WindowLayer onLogout={() => {}} onExtensionsChanged={() => {}} />);
     });
     await flush();
     return id;

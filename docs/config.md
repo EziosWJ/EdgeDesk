@@ -1,6 +1,6 @@
-# EdgeDesk V1.1 配置与部署
+# EdgeDesk V1.3 配置与部署
 
-> 状态：**已实现（V1.2.0）**。优先级：**默认值 < 配置文件 < 环境变量 < 命令行**。
+> 状态：**已实现（V1.3.0）**。优先级：**默认值 < 配置文件 < 环境变量 < 命令行**。
 > `--help` 打印完整选项列表（与本文档一致）。
 
 ## 命令行 / 配置文件
@@ -39,6 +39,8 @@ audit-log = /var/lib/edgedesk/audit.log
 | `--cookie-secure` | 关闭 | 为会话 Cookie 添加 `Secure`；HTTPS 部署必须开启。 |
 | `--trusted-proxy` | — | 可信反向代理 IP/CIDR（可重复）。只有来自这些地址的请求才解析 `X-Forwarded-For`。 |
 | `--data-dir` | `$XDG_DATA_HOME/edgedesk` 或 `$HOME/.local/share/edgedesk` | 持久化目录（0700）：`auth.json`、`settings.json`。`HOME`/`XDG_DATA_HOME` 都不可用时必须显式配置。 |
+| `--apps-root` | `/var/lib/edgedesk/apps` | 扩展应用包、不可变修订、SQLite 元数据/KV、临时操作与恢复日志。需要服务用户可写；不可用时扩展 API 返回 503，核心功能继续运行。 |
+| `--audit-retention-days` | `90` | 审计保留天数（1–3650）；维护线程每日清理并记录 `audit.prune` 成功/失败。 |
 | `--reset-admin-password` | — | 本机恢复：重置管理员认证；要求服务已停止，不删除业务数据/设置/审计。 |
 | `--rate-limit` / `--rate-limit-burst` | `30` / `60` | 通用请求速率与突发额度。 |
 | `--max-terminal-sessions` | `8` | 并发 PTY 会话上限。 |
@@ -121,6 +123,25 @@ edgedesk --reset-admin-password --data-dir /var/lib/edgedesk
 - 主题等跨浏览器偏好仍由 `/api/settings` 管理，不复制到桌面布局。
 - 服务端从不信任布局中的路径或 session id；恢复时仍按现有认证、路径沙箱和会话归属校验执行。
 
+## 扩展应用平台（V1.3）
+
+- 数据根目录 `--apps-root` 默认 `/var/lib/edgedesk/apps`，权限 `0700`：
+  - `extensions.db`（SQLite WAL，`0600`）保存应用状态、修订、权限、完整性索引、操作日志与 KV；
+  - `revisions/<appId>/<revisionId>/` 保存不可变静态资源；
+  - `data/<appId>/` 保存平台托管数据目录；
+  - `tmp/` 保存未完成安装与扩展上传恢复日志，启动时幂等清理。
+- 扩展平台是 SQLite 的**局部范围例外**；认证/设置仍用 JSON 文件，终端与指标不迁移。
+- `--apps-root` 不可创建/不可写或数据库 schema 高于当前程序时，扩展管理/运行 API 返回
+  `503 extensions_unavailable`；启动日志明确告警，核心 API 不受影响。生产部署应由
+  systemd `StateDirectory`/`ReadWritePaths` 提供目录。
+- 备份：停止服务后复制整个 `--apps-root`（包含数据库与修订），或用 SQLite 在线备份工具复制；
+  不要只复制 `extensions.db` 而遗漏 `-wal`/`-shm`。
+- 损坏数据库采取失败关闭，不自动重建；需保留现场后人工恢复或移除扩展数据根。
+- 扩展安装包没有固定大小/文件数上限，按可用磁盘空间决定；上传/解压使用临时目录与原子激活。
+- 审计默认保留 90 天，`--audit-retention-days` 可调整；卸载应用不会删除历史审计。
+- 浏览器桌面布局仍在 localStorage；扩展窗口记录只保存 `appId` 与几何，恢复时重新校验安装、
+  启用和宿主 API 兼容状态。
+
 ## 信号与退出
 
 `SIGINT` / `SIGTERM` 触发优雅退出：停止 HTTP 事件循环 → 关闭全部 PTY 会话
@@ -135,15 +156,15 @@ After=network.target
 
 [Service]
 ExecStart=/opt/edgedesk/edgedesk --host 127.0.0.1 --port 8080 \
-  --file-root /srv --data-dir /var/lib/edgedesk \
-  --state-dir /run/edgedesk
+  --file-root /srv --apps-root /var/lib/edgedesk/apps \
+  --data-dir /var/lib/edgedesk --state-dir /run/edgedesk
 StateDirectory=edgedesk
 User=edgedesk
 Group=edgedesk
 Restart=on-failure
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/srv /var/lib/edgedesk /run/edgedesk
+ReadWritePaths=/srv /var/lib/edgedesk /var/lib/edgedesk/apps /run/edgedesk
 
 [Install]
 WantedBy=multi-user.target

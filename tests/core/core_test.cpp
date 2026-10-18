@@ -260,6 +260,34 @@ void test_audit_rotation(const std::filesystem::path& tmp) {
     noop->record("never", "recorded");
 }
 
+void test_audit_retention(const std::filesystem::path& tmp) {
+    const auto log_path = tmp / "audit-retention.log";
+    {
+        std::ofstream file(log_path);
+        file << R"({"ts":"2020-01-01T00:00:00Z","event":"old","outcome":"ok"})" << "\n";
+        file << R"({"ts":"2026-10-18T00:00:00Z","event":"new","outcome":"ok"})" << "\n";
+    }
+    AuditOptions options;
+    options.path = log_path.string();
+    Error error;
+    auto audit = AuditLog::create(options, error);
+    CHECK(audit != nullptr);
+    if (!audit) return;
+    std::size_t removed = 0;
+    std::string prune_error;
+    const std::int64_t cutoff = now_unix_seconds() - 30 * 86400;
+    CHECK(audit->prune_older_than(cutoff, removed, prune_error));
+    CHECK_EQ(removed, std::size_t{1});
+    std::ifstream input(log_path);
+    const std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    CHECK(contents.find("\"event\":\"new\"") != std::string::npos);
+    CHECK(contents.find("\"event\":\"old\"") == std::string::npos);
+    audit->record("after_prune", "ok");
+    std::ifstream reopened(log_path);
+    const std::string after((std::istreambuf_iterator<char>(reopened)), std::istreambuf_iterator<char>());
+    CHECK(after.find("\"event\":\"after_prune\"") != std::string::npos);
+}
+
 void test_state_dir(const std::filesystem::path& tmp) {
     const auto state = tmp / "state";
     std::string error;
@@ -282,6 +310,7 @@ int main() {
     test_auth(tmp);
     test_rate_limiter();
     test_audit_rotation(tmp);
+    test_audit_retention(tmp);
     test_state_dir(tmp);
     std::filesystem::remove_all(tmp);
     return edgedesk::test::finish("core_test");

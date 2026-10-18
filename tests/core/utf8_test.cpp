@@ -61,6 +61,18 @@ void test_stream_incomplete_tail() {
     CHECK_STR_EQ(sanitizer.finish(), "");
 }
 
+void test_validator() {
+    CHECK(is_valid_utf8(""));
+    CHECK(is_valid_utf8("hello"));
+    CHECK(is_valid_utf8(std::string(kCjk) + kBoxHorizontal + kEmoji));
+    CHECK(!is_valid_utf8(std::string("a\xFF") + "b"));
+    CHECK(!is_valid_utf8("\xE2"));
+    CHECK(!is_valid_utf8("\xC0\xAF"));          // overlong
+    CHECK(!is_valid_utf8("\xED\xA0\x80"));      // surrogate
+    CHECK(!is_valid_utf8("\xF4\x90\x80\x80"));  // > U+10FFFF
+    CHECK(!is_valid_utf8("\x80"));              // lone continuation
+}
+
 } // namespace
 
 int main() {
@@ -68,5 +80,6 @@ int main() {
     test_invalid_input();
     test_stream_split_sequences();
     test_stream_incomplete_tail();
+    test_validator();
     return edgedesk::test::finish("utf8_test");
 }

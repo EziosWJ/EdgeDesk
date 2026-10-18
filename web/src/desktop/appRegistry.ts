@@ -13,6 +13,8 @@ export type AppDefinition = {
   keywords: readonly string[];
   /** Symbol id in /assets/desktop/app-icons.svg. */
   sprite: string;
+  /** Installed extension icon; rendered instead of the sprite when present. */
+  iconUrl?: string;
   tone: AppTone;
   instancePolicy: InstancePolicy;
   defaultSize: AppSize;
@@ -57,12 +59,27 @@ export class AppRegistry {
   private apps = new Map<AppId, AppDefinition>();
 
   register(definition: AppDefinition): void {
+    this.validate(definition);
+    if (this.apps.has(definition.id)) {
+      throw new AppRegistryError('duplicate_app', `app already registered: ${definition.id}`);
+    }
+    this.apps.set(definition.id, Object.freeze({ ...definition, keywords: [...definition.keywords] }));
+  }
+
+  /** Register or replace an installed extension definition atomically. */
+  upsert(definition: AppDefinition): void {
+    this.validate(definition);
+    this.apps.set(definition.id, Object.freeze({ ...definition, keywords: [...definition.keywords] }));
+  }
+
+  unregister(id: string): boolean {
+    return this.apps.delete(id as AppId);
+  }
+
+  private validate(definition: AppDefinition): void {
     const missing = REQUIRED_FIELDS.filter((field) => definition[field] === undefined || definition[field] === null);
     if (missing.length > 0 || !definition.id || !definition.name.trim()) {
       throw new AppRegistryError('invalid_definition', `missing app metadata: ${missing.join(', ') || 'id/name'}`);
-    }
-    if (this.apps.has(definition.id)) {
-      throw new AppRegistryError('duplicate_app', `app already registered: ${definition.id}`);
     }
     if (definition.instancePolicy !== 'single' && definition.instancePolicy !== 'multi') {
       throw new AppRegistryError('invalid_definition', `invalid instance policy for ${definition.id}`);
@@ -72,7 +89,6 @@ export class AppRegistry {
     if (definition.minSize.width > definition.defaultSize.width || definition.minSize.height > definition.defaultSize.height) {
       throw new AppRegistryError('invalid_definition', `minSize exceeds defaultSize for ${definition.id}`);
     }
-    this.apps.set(definition.id, Object.freeze({ ...definition, keywords: [...definition.keywords] }));
   }
 
   has(id: string): id is AppId {
@@ -192,6 +208,20 @@ export function createDefaultRegistry(): AppRegistry {
       minSize: { width: 480, height: 360 },
       desktopShortcut: false,
       dockPinned: true,
+      launcherVisible: true,
+    },
+    {
+      id: 'extensions',
+      name: '应用管理',
+      description: '安装、审批、升级和管理扩展应用',
+      keywords: ['extensions', 'apps', '扩展', '应用', '安装', 'zip', '权限'],
+      sprite: 'logs',
+      tone: 'purple',
+      instancePolicy: 'single',
+      defaultSize: { width: 1000, height: 700 },
+      minSize: { width: 520, height: 360 },
+      desktopShortcut: false,
+      dockPinned: false,
       launcherVisible: true,
     },
     {

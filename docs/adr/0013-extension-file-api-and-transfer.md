@@ -1,6 +1,6 @@
 # ADR-0013：扩展文件 API、分块传输与并发一致性
 
-- 状态：**Accepted（需求已确认；实现尚未开始）**
+- 状态：**Accepted；implemented in V1.3**
 - 日期：2026-10-18
 - 关联：[SPEC-0007](../spec/0007-extension-applications.md)、[SPEC-0002 文件管理](../spec/0002-file-management.md)、[ADR-0004 文件路径沙箱](0004-path-sandbox.md)、[ADR-0002 架构与安全](0002-architecture-security.md)
 

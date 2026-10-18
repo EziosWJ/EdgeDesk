@@ -1,8 +1,8 @@
-# EdgeDesk V1.2 架构
+# EdgeDesk V1.3 架构
 
-> 状态：**已实现**（V1.2.0）。描述当前代码的真实结构；行为契约见 `docs/spec`，
+> 状态：**已实现**（V1.3.0 扩展平台首期；V1.2 桌面能力保持不变）。描述当前代码的真实结构；
+> 行为契约见 `docs/spec`，扩展内部契约见 `docs/extension-platform-contracts.md`，
 > 技术决策见 `docs/adr`，接口见 `docs/api.md`，配置见 `docs/config.md`。
-> V1.2 主要是前端桌面化，C++ 后端模块、线程模型与 API 边界保持不变。
 
 ## 目录与职责
 
@@ -22,14 +22,22 @@ src/
 ├── file/
 │   ├── path_sandbox.*        目录 FD + openat 的路径沙箱（ADR-0004）
 │   ├── file_types.*          文件条目、列表、Range 解析、MIME
+│   ├── file_lock.*           统一共享读/独占写锁（ADR-0013）
 │   └── file_service.*        浏览/下载/上传/编辑/删除的业务实现
+├── extensions/
+│   ├── semver.*              严格 SemVer 与宿主 API 兼容范围
+│   ├── manifest.*            manifest 核心/模块字段校验、来源与 CSP
+│   ├── zip_reader.*          流式 ZIP 校验、解压、逐文件 SHA-256、完整性验证
+│   ├── extension_store.*     SQLite schema/事务/KV/权限/操作日志（局部例外）
+│   ├── package_manager.*     安装/升级/回滚/卸载/隔离/清理/静态修订
+│   └── extension_runtime.*   运行实例快照、KV 游标、传输、锁协调、终端回收
 ├── http/
 │   ├── server.*              libhv 路由与 WebSocket 装配、静态资源与 SPA 回退
 │   ├── middleware.*          安全响应头、限流、认证、CSRF、体积限制
 │   ├── http_util.*           JSON 响应、Cookie、Host/Origin 校验等协议适配
-│   ├── upload_state.hpp      流式上传的请求级状态（HttpContext userdata）
+│   ├── upload_state.hpp      流式上传/扩展安装的请求级状态（HttpContext userdata）
 │   ├── ws_state.hpp          每个 WebSocket 连接的状态
-│   └── routes/               health / auth / file / terminal / system
+│   └── routes/               health / auth / file / terminal / system / extension
 ├── terminal/
 │   ├── pty.*                 forkpty 封装（fork 与 exec 之间仅异步信号安全调用）
 │   ├── terminal_session.*    单会话：读取线程、有界回放、CommandGuard 交互
@@ -51,6 +59,9 @@ src/
 └── web/
     ├── web_root.*            磁盘 / #embed 统一静态资源抽象
     └── embedded_assets.hpp   由 tools/gen_embed.py 生成的索引接口
+
+tools/ext-sdk/                独立 SDK、CLI、vanilla/React/Vue/Svelte 模板
+scripts/extension_test.py     扩展平台集成测试（含崩溃恢复）
 ```
 
 分层规则：`Route → Service → Platform(POSIX)`。路由只做协议适配与错误映射，
@@ -76,6 +87,13 @@ web/src/
 ├── components/
 │   ├── WindowLayer.tsx      渲染所有窗口；最小化隐藏但不卸载
 │   └── FloatingWindow.tsx   标题栏拖动、缩放、最小化/最大化/关闭、焦点反馈
+├── extensions/
+│   ├── extensionApi.ts      管理/运行时 REST 适配
+│   ├── extensionRegistry.ts 启用应用 → AppRegistry；禁用时关闭窗口
+│   ├── hostBridge.ts        iframe 握手、MessagePort JSON-RPC、权限检查、传输/终端
+│   ├── ExtensionAppView.tsx 沙箱 iframe、实例 UUID、错误/重载
+│   ├── ExtensionManagerView.tsx 安装/审批/升级/回滚/卸载/完整性 UI
+│   └── extensions.css       管理界面与运行时样式
 └── features/                 既有 dashboard/files/terminal/sessions/settings 业务组件
 ```
 
@@ -90,6 +108,48 @@ web/src/
 - `terminal` 应用是单窗口单会话的单页面终端；`sessions` 应用是多 Tab 会话管理器。
   两者共享同一后端会话集合，只有会话管理器提供显式“结束会话”。
 - `DesktopPersistence` 只保存非敏感的桌面布局与重连标识；认证 Cookie、Token、文件正文不落盘。
+
+## 扩展应用平台（V1.3）
+
+扩展平台是现有桌面、窗口管理、认证、文件与终端能力之上的增量模块，不替换任何既有服务。
+
+### 数据根目录
+
+默认 `/var/lib/edgedesk/apps`，由 `--apps-root` 覆盖：
+
+```text
+apps/
+├── extensions.db               SQLite 元数据与 KV（0600）
+├── revisions/<appId>/<revisionId>/
+│                              不可变静态资源与 manifest
+├── data/<appId>/              平台托管的应用数据目录（当前 KV 在 SQLite）
+└── tmp/
+    ├── op-<operationId>/      安装/升级临时目录（启动时幂等清理）
+    └── transfers/*.journal    扩展上传临时文件恢复日志
+```
+
+目录为 `0700`；若数据根不可创建/不可写，扩展 API 返回 `503 extensions_unavailable`，核心认证、文件、终端与指标仍可用。
+
+### 安装与修订
+
+- ZIP 由 `ZipReader` 流式校验：路径穿越、绝对路径、反斜杠、符号链接、特殊文件、重复/大小写重复名称、本地/中央头不一致、加密条目、ZIP64 越界、CRC/长度错误均拒绝。
+- 解压在临时目录内完成，逐文件计算 SHA-256；声明大小与可用磁盘比较，写入失败清理。
+- 校验通过后 `rename` 到不可变修订目录，再以单个 SQLite 事务提交应用、修订、权限申请、完整性清单和活动指针。
+- 相同 SemVer 覆盖和主动降级都创建新 revisionId；清理只删除未被活动、固定或隔离引用的历史修订。
+- 服务重启清理未完成 operation、孤儿修订目录与上传临时文件。
+
+### 运行时
+
+- 浏览器主机在创建窗口时调用 `POST /api/extensions/runtime/sessions`，C++ 端复制当前授权为**权限快照**并返回随机运行时令牌。
+- iframe 使用 `sandbox="allow-scripts allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox allow-modals"`，不授予 `allow-same-origin`。
+- 主机通过 `postMessage` 校验 `event.source`/`event.origin === "null"`/协议后转移 `MessagePort`；运行时令牌只保存在宿主页面，不进入 iframe。
+- 主机桥接执行方法/参数/权限检查，C++ 运行时端点用同一令牌再次检查应用状态与权限快照。
+- 禁用、升级、卸载、完整性隔离：`ExtensionRuntime::invalidate_app` 删除会话与传输任务，并关闭该实例创建的 PTY 会话；前端同步关闭窗口。
+- 文件传输由 1 MiB 顺序块、逐块确认、专用端口组成；上传使用 `FileService` 临时文件与原子替换，下载持有共享读锁。
+
+### SQLite 范围
+
+SQLite 只位于 `src/extensions/`，保存扩展清单、状态、活动修订、权限、操作日志、完整性索引和应用 KV。认证使用 `auth.json`、设置使用 `settings.json`、终端与指标保持原有内存/文件实现；不得据此迁移其他模块。
 
 ## 认证与持久化边界
 
@@ -110,7 +170,9 @@ web/src/
 | `hv::async` 线程池 | 2..4（按需扩展） | 文件下载流式写出等异步任务 | 不提交无界任务（有并发闸门） |
 | 采样线程 | 1 | 周期性读取 `/proc`、`/sys`、`statvfs` | 不阻塞在锁上；订阅者回调只做 WS 入队 |
 | 终端读取线程 | 每会话 1 | `poll` + `read` PTY、回放缓冲、广播输出 | 只读 master FD；关闭由标志位驱动 |
-| 维护线程 | 1 | 每 30 s 回收空闲终端、清理限流桶 | 不做业务处理 |
+| 维护线程 | 1 | 每 30 s 回收空闲终端、清理限流桶、扩展运行会话/传输、每日审计保留清理 | 不做业务处理 |
+| 扩展安装 | libhv 事件循环 | 流式 ZIP 写入临时文件，安装事务串行化 | 无固定包大小/文件数上限 |
+| 扩展传输 | libhv 事件循环 | 1 MiB 顺序块、互斥保护任务表 | 不在事件循环上执行整文件阻塞 I/O |
 | 信号线程 | 1 | `sigwait` 捕获 SIGINT/SIGTERM → 优雅停止 | 不调用非异步信号安全函数 |
 
 共享状态一律有明确互斥：会话注册表（`TerminalManager::mutex_`）、会话回放与订阅
@@ -135,6 +197,12 @@ web/src/
 | 登录尝试 | 5 次/分钟 | `--login-rate-limit` |
 | WS 订阅者 | 会话 8、指标流 16 | 代码常量（有测试） |
 | 审计日志 | 1 MiB × 2 份轮转 | `--audit-max-size` / `--audit-max-files` |
+| 审计保留 | 90 天（每日清理） | `--audit-retention-days` |
+| 应用 KV | 5 MiB/应用、256 KiB/键 | 代码常量（ADR-0011） |
+| 扩展传输块 | 1 MiB | 代码常量（ADR-0013） |
+| 历史修订 | 活动 + 最近 2 个（可固定） | `kDefaultHistoryRevisions` |
+| 运行会话 | 12 h TTL | `kRuntimeSessionTtlSeconds` |
+| 传输空闲 | 5 min | `kTransferIdleTimeoutMs` |
 
 ## 请求生命周期（文件上传示例）
 

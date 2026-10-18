@@ -52,6 +52,8 @@ const OptionSpec kOptions[] = {
     {"no-audit", false, false},
     {"audit-max-size", true, false},
     {"audit-max-files", true, false},
+    {"audit-retention-days", true, false},
+    {"apps-root", true, false},
     {"state-dir", true, false},
     {"data-dir", true, false},
     {"reset-admin-password", false, false},
@@ -223,6 +225,15 @@ bool apply_option(Config& config, const std::string& name, const std::string& va
     } else if (name == "audit-max-files") {
         if (!parse_int(value, 1, 32, number, "audit-max-files", error)) return false;
         config.audit_max_files = static_cast<int>(number);
+    } else if (name == "audit-retention-days") {
+        if (!parse_int(value, 1, 3650, number, "audit-retention-days", error)) return false;
+        config.audit_retention_days = static_cast<int>(number);
+    } else if (name == "apps-root") {
+        if (value.empty() || value.front() != '/') {
+            error = "--apps-root must be an absolute path";
+            return false;
+        }
+        config.apps_root = value;
     } else if (name == "state-dir") {
         config.state_dir = value;
     } else if (name == "data-dir") {
@@ -523,7 +534,12 @@ std::string help_text() {
         "  --audit-log PATH            Audit log path (default <state-dir>/audit.log)\n"
         "  --audit-max-size SIZE       Rotation size (default 1M)\n"
         "  --audit-max-files N         Rotated files kept (default 2)\n"
+        "  --audit-retention-days N    Audit retention in days (default 90)\n"
         "  --no-audit                  Disable audit logging\n"
+        "\n"
+        "Extensions:\n"
+        "  --apps-root PATH            Application packages/data root\n"
+        "                              (default /var/lib/edgedesk/apps)\n"
         "\n"
         "Other:\n"
         "  --config PATH               Load options from a key=value file\n"

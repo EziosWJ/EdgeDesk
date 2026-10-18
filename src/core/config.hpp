@@ -60,6 +60,10 @@ struct Config {
     std::string audit_log_path;
     std::uint64_t audit_max_bytes = 1ull * 1024 * 1024;
     int audit_max_files = 2;
+    int audit_retention_days = 90;
+
+    // extension application platform (SQLite metadata + immutable revisions)
+    std::string apps_root = "/var/lib/edgedesk/apps";
 
     // persistent application data (auth.json, settings.json)
     std::string data_dir;

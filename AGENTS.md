@@ -8,7 +8,7 @@
 - `docs/architecture.md`（模块/线程/资源边界）、`docs/api.md`（HTTP 与 WS 协议）、
   `docs/config.md`（配置项与部署）、`docs/testing.md`（验证矩阵）描述当前实现。
 - `docs/phase1.md` 是历史骨架记录；不要将其当作当前功能范围。
-- 扩展应用平台唯一需求基线为 `docs/spec/0007-extension-applications.md`，配套决策为 `docs/adr/0011-extension-runtime-and-packages.md`、`docs/adr/0012-extension-security-and-communication.md`、`docs/adr/0013-extension-file-api-and-transfer.md`，风险与阶段计划分别见 `docs/security/extension-app-risk-register.md`、`docs/tasks/0007-extension-applications.md`。这些文档当前只表示已确认设计，不能声称扩展平台已实现。
+- 扩展应用平台唯一需求基线为 `docs/spec/0007-extension-applications.md`，配套决策为 `docs/adr/0011-extension-runtime-and-packages.md`、`docs/adr/0012-extension-security-and-communication.md`、`docs/adr/0013-extension-file-api-and-transfer.md`，风险与阶段计划分别见 `docs/security/extension-app-risk-register.md`、`docs/tasks/0007-extension-applications.md`。V1.3 已按这些决策实现首期静态运行时；实现契约与验证证据见 `docs/extension-platform-contracts.md` 与 `docs/testing.md`。数字签名、应用间通信、秘密存储和后端/脚本运行时仍未实现，不得宣称具备。
 - React + TypeScript + Vite 与 xterm.js 已确认为前端基线（ADR-0001）；不要再讨论替换。
 
 ## 固定的技术边界
@@ -23,7 +23,8 @@
 | 目录 | 归属 |
 | --- | --- |
 | `src/core/` | 配置、错误、工具、FD；不得包含 libhv 类型 |
-| `src/file/` | PathSandbox 与 FileService；所有路径安全只在这里实现 |
+| `src/file/` | PathSandbox、FileService 与统一文件锁；所有路径安全只在这里实现 |
+| `src/extensions/` | SemVer/manifest、ZIP 安装、SQLite 扩展元数据/KV、修订生命周期、运行时会话/传输；不得把 SQLite 引入其他模块 |
 | `src/terminal/` | PTY、会话、管理器、CommandGuard；路由不得直接 forkpty/kill/waitpid |
 | `src/system/` | /proc、/sys、statvfs 采集与采样服务 |
 | `src/security/` | 认证、限流、审计 |
@@ -38,7 +39,8 @@
 
 
 已实现：`FileService`（`src/file/`）、`TerminalSessionManager`（`src/terminal/`）、
-`SystemMetrics`（`src/system/`）、认证/限流/审计与设置持久化（`src/security/`）。
+`SystemMetrics`（`src/system/`）、认证/限流/审计与设置持久化（`src/security/`）、
+扩展平台（`src/extensions/`：安装/审批/修订、iframe 运行时、KV、文件传输与锁）。
 V1.1 认证由 `AuthStore`（auth.json/锁）、`PasswordHashService`（Argon2id
 有界 worker）和 `Auth`（密码登录/会话/Bearer）组成。路由处理器只负责适配协议
 输入/输出；不得在路由里实现路径校验、PTY 管理或指标采集。
@@ -56,6 +58,8 @@ V1.1 认证由 `AuthStore`（auth.json/锁）、`PasswordHashService`（Argon2id
 9. 扩展应用不得绕过宿主桥接直接访问特权 API；所有扩展文件操作继续通过 `FileService`/`PathSandbox`，不得用前端 `../` 字符串检查替代现有目录 FD、`openat` 和符号链接防护。
 10. 区分宿主机构建、交叉编译和真机测试；只声明实际运行过的内容。
 11. 新增依赖需要理由说明、版本锁定、许可证检查以及 ARM/musl 影响分析。
+12. SQLite 仅允许用于扩展元数据/KV（`third_party/sqlite`，公有领域，已固定版本）；不得据此迁移认证、设置、终端或指标。
+13. 扩展特权调用只能经宿主 MessagePort 桥接；不得为 sandbox iframe 开放 Origin:null 直连或把宿主 Cookie/Token 传入 iframe。
 
 ## 每个任务的完成标准
 

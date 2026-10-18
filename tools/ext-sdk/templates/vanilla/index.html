@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EdgeDesk 示例应用</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">EDGEDESK EXTENSION SAMPLE</p>
+        <h1>沙箱示例应用</h1>
+        <p id="app-info">正在连接宿主桥接…</p>
+      </div>
+      <span id="status" class="status">连接中</span>
+    </header>
+
+    <main>
+      <section>
+        <h2>平台存储</h2>
+        <p class="hint">应用隔离 KV，默认每应用 5 MiB、每键 256 KiB。计数保存后刷新窗口仍然存在。</p>
+        <div class="row">
+          <button id="counter" type="button">增加计数</button>
+          <button id="refresh-storage" type="button">刷新</button>
+          <code id="counter-value">—</code>
+        </div>
+        <pre id="storage-usage" class="output"></pre>
+      </section>
+
+      <section>
+        <h2>文件</h2>
+        <p class="hint">虚拟路径由宿主 PathSandbox 解析；本示例只访问文件 API 根目录。</p>
+        <div class="row">
+          <input id="path" value="/" aria-label="目录路径" />
+          <button id="list" type="button">列出目录</button>
+        </div>
+        <ul id="entries" class="entries"></ul>
+        <div class="row">
+          <input id="upload" type="file" />
+          <button id="upload-button" type="button">上传到 /sample-upload.bin</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>终端</h2>
+        <p class="hint">PTY 会话由当前运行实例创建，关闭窗口时宿主会终止它。</p>
+        <div class="row">
+          <button id="terminal-create" type="button">创建终端</button>
+          <button id="terminal-close" type="button">关闭终端</button>
+        </div>
+        <pre id="terminal-output" class="output terminal"></pre>
+        <form id="terminal-form" class="row">
+          <input id="terminal-input" placeholder="输入命令，例如 ls -la" autocomplete="off" />
+          <button type="submit">发送</button>
+        </form>
+      </section>
+    </main>
+
+    <footer>
+      <span>权限快照：</span>
+      <span id="permissions"></span>
+    </footer>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

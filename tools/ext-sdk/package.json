@@ -1,0 +1,25 @@
+{
+  "name": "@edgedesk/extension-sdk",
+  "version": "1.0.0",
+  "description": "EdgeDesk extension runtime SDK and packaging CLI (no host privileges outside the sandbox)",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "edgedesk-ext": "./bin/edgedesk-ext.js"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "bin",
+    "templates",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

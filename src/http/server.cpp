@@ -1,6 +1,7 @@
 #include "http/server.hpp"
 
 #include "http/routes/auth_route.hpp"
+#include "http/routes/extension_route.hpp"
 #include "http/routes/file_route.hpp"
 #include "http/routes/health_route.hpp"
 #include "http/routes/settings_route.hpp"
@@ -45,11 +46,17 @@ int Server::run() {
     register_terminal_routes(router, context_);
     register_system_routes(router, context_);
     register_settings_routes(router, context_);
+    register_extension_routes(router, context_);
 
-    // Static frontend bundle with SPA fallback (never touches device files).
+    // Extension application assets are served from immutable revision
+    // directories. They are public to the sandboxed iframe (opaque origin,
+    // no host cookies) but fully isolated from privileged API routes.
     router.staticHandler = [this](HttpRequest* req, HttpResponse* resp) -> int {
         if (req->method != HTTP_GET && req->method != HTTP_HEAD) return 405;
         const std::string path = req->Path();
+        if (path.rfind("/apps/", 0) == 0) {
+            return serve_extension_asset(context_, req, resp);
+        }
         const bool api_path = path.rfind("/api/", 0) == 0 || path.rfind("/ws/", 0) == 0;
         auto asset = context_.web_root->read(path);
         if (!asset && !has_extension(path) && !api_path) {

@@ -1,0 +1,16 @@
+{
+  "name": "edgedesk-extension-svelte-template",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "5.0.3",
+    "svelte": "5.16.0",
+    "vite": "7.1.12"
+  }
+}

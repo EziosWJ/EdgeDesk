@@ -133,8 +133,19 @@ export type SystemInfo = {
   api_token_configured: boolean;
 };
 
-/** Registered applications plus the two internal document window types. */
-export type AppId = 'dashboard' | 'files' | 'terminal' | 'sessions' | 'settings' | 'editor' | 'preview';
+/** Registered native applications plus the two internal document window types. */
+export type NativeAppId =
+  | 'dashboard'
+  | 'files'
+  | 'terminal'
+  | 'sessions'
+  | 'settings'
+  | 'editor'
+  | 'preview'
+  | 'extensions';
+
+/** Native ids stay literal; installed extension ids are validated at runtime. */
+export type AppId = NativeAppId | (string & {});
 
 export type WindowKind = AppId;
 

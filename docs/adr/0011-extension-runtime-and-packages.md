@@ -1,6 +1,6 @@
 # ADR-0011：扩展应用包、运行时与数据存储
 
-- 状态：**Accepted（基于 Grill 第 1～13、20～24、28～39、41～47、49、53～61、64～68、74～78 轮决策）**
+- 状态：**Accepted；implemented in V1.3（基于 Grill 第 1～13、20～24、28～39、41～47、49、53～61、64～68、74～78 轮决策）**
 - 日期：2026-10-18
 - 关联：[SPEC-0007](../spec/0007-extension-applications.md)、[ADR-0001 技术栈](0001-technology-stack.md)、[ADR-0009 桌面架构](0009-desktop-workspace-architecture.md)、[ADR-0010 桌面持久化](0010-desktop-persistence-and-recovery.md)
 

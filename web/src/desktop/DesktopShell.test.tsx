@@ -48,7 +48,7 @@ describe('DesktopShell', () => {
 
   const render = () => {
     act(() => {
-      root.render(<DesktopShell onLogout={onLogout} health="online" />);
+      root.render(<DesktopShell onLogout={onLogout} health="online" registryVersion={0} onExtensionsChanged={() => {}} />);
     });
   };
 

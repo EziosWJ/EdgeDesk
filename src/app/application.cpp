@@ -1,6 +1,9 @@
 #include "app/application.hpp"
 
 #include "core/util.hpp"
+#include "extensions/extension_runtime.hpp"
+#include "extensions/package_manager.hpp"
+#include "file/file_lock.hpp"
 #include "file/file_service.hpp"
 #include "file/path_sandbox.hpp"
 #include "http/middleware.hpp"
@@ -83,7 +86,9 @@ void Application::initialize() {
     FileServiceOptions file_options;
     file_options.max_upload_size = config_.max_upload_size;
     file_options.max_text_edit_size = config_.max_text_edit_size;
+    file_locks_ = std::make_unique<FileLockManager>();
     files_ = std::make_unique<FileService>(*sandbox_, file_options);
+    files_->set_lock_manager(file_locks_.get());
 
     TerminalManagerOptions terminal_options;
     terminal_options.max_sessions = config_.max_terminal_sessions;
@@ -109,6 +114,18 @@ void Application::initialize() {
                                       static_cast<double>(config_.login_rate_limit_per_minute));
     transfer_gate_ = std::make_unique<ConcurrencyGate>(config_.max_transfers);
     web_root_ = std::make_unique<WebRoot>(config_.web_root);
+
+    Error extension_error;
+    packages_ = extensions::PackageManager::create(config_.apps_root, extension_error);
+    if (!packages_) {
+        std::cerr << "WARNING: extension platform unavailable (apps root " << config_.apps_root
+                  << "): " << extension_error.message << "\n"
+                  << "         Core APIs remain available; pass --apps-root to a writable directory.\n";
+    } else {
+        extension_runtime_ =
+            std::make_unique<extensions::ExtensionRuntime>(packages_->store(), *packages_, *files_,
+                                                           terminals_.get());
+    }
 }
 
 void Application::print_banner() const {
@@ -165,6 +182,21 @@ void Application::start_maintenance() {
             api_limiter_->sweep(now_ms);
             login_limiter_->sweep(now_ms);
             setup_limiter_->sweep(now_ms);
+            if (extension_runtime_) extension_runtime_->sweep(now_ms);
+            const std::int64_t now_seconds = now_unix_seconds();
+            if (audit_ && audit_->enabled() &&
+                (last_audit_prune_ == 0 || now_seconds - last_audit_prune_ >= 24 * 3600)) {
+                last_audit_prune_ = now_seconds;
+                std::size_t removed = 0;
+                std::string prune_error;
+                const std::int64_t cutoff =
+                    now_seconds - static_cast<std::int64_t>(config_.audit_retention_days) * 86400;
+                if (audit_->prune_older_than(cutoff, removed, prune_error)) {
+                    audit_->record("audit.prune", "ok", std::to_string(removed) + " records removed");
+                } else {
+                    audit_->record("audit.prune", "failed", prune_error);
+                }
+            }
         }
     });
 }
@@ -207,6 +239,8 @@ int Application::run() {
     context.login_limiter = login_limiter_.get();
     context.setup_limiter = setup_limiter_.get();
     context.transfer_gate = transfer_gate_.get();
+    context.packages = packages_.get();
+    context.extension_runtime = extension_runtime_.get();
 
     Server server(context, config_);
     std::thread signal_thread([&signal_set, &server] {

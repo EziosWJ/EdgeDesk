@@ -22,7 +22,7 @@ function app(overrides: Partial<AppDefinition> = {}): AppDefinition {
 describe('AppRegistry', () => {
   it('registers the five user-launchable applications and internal window types', () => {
     const registry = createDefaultRegistry();
-    expect(registry.launcherApps().map((item) => item.id)).toEqual(['dashboard', 'files', 'terminal', 'sessions', 'settings']);
+    expect(registry.launcherApps().map((item) => item.id)).toEqual(['dashboard', 'files', 'terminal', 'sessions', 'settings', 'extensions']);
     expect(registry.desktopApps().map((item) => item.id)).toEqual(['dashboard', 'files', 'terminal', 'sessions']);
     expect(registry.dockApps().map((item) => item.id)).toEqual(['dashboard', 'files', 'terminal', 'sessions', 'settings']);
     expect(registry.get('editor')?.launcherVisible).toBe(false);
@@ -59,11 +59,12 @@ describe('AppRegistry', () => {
   it('searches name, description and keywords without maintaining a second list', () => {
     const registry = createDefaultRegistry();
     expect(registry.search('终端').map((item) => item.id)).toEqual(['terminal']);
+    expect(registry.search('扩展').map((item) => item.id)).toEqual(['extensions']);
     expect(registry.search('会话').map((item) => item.id)).toEqual(['sessions', 'settings']);
     expect(registry.search('bash').map((item) => item.id)).toEqual(['terminal', 'sessions']);
     expect(registry.search('下载').map((item) => item.id)).toEqual(['files']);
     expect(registry.search('不存在')).toEqual([]);
-    expect(registry.search(' ').map((item) => item.id)).toEqual(['dashboard', 'files', 'terminal', 'sessions', 'settings']);
+    expect(registry.search(' ').map((item) => item.id)).toEqual(['dashboard', 'files', 'terminal', 'sessions', 'settings', 'extensions']);
   });
 
   it('exposes the same singleton metadata used by the desktop shell', () => {
@@ -73,6 +74,7 @@ describe('AppRegistry', () => {
       'terminal',
       'sessions',
       'settings',
+      'extensions',
       'editor',
       'preview',
     ]);

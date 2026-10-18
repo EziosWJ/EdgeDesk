@@ -21,6 +21,11 @@
 
 namespace edgedesk {
 
+namespace extensions {
+class ExtensionRuntime;
+class PackageManager;
+} // namespace extensions
+
 struct RouteContext {
     const Config* config = nullptr;
     WebRoot* web_root = nullptr;
@@ -34,6 +39,8 @@ struct RouteContext {
     RateLimiter* login_limiter = nullptr;
     RateLimiter* setup_limiter = nullptr;
     ConcurrencyGate* transfer_gate = nullptr;
+    extensions::PackageManager* packages = nullptr;
+    extensions::ExtensionRuntime* extension_runtime = nullptr;
 };
 
 // Public endpoints depend on the authentication state: health/static/session
@@ -49,6 +56,12 @@ std::uint64_t body_limit_for(const Config& config, std::string_view path);
 
 // True for the streaming upload endpoint (validated at the header stage).
 bool is_upload_path(std::string_view path);
+
+// Raw ZIP install/upgrade endpoints streamed without a fixed size limit.
+bool is_extension_upload_path(std::string_view path);
+
+// True for both streaming families; these skip the buffered-body middleware.
+bool is_streaming_path(std::string_view path);
 
 // Shared helper for the WebSocket upgrade path and the upload route.
 bool request_is_authenticated(RouteContext& ctx, HttpRequest* req, bool& used_cookie);

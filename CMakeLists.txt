@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(EdgeDesk VERSION 1.2.0 LANGUAGES C CXX)
+project(EdgeDesk VERSION 1.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,6 +33,7 @@ endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_package(Threads REQUIRED)
+find_package(ZLIB REQUIRED)
 set(EDGEDESK_FRONTEND_DIR "${CMAKE_SOURCE_DIR}/web")
 set(EDGEDESK_DIST_DIR "${EDGEDESK_FRONTEND_DIR}/dist")
 
@@ -64,8 +65,23 @@ target_include_directories(edgedesk_argon2
 target_compile_definitions(edgedesk_argon2 PRIVATE ARGON2_NO_THREADS)
 target_compile_options(edgedesk_argon2 PRIVATE -Wall -Wextra)
 
+# SQLite amalgamation (public domain), pinned for the extension platform's
+# metadata and KV store. Built without loadable extensions and with foreign
+# keys enabled by default. This is the only database dependency in EdgeDesk.
+add_library(edgedesk_sqlite STATIC third_party/sqlite/sqlite3.c)
+target_include_directories(edgedesk_sqlite PUBLIC "${CMAKE_SOURCE_DIR}/third_party/sqlite")
+target_compile_definitions(edgedesk_sqlite PRIVATE
+  SQLITE_THREADSAFE=1
+  SQLITE_OMIT_LOAD_EXTENSION=1
+  SQLITE_DQS=0
+  SQLITE_DEFAULT_FOREIGN_KEYS=1
+  SQLITE_USE_URI=0
+  SQLITE_ENABLE_JSON1=1)
+target_compile_options(edgedesk_sqlite PRIVATE -w)
+target_link_libraries(edgedesk_sqlite PUBLIC Threads::Threads)
+
 # Library with all non-network modules: core, file, terminal, system, security,
-# web assets. Tests link this target without pulling in libhv.
+# web assets, extension platform. Tests link this target without pulling in libhv.
 add_library(edgedesk_core STATIC
   src/core/atomic_file.cpp
   src/core/config.cpp
@@ -74,6 +90,13 @@ add_library(edgedesk_core STATIC
   src/core/types.cpp
   src/core/utf8.cpp
   src/core/util.cpp
+  src/extensions/extension_runtime.cpp
+  src/extensions/extension_store.cpp
+  src/extensions/manifest.cpp
+  src/extensions/package_manager.cpp
+  src/extensions/semver.cpp
+  src/extensions/zip_reader.cpp
+  src/file/file_lock.cpp
   src/file/file_service.cpp
   src/file/file_types.cpp
   src/file/path_sandbox.cpp
@@ -95,15 +118,14 @@ add_library(edgedesk_core STATIC
   src/web/web_root.cpp
 )
 target_include_directories(edgedesk_core
-  PUBLIC "${CMAKE_SOURCE_DIR}/src"
-  PRIVATE "${CMAKE_SOURCE_DIR}/third_party")
+  PUBLIC "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/third_party")
 target_compile_features(edgedesk_core PUBLIC cxx_std_17)
 target_compile_options(edgedesk_core PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(edgedesk_core
   PRIVATE EDGEDESK_DISK_DEFAULT_DIR="${EDGEDESK_WEB_ROOT}"
   PUBLIC EDGEDESK_VERSION="${PROJECT_VERSION}"
   PUBLIC EDGEDESK_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
-target_link_libraries(edgedesk_core PUBLIC Threads::Threads edgedesk_argon2)
+target_link_libraries(edgedesk_core PUBLIC Threads::Threads edgedesk_argon2 edgedesk_sqlite ZLIB::ZLIB)
 if(UNIX AND NOT APPLE)
   # forkpty lives in libutil on glibc and in libc on musl.
   include(CheckLibraryExists)
@@ -145,6 +167,7 @@ if(EDGEDESK_BUILD_SERVER)
     src/http/middleware.cpp
     src/http/server.cpp
     src/http/routes/auth_route.cpp
+    src/http/routes/extension_route.cpp
     src/http/routes/file_route.cpp
     src/http/routes/health_route.cpp
     src/http/routes/settings_route.cpp
@@ -198,6 +221,11 @@ if(EDGEDESK_BUILD_TESTS)
     command_guard_test:terminal/command_guard_test.cpp
     terminal_session_test:terminal/terminal_session_test.cpp
     system_metrics_test:system/system_metrics_test.cpp
+    semver_test:extensions/semver_test.cpp
+    manifest_test:extensions/manifest_test.cpp
+    extension_store_test:extensions/extension_store_test.cpp
+    extension_package_test:extensions/extension_package_test.cpp
+    file_lock_test:file/file_lock_test.cpp
   )
   foreach(entry IN LISTS EDGEDESK_TEST_TARGETS)
     string(REPLACE ":" ";" pair "${entry}")

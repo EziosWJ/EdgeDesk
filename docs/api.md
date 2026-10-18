@@ -1,7 +1,8 @@
-# EdgeDesk V1.2 API 与 WebSocket 协议
+# EdgeDesk V1.3 API 与 WebSocket 协议
 
-> 状态：**已实现（V1.2.0）**。V1.2 桌面化未新增或修改后端 API/WS 协议；桌面布局仅保存在
-> 浏览器 localStorage。所有业务端点默认要求认证（见下文），响应均为
+> 状态：**已实现（V1.3.0）**。V1.2 桌面布局仍保存在浏览器 localStorage；V1.3 新增扩展
+> 管理 API、运行时 API 和 `/apps` 静态资源路由。扩展内部方法/错误码契约见
+> [extension-platform-contracts.md](extension-platform-contracts.md)。所有业务端点默认要求认证（见下文），响应均为
 > `application/json; charset=utf-8`，错误体统一为
 > `{"ok":false,"error":"<slug>","message":"...","errno":<可选>}`。
 
@@ -50,7 +51,7 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 `GET /api/health` → `200`：
 
 ```json
-{"status":"ok","service":"edgedesk","phase":1,"version":"1.1.0","uptime_seconds":123.4}
+{"status":"ok","service":"edgedesk","phase":1,"version":"1.3.0","uptime_seconds":123.4}
 ```
 
 `phase` 字段为 Phase 1 契约，保持不变。
@@ -180,6 +181,73 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 `files_show_hidden`（bool）、`terminal_font_size`（10–24）、
 `dashboard_metrics_window`（60–3600 秒）。写入 `data-dir/settings.json`（0600），
 不会覆盖部署级配置。
+
+## 扩展管理 API
+
+除 `/apps/...` 静态资源外，所有扩展端点都需要管理员认证；Cookie 写请求仍需同源
+`Origin`/`Referer`。扩展平台不可用（`--apps-root` 不可写）时返回
+`503 extensions_unavailable`，不影响其他核心 API。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/extensions` | 应用列表：状态、活动修订、申请/已授权限、来源、窗口策略、未验证发布者标记。 |
+| `GET` | `/api/extensions/{app_id}` | 应用详情 + 修订列表。 |
+| `PUT` | `/api/extensions/install` | 原始 ZIP body（`Content-Type: application/zip`）。查询参数 `restore_data=1`、`overwrite=1`、`allow_downgrade=1`。流式写入临时文件，不受 JSON/上传大小上限约束。成功 `201`。 |
+| `PUT` | `/api/extensions/{app_id}/upgrade` | 同上传方式；manifest id 必须匹配路径应用。 |
+| `POST` | `/api/extensions/{app_id}/approve` | body `{"permissions":[...],"enable":bool}`；权限必须是申请集合的子集。 |
+| `POST` | `/api/extensions/{app_id}/enable` / `disable` | 启用前检查修订与宿主 API 兼容；禁用立即终止运行实例。 |
+| `POST` | `/api/extensions/{app_id}/permissions` | 更新有效授权；对现有实例延迟生效。 |
+| `POST` | `/api/extensions/{app_id}/uninstall` | body `{"data_action":"keep"\|"delete"}`；立即撤销权限，审计保留。 |
+| `POST` | `/api/extensions/{app_id}/activate` | body `{"revision_id":"...","confirm":true}`；主动升级/降级已有修订。 |
+| `POST` | `/api/extensions/{app_id}/pin` | body `{"revision_id":"...","pinned":bool}`；固定修订避免清理。 |
+| `POST` | `/api/extensions/{app_id}/integrity-check` | 可选 `revision_id`；核对逐文件 SHA-256。不一致返回 `409`，隔离修订/应用并清除授权。 |
+| `GET` | `/api/extensions/{app_id}/revisions` | 修订列表及 active/pinned/integrity 状态。 |
+
+安装结果包含 `app`、`revision`、`warnings`（含“发布者身份未验证”）与
+`approval_required`。相同 SemVer 未确认覆盖返回 `409 conflict`；降级需
+`allow_downgrade=1` 或 `activate`。
+
+## 扩展静态资源
+
+`GET|HEAD /apps/{appId}/{version}/{revisionId}/{relativePath}`
+
+- 公开路由（sandbox iframe 为 opaque origin，不能携带宿主 Cookie），但仅服务**已启用、活动、
+  完整性正常**的修订；其他状态返回 `404`。
+- 无扩展名路径回退 `index.html`；带扩展名的缺失资源返回 `404`，不做 SPA 回退。
+- 响应 `Cache-Control: public, max-age=31536000, immutable`，带完整性 SHA-256 `ETag`。
+- 应用专属 CSP 列出声明来源；`object-src 'none'`、`base-uri 'none'`、
+  `frame-ancestors 'self'`；`X-Frame-Options: SAMEORIGIN`。
+
+## 扩展运行时 API
+
+宿主机页面在创建窗口时取得运行时令牌，然后以
+`X-EdgeDesk-Runtime: <token>` 调用；管理员会话 Cookie 仍是必需条件。令牌不进入 iframe。
+请求体使用 JSON；文件块使用原始二进制。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/api/extensions/runtime/sessions` | body `{"app_id":"...","instance_id":"..."}`；返回权限快照、来源、静态基址和 `token`。 |
+| `DELETE` | `/api/extensions/runtime/sessions` | 结束当前令牌对应实例并关闭其终端/传输。 |
+| `POST` | `/api/extensions/runtime/storage/get\|set\|delete\|list\|transaction` | 隔离 KV；键 1..1024 字节，值 JSON ≤256 KiB/键，5 MiB/应用；事务全成全败。 |
+| `POST` | `/api/extensions/runtime/files/list\|stat\|read\|mkdir\|rename\|delete` | 虚拟路径；目录游标分页；`CURSOR_STALE` 返回 `409 cursor_stale`。 |
+| `POST` | `/api/extensions/runtime/files/upload/begin` | body `{"path":"/x","size":N}`；返回 `transfer_id` 与 1 MiB `chunk_size`。 |
+| `PUT` | `/api/extensions/runtime/files/upload/{id}/chunk?offset=N` | 原始块（1..1048576 字节），严格顺序；写入后返回 `received`。 |
+| `POST` | `/api/extensions/runtime/files/upload/complete` | body `{"transfer_id":"...","expected_size":N}`；长度匹配后原子替换。 |
+| `POST` | `/api/extensions/runtime/files/upload/cancel` | 释放锁并删除临时文件。 |
+| `POST` | `/api/extensions/runtime/files/download/begin` | 返回 `transfer_id`、总长度、块大小；持有共享读锁。 |
+| `GET` | `/api/extensions/runtime/files/download/{id}/chunk?offset=N` | 返回 ≤1 MiB 原始字节；`X-EdgeDesk-EOF: 1` 表示结束。 |
+| `POST` | `/api/extensions/runtime/files/download/complete\|cancel` | 结束/取消下载并释放锁。 |
+| `GET` | `/api/extensions/runtime/terminal/sessions` | 列出终端会话。 |
+| `POST` | `/api/extensions/runtime/terminal/sessions` | 创建 PTY；body `title/cwd/cols/rows`。 |
+| `POST` | `/api/extensions/runtime/terminal/close` | body `{"session_id":"..."}`。 |
+| `POST` | `/api/extensions/runtime/errors` | 应用错误上报；只写应用/实例/修订、类型、截断消息与栈到审计。 |
+
+终端输入/输出仍通过宿主页面已有的 `/ws/terminal` 中继到应用；`terminal.access` 权限快照由
+宿主桥接与运行时端点共同检查。会话创建/关闭/列表写审计，不记录原始终端输入输出。
+
+错误 slug 包括：`extensions_unavailable`、`runtime_session_invalid`、`app_not_found`、
+`revision_not_found`、`permission_denied`、`file_locked`（423）、`cursor_stale`（409）、
+`quota_exceeded`（413）、`too_large`、`conflict`、`unsupported`。
 
 ## 请求限制
 

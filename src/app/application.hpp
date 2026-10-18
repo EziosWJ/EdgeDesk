@@ -18,6 +18,12 @@ class SettingsStore;
 class SystemMetrics;
 class TerminalManager;
 class WebRoot;
+class FileLockManager;
+
+namespace extensions {
+class ExtensionRuntime;
+class PackageManager;
+} // namespace extensions
 
 // Application owns every service for the process lifetime and wires them into
 // the HTTP server. Dependencies are explicit; no service singletons.
@@ -51,9 +57,13 @@ private:
     std::unique_ptr<RateLimiter> setup_limiter_;
     std::unique_ptr<ConcurrencyGate> transfer_gate_;
     std::unique_ptr<WebRoot> web_root_;
+    std::unique_ptr<FileLockManager> file_locks_;
+    std::unique_ptr<extensions::PackageManager> packages_;
+    std::unique_ptr<extensions::ExtensionRuntime> extension_runtime_;
 
     std::thread maintenance_;
     std::atomic<bool> stopping_{false};
+    std::int64_t last_audit_prune_ = 0;
 };
 
 } // namespace edgedesk

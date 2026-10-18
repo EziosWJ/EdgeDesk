@@ -1,6 +1,6 @@
 # ADR-0012：扩展应用权限、通信与网络安全边界
 
-- 状态：**Accepted with documented risks（决策已确认，残余风险见风险清单）**
+- 状态：**Accepted with documented risks；implemented in V1.3（残余风险见风险清单）**
 - 日期：2026-10-18
 - 关联：[SPEC-0007](../spec/0007-extension-applications.md)、[ADR-0002 架构与安全](0002-architecture-security.md)、[ADR-0004 文件沙箱](0004-path-sandbox.md)、[ADR-0008 认证与设置](0008-authentication-and-settings.md)
 

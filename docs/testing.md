@@ -1,14 +1,30 @@
 # EdgeDesk 测试与验证矩阵
 
 > 只记录**实际执行过**的验证。未运行的环境一律标注“未验证”，不得以文档目标代替结果。
-> 复现命令附在每节末尾。
+> 复现命令附在每节末尾。V1.3 扩展平台新增 5 个原生测试、扩展集成测试、SDK CLI 测试和真实浏览器验收。
+
+## 2026-10-18 V1.3 扩展平台实际执行记录
+
+| 验证 | 命令 | 结果 |
+| --- | --- | --- |
+| L0 原生 | `scripts/test-fast.sh`（等价 `cmake --preset host-offline-tests` + build + ctest） | **16/16 通过**（新增 `semver_test`、`manifest_test`、`extension_store_test`、`extension_package_test`、`file_lock_test`） |
+| L0 前端 | `cd web && npm test` | **144/144 通过**（新增扩展注册表测试；原有测试全部通过） |
+| 前端构建 | `cd web && npm run build` | `tsc --noEmit` + Vite 构建通过 |
+| SDK/CLI | `cd tools/ext-sdk && npm test` | **4/4 通过**（manifest/资源校验、打包、ZIP 检查、符号链接/重复/绝对路径拒绝） |
+| 模板打包 | `node tools/ext-sdk/bin/edgedesk-ext.js pack tools/ext-sdk/templates/vanilla ...` | 通过（5 个文件，ZIP 8.6 KB） |
+| L1 集成 | `scripts/integration_test.sh out/build/dev-disk/bin/edgedesk 19094 web/dist` | **全部通过**：auth/api/ws/限流/恢复 + `extension_test` + 崩溃恢复 |
+| 浏览器 E2E | Playwright 1.64.1 / Chromium 1248，1440×900 与 390×844；`cd web && EDGEDESK_PASSWORD=... EDGEDESK_SAMPLE_V11_ZIP=... node scripts/extension-e2e.mjs` | 通过：应用管理 UI、安装列表、iframe 握手、KV 计数、终端 `echo hello-e2e`、UI 升级到 1.1.0 并关闭旧窗口、禁用移除启动器并关闭窗口、重新启用、刷新后桌面恢复扩展窗口并新建运行实例；无 console/page error、无 HTTP 4xx、无横向溢出 |
+| 崩溃恢复 | 开始 2 MiB 分块上传后 `kill -9`，重启 | 临时文件与 journal 清理，应用仍为 `enabled` |
+
+未执行/未验证：L2 平台矩阵（`release-embed`、musl、ARM64/qemu、真实硬件）本轮未重新运行；
+本机无 GitHub Actions 运行记录更新。不得把上表当作跨平台发布验收。
 
 ## 测试分层（本地入口）
 
 | 层级 | 入口 | 覆盖 | 何时运行 |
 | --- | --- | --- | --- |
-| L0 编辑循环 | `scripts/test-fast.sh` | `host-offline-tests` 构建 + 11 项原生单测 + 前端单测（`web/node_modules` 存在时；V1.2.1 为 140 项） | 每次改动 |
-| L1 任务/PR | `scripts/test-pr.sh` | `dev-disk` 构建 + 11 项原生单测 + 全量集成 + 前端 `npm test` / `npm run build` | 提交前 |
+| L0 编辑循环 | `scripts/test-fast.sh` | `host-offline-tests` 构建 + 16 项原生单测 + 前端单测（`web/node_modules` 存在时；V1.3 为 144 项）+ SDK/CLI 测试（Node 存在时） | 每次改动 |
+| L1 任务/PR | `scripts/test-pr.sh` | `dev-disk` 构建 + 16 项原生单测 + 全量集成（含扩展平台）+ 前端 `npm test` / `npm run build` | 提交前 |
 | L2 全矩阵 | 见下方“构建与平台矩阵” | `release-embed`、`release-embed-arm64`、`release-disk`、x86_64-musl、arm64-disk、arm64-musl、CI | main/nightly/release；当前 CI 对 PR 也执行全矩阵 |
 
 ```bash
@@ -54,8 +70,15 @@ scripts/test-pr.sh
 | `command_guard_test` | 危险命令命中（rm -rf 根、块设备写入、fork 炸弹、关机…）与安全命令不误报 | GCC 13.3 host | 通过 |
 | `terminal_session_test` | 真实 Bash 登录 Shell、`~/.profile` 加载、UTF-8/ANSI、TIOCSWINSZ resize、CommandGuard 拦截不执行、回放缓冲有界、订阅断开不杀会话、订阅回调（回放/退出）可重入会话 API 且不死锁、会话上限/空闲回收、缺 Bash 报错而非回退 sh | GCC 13.3 host + /bin/bash 5.2 | 通过 |
 | `system_metrics_test` | /proc/stat、loadavg、meminfo（含旧内核回退）、net/dev 速率差分、IPv4/IPv6 地址格式化与 `getifaddrs` 枚举（排除 lo）、mounts 过滤、采样线程与环形缓冲 | GCC 13.3 host | 通过 |
+| `semver_test` | 严格 SemVer 解析/拒绝（前导零、v 前缀、非法标识）、pre-release 排序、build 忽略、宿主 API 闭区间 | GCC 13.3 host | 通过 |
+| `manifest_test` | 核心字段、权限、来源通配符/CSP、窗口边界、宿主不兼容、保留运行时不执行、非法 ID/版本/来源/图标 | GCC 13.3 host | 通过 |
+| `extension_store_test` | SQLite 0700/0600、应用/修订/权限/完整性、操作日志、KV 键限/5 MiB 配额/回滚事务/分页、重启持久化 | GCC 13.3 host | 通过 |
+| `extension_package_test` | ZIP 安装、审批/静态资源/SPA、同版本覆盖、升级/降级、完整性隔离与修复、路径穿越/符号链接/重复名/本地头不一致、卸载保留/恢复/删除、修订保留与固定、启动孤儿清理 | GCC 13.3 host | 通过 |
+| `file_lock_test` | 共享/独占、硬链接别名、缺失目标父目录身份、多锁原子性、FileService 读写锁、Upload 移动锁转移 | GCC 13.3 host | 通过 |
+| `extension_test.py`（L1） | 安装/审批/静态 CSP、运行会话、KV 配额/回滚、目录游标、锁冲突、1 MiB 分块上传/下载 SHA-256、终端创建/关闭、禁用即时失效、升级/同版本覆盖/降级、完整性隔离、修复、卸载保留/恢复/删除、审计事件 | dev-disk + 真实 PTY/文件系统 | 通过 |
+| SDK CLI 测试 | manifest/资源/相对路径/符号链接/重复路径校验、ZIP 打包与检查 | Node 24.14 | 通过 |
 | `embed_generator_test` | `#embed` 生成器的确定性、路径校验、ETag | Python 3.12 | 通过 |
-| 前端单元/DOM 测试 | **V1.2 桌面**：AppRegistry（默认注册、未知 appId、重复注册、元数据/尺寸校验、单/多实例、启动器搜索）、桌面图标布局（网格命中、拖拽换位、边界、去重）、WindowManager（单/多实例、稳定实例 ID、z-index 有界、最小化保持挂载/恢复、最大化几何还原、移动/缩放/视口约束、中等视口完整可见、关闭守卫）、DesktopPersistence（序列化往返、损坏 JSON、版本不兼容、未知 appId、重复单实例、非法几何、敏感字段剥离、localStorage 不可用、恢复时会话失效标记、防抖自动保存）、DesktopShell（单击/双击、Dock 启动/聚焦/多窗口选择、最小化恢复、真全屏与桌面框架恢复、启动器搜索/空态/Esc/焦点返回、Alt 快捷键与输入焦点保护、窄屏强制最大化、退出登录）、终端恢复（session_not_found 不创建替代会话、无 session ID 时才 create、attached 状态）、编辑器生命周期（最小化保留缓冲、未保存关闭确认、外部修改保护、文件消失拒绝保存）、NAS 设备概览（CPU/内存/存储/网卡/系统/服务小组件、多挂载点、多网卡、loopback 排除、缺失值 vs 0、采集中断、加载空态）。**V1.2.1 回归**：顶部退出登录注销服务端会话并由脏编辑器否决退出、最小化后重开保留最大化状态。**V1.1 回归**：会话持久化、metrics 窗口有界、格式化、FloatingWindow DOM 交互、Sidebar、图表工具、Dashboard 旧断言已迁移、文件管理、认证、设置、偏好。 | Node 24.14 / vitest 3.2 / happy-dom | 通过（140 项）；`npm run build`（tsc + vite）通过 |
+| 前端单元/DOM 测试 | **V1.2 桌面**：AppRegistry（默认注册、未知 appId、重复注册、元数据/尺寸校验、单/多实例、启动器搜索）、桌面图标布局（网格命中、拖拽换位、边界、去重）、WindowManager（单/多实例、稳定实例 ID、z-index 有界、最小化保持挂载/恢复、最大化几何还原、移动/缩放/视口约束、中等视口完整可见、关闭守卫）、DesktopPersistence（序列化往返、损坏 JSON、版本不兼容、未知 appId、重复单实例、非法几何、敏感字段剥离、localStorage 不可用、恢复时会话失效标记、防抖自动保存）、DesktopShell（单击/双击、Dock 启动/聚焦/多窗口选择、最小化恢复、真全屏与桌面框架恢复、启动器搜索/空态/Esc/焦点返回、Alt 快捷键与输入焦点保护、窄屏强制最大化、退出登录）、终端恢复（session_not_found 不创建替代会话、无 session ID 时才 create、attached 状态）、编辑器生命周期（最小化保留缓冲、未保存关闭确认、外部修改保护、文件消失拒绝保存）、NAS 设备概览（CPU/内存/存储/网卡/系统/服务小组件、多挂载点、多网卡、loopback 排除、缺失值 vs 0、采集中断、加载空态）。**V1.3 扩展平台**：动态应用注册、禁用关闭窗口、待审批应用不可启动、扩展元数据更新。**V1.2.1 回归**：顶部退出登录注销服务端会话并由脏编辑器否决退出、最小化后重开保留最大化状态。**V1.1 回归**：会话持久化、metrics 窗口有界、格式化、FloatingWindow DOM 交互、Sidebar、图表工具、Dashboard 旧断言已迁移、文件管理、认证、设置、偏好。 | Node 24.14 / vitest 3.2 / happy-dom | 通过（144 项）；`npm run build`（tsc + vite）通过 |
 | `auth_test.py` | 初始化状态门禁、首次设置密码、重复初始化 409、密码登录、Cookie 属性（含 `--cookie-secure`）、改密后旧 Cookie/旧密码失效、Bearer 不受影响、CSRF、设置白名单、系统信息脱敏、重启后旧 Cookie 失效、损坏状态失败关闭、本机恢复 | dev-disk / host-embed / release-embed / release-embed-arm64 / release-disk / x86_64-musl / arm64-disk / arm64-musl | 全部通过 |
 | `api_test.py` | health 契约、密码登录/会话/Bearer、CSRF、目录浏览（含 `dirs_only` 只返回直接子目录）、文本读写、mkdir/rename/delete、流式上传字节一致、Range 206/416、路径沙箱拒绝、JSON 体积限制、系统指标（含 `network[].addresses` 字段） | 见下（三种二进制） | 通过 |
 | `ws_test.py` | 未认证/异源握手拒绝、终端 create/input/输出/resize/guard、断线重连（回放）、会话存活、显式关闭、metrics 快照+增量 | 同上 | 通过 |

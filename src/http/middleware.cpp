@@ -14,23 +14,39 @@ constexpr const char* kCsp =
     "img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: wss:; "
     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
-void set_security_headers(HttpResponse* resp) {
+void set_security_headers(HttpResponse* resp, std::string_view path) {
     resp->headers["X-Content-Type-Options"] = "nosniff";
-    resp->headers["X-Frame-Options"] = "DENY";
     resp->headers["Referrer-Policy"] = "no-referrer";
-    resp->headers["Content-Security-Policy"] = kCsp;
+    // Extension assets are framed by the EdgeDesk desktop; their per-app CSP
+    // and frame policy are set by the static handler.
+    if (path.rfind("/apps/", 0) != 0) {
+        resp->headers["X-Frame-Options"] = "DENY";
+        resp->headers["Content-Security-Policy"] = kCsp;
+    }
+}
+
+bool is_extension_install_path(std::string_view path) {
+    return path == "/api/extensions/install" ||
+           (path.rfind("/api/extensions/", 0) == 0 && path.size() > 9 &&
+            path.substr(path.size() - 8) == "/upgrade");
 }
 
 } // namespace
 
 void release_upload_state(const HttpContextPtr& context) {
     if (!context || context->userdata == nullptr) return;
-    auto* state = static_cast<UploadRequestState*>(context->userdata);
+    auto* state = static_cast<RequestState*>(context->userdata);
     context->userdata = nullptr;
     delete state;
 }
 
 bool is_upload_path(std::string_view path) { return path == "/api/files/content"; }
+
+bool is_extension_upload_path(std::string_view path) { return is_extension_install_path(path); }
+
+bool is_streaming_path(std::string_view path) {
+    return is_upload_path(path) || is_extension_upload_path(path);
+}
 
 std::uint64_t body_limit_for(const Config& config, std::string_view path) {
     if (is_upload_path(path)) return config.max_upload_size;
@@ -103,18 +119,19 @@ void install_middleware(hv::HttpService& router, RouteContext& ctx) {
     // Used for the streaming upload (must not write a byte before auth) and
     // for WebSocket upgrades.
     router.headerHandler = [&ctx](HttpRequest* req, HttpResponse* resp) -> int {
-        set_security_headers(resp);
         const std::string path = req->Path();
+        set_security_headers(resp, path);
         const std::uint64_t content_length = static_cast<std::uint64_t>(req->content_length);
         const std::string ip = http::client_ip(*ctx.config, req);
         bool used_cookie = false;
         const bool authenticated = request_is_authenticated(ctx, req, used_cookie);
         const bool origin_ok = request_origin_ok(req);
         const auto auth_state = ctx.auth == nullptr ? AuthState::corrupt : ctx.auth->state();
+        const bool extension_upload = is_extension_upload_path(path);
 
-        if (is_upload_path(path) || path.rfind("/ws/", 0) == 0) {
+        if (is_streaming_path(path) || path.rfind("/ws/", 0) == 0) {
             if (auth_state != AuthState::initialized) {
-                ctx.audit->record(is_upload_path(path) ? "auth" : "ws_auth", "denied",
+                ctx.audit->record(is_streaming_path(path) ? "auth" : "ws_auth", "denied",
                                   auth_state == AuthState::uninitialized ? "setup required" : "auth state corrupt", ip,
                                   path);
                 resp->status_code = static_cast<http_status>(503);
@@ -124,26 +141,26 @@ void install_middleware(hv::HttpService& router, RouteContext& ctx) {
             }
             // Uploads write straight to disk and upgrades switch protocols, so
             // both must be fully validated before anything is consumed.
-            if (is_upload_path(path)) {
+            if (is_streaming_path(path)) {
                 if (!ctx.api_limiter->allow(ip, now_unix_millis())) {
                     ctx.audit->record("rate_limit", "denied", path, ip);
                     resp->body = "too many requests";
                     return 429;
                 }
-                if (content_length > ctx.config->max_upload_size) {
+                if (!extension_upload && content_length > ctx.config->max_upload_size) {
                     ctx.audit->record("file.upload", "denied", "content-length over limit", ip, path);
                     resp->body = "upload exceeds configured limit";
                     return 413;
                 }
             }
-            const char* event = is_upload_path(path) ? "auth" : "ws_auth";
+            const char* event = is_streaming_path(path) ? "auth" : "ws_auth";
             if (!authenticated) {
                 ctx.audit->record(event, "denied", path, ip);
                 resp->body = "authentication required";
                 return 401;
             }
             if (!origin_ok) {
-                ctx.audit->record(is_upload_path(path) ? "csrf" : "ws_origin", "denied", path, ip);
+                ctx.audit->record(is_streaming_path(path) ? "csrf" : "ws_origin", "denied", path, ip);
                 resp->body = "origin check failed";
                 return 403;
             }
@@ -168,7 +185,7 @@ void install_middleware(hv::HttpService& router, RouteContext& ctx) {
         const std::string path = req->Path();
         const std::string ip = http::client_ip(*ctx.config, req);
 
-        if (is_upload_path(path)) {
+        if (is_streaming_path(path)) {
             // Auth/CSRF/limits were enforced at the header stage; a state
             // handler owns the request from here.
             return HTTP_STATUS_NEXT;

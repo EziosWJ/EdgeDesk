@@ -116,6 +116,66 @@ bool constant_time_equal(std::string_view a, std::string_view b) {
     return diff == 0;
 }
 
+Sha256::Sha256()
+    : state_{0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au, 0x510e527fu, 0x9b05688cu, 0x1f83d9abu,
+             0x5be0cd19u} {}
+
+void Sha256::update(const void* data, std::size_t length) {
+    if (finished_ || length == 0) return;
+    const auto* bytes = static_cast<const unsigned char*>(data);
+    length_ += static_cast<std::uint64_t>(length);
+    std::size_t offset = 0;
+    if (block_size_ > 0) {
+        const std::size_t needed = 64 - block_size_;
+        const std::size_t take = length < needed ? length : needed;
+        std::memcpy(block_ + block_size_, bytes, take);
+        block_size_ += take;
+        offset += take;
+        if (block_size_ == 64) {
+            sha256_transform(state_, block_);
+            block_size_ = 0;
+        }
+    }
+    while (offset + 64 <= length) {
+        sha256_transform(state_, bytes + offset);
+        offset += 64;
+    }
+    if (offset < length) {
+        block_size_ = length - offset;
+        std::memcpy(block_, bytes + offset, block_size_);
+    }
+}
+
+std::string Sha256::finish_hex() {
+    if (!finished_) {
+        const std::uint64_t bit_length = length_ * 8u;
+        unsigned char tail[128];
+        std::memset(tail, 0, sizeof(tail));
+        std::size_t tail_size = 0;
+        if (block_size_ > 0) {
+            std::memcpy(tail, block_, block_size_);
+            tail_size = block_size_;
+        }
+        tail[tail_size++] = 0x80;
+        const std::size_t padded = tail_size <= 56 ? 64 : 128;
+        for (int i = 0; i < 8; ++i) {
+            tail[padded - 1 - i] = static_cast<unsigned char>((bit_length >> (i * 8)) & 0xffu);
+        }
+        for (std::size_t pos = 0; pos < padded; pos += 64) {
+            sha256_transform(state_, tail + pos);
+        }
+        finished_ = true;
+    }
+    unsigned char digest[32];
+    for (int i = 0; i < 8; ++i) {
+        digest[i * 4] = static_cast<unsigned char>((state_[i] >> 24) & 0xffu);
+        digest[i * 4 + 1] = static_cast<unsigned char>((state_[i] >> 16) & 0xffu);
+        digest[i * 4 + 2] = static_cast<unsigned char>((state_[i] >> 8) & 0xffu);
+        digest[i * 4 + 3] = static_cast<unsigned char>(state_[i] & 0xffu);
+    }
+    return hex_encode(std::string_view(reinterpret_cast<const char*>(digest), sizeof(digest)));
+}
+
 std::string sha256_hex(std::string_view data) {
     const auto digest = sha256_digest(data);
     return hex_encode(std::string_view(reinterpret_cast<const char*>(digest.data()), digest.size()));
@@ -216,6 +276,38 @@ std::string format_iso8601_utc(std::int64_t unix_seconds) {
     return std::string(buffer, written);
 }
 
+bool parse_iso8601_utc(std::string_view text, std::int64_t& unix_seconds) {
+    if (text.size() != 20 || text[4] != '-' || text[7] != '-' || text[10] != 'T' ||
+        text[13] != ':' || text[16] != ':' || text[19] != 'Z') {
+        return false;
+    }
+    auto number = [&](std::size_t start, std::size_t length, int& out) -> bool {
+        int value = 0;
+        for (std::size_t i = 0; i < length; ++i) {
+            const char ch = text[start + i];
+            if (ch < '0' || ch > '9') return false;
+            value = value * 10 + (ch - '0');
+        }
+        out = value;
+        return true;
+    };
+    std::tm tm{};
+    if (!number(0, 4, tm.tm_year) || !number(5, 2, tm.tm_mon) || !number(8, 2, tm.tm_mday) ||
+        !number(11, 2, tm.tm_hour) || !number(14, 2, tm.tm_min) || !number(17, 2, tm.tm_sec)) {
+        return false;
+    }
+    tm.tm_year -= 1900;
+    tm.tm_mon -= 1;
+    if (tm.tm_mon < 0 || tm.tm_mon > 11 || tm.tm_mday < 1 || tm.tm_mday > 31 || tm.tm_hour > 23 ||
+        tm.tm_min > 59 || tm.tm_sec > 60) {
+        return false;
+    }
+    const std::time_t stamp = ::timegm(&tm);
+    if (stamp == static_cast<std::time_t>(-1)) return false;
+    unix_seconds = static_cast<std::int64_t>(stamp);
+    return true;
+}
+
 bool url_decode(std::string_view text, std::string& out) {
     out.clear();
     out.reserve(text.size());
@@ -260,6 +352,90 @@ std::string url_encode_component(std::string_view text) {
         }
     }
     return out;
+}
+
+
+std::string base64_encode(std::string_view data) {
+    static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((data.size() + 2) / 3) * 4);
+    std::size_t i = 0;
+    while (i + 3 <= data.size()) {
+        const std::uint32_t value = (static_cast<unsigned char>(data[i]) << 16) |
+                                    (static_cast<unsigned char>(data[i + 1]) << 8) |
+                                    static_cast<unsigned char>(data[i + 2]);
+        out.push_back(kAlphabet[(value >> 18) & 63]);
+        out.push_back(kAlphabet[(value >> 12) & 63]);
+        out.push_back(kAlphabet[(value >> 6) & 63]);
+        out.push_back(kAlphabet[value & 63]);
+        i += 3;
+    }
+    if (i + 1 == data.size()) {
+        const std::uint32_t value = static_cast<unsigned char>(data[i]) << 16;
+        out.push_back(kAlphabet[(value >> 18) & 63]);
+        out.push_back(kAlphabet[(value >> 12) & 63]);
+        out += "==";
+    } else if (i + 2 == data.size()) {
+        const std::uint32_t value = (static_cast<unsigned char>(data[i]) << 16) |
+                                    (static_cast<unsigned char>(data[i + 1]) << 8);
+        out.push_back(kAlphabet[(value >> 18) & 63]);
+        out.push_back(kAlphabet[(value >> 12) & 63]);
+        out.push_back(kAlphabet[(value >> 6) & 63]);
+        out.push_back('=');
+    }
+    return out;
+}
+
+std::string base64url_encode(std::string_view data) {
+    std::string out = base64_encode(data);
+    for (char& ch : out) {
+        if (ch == '+') ch = '-';
+        else if (ch == '/') ch = '_';
+    }
+    while (!out.empty() && out.back() == '=') out.pop_back();
+    return out;
+}
+
+bool base64_decode(std::string_view text, std::string& out) {
+    out.clear();
+    std::string normalized;
+    normalized.reserve(text.size() + 3);
+    for (const char ch : text) {
+        if (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') continue;
+        if (ch == '-') normalized.push_back('+');
+        else if (ch == '_') normalized.push_back('/');
+        else normalized.push_back(ch);
+    }
+    while (normalized.size() % 4 != 0) normalized.push_back('=');
+    out.reserve((normalized.size() / 4) * 3);
+    auto value_of = [](char ch) -> int {
+        if (ch >= 'A' && ch <= 'Z') return ch - 'A';
+        if (ch >= 'a' && ch <= 'z') return ch - 'a' + 26;
+        if (ch >= '0' && ch <= '9') return ch - '0' + 52;
+        if (ch == '+') return 62;
+        if (ch == '/') return 63;
+        return -1;
+    };
+    for (std::size_t i = 0; i < normalized.size(); i += 4) {
+        const char c0 = normalized[i], c1 = normalized[i + 1], c2 = normalized[i + 2], c3 = normalized[i + 3];
+        const int v0 = value_of(c0), v1 = value_of(c1);
+        if (v0 < 0 || v1 < 0) return false;
+        const bool pad2 = c2 == '=';
+        const bool pad3 = c3 == '=';
+        if (pad2 && !pad3) return false;
+        const int v2 = pad2 ? 0 : value_of(c2);
+        const int v3 = pad3 ? 0 : value_of(c3);
+        if (v2 < 0 || v3 < 0) return false;
+        if (pad2 && i + 4 != normalized.size()) return false;
+        const std::uint32_t value = (static_cast<std::uint32_t>(v0) << 18) |
+                                    (static_cast<std::uint32_t>(v1) << 12) |
+                                    (static_cast<std::uint32_t>(v2) << 6) |
+                                    static_cast<std::uint32_t>(v3);
+        out.push_back(static_cast<char>((value >> 16) & 0xff));
+        if (!pad2) out.push_back(static_cast<char>((value >> 8) & 0xff));
+        if (!pad3) out.push_back(static_cast<char>(value & 0xff));
+    }
+    return true;
 }
 
 } // namespace edgedesk

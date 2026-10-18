@@ -342,8 +342,7 @@ export class WindowStore {
     return true;
   }
 
-  forceClose(id: string): void {
-    const before = this.windows.length;
+  forceClose(id: string): void {    const before = this.windows.length;
     this.windows = this.windows.filter((item) => item.id !== id);
     if (this.windows.length === before) return;
     this.closeGuards.delete(id);
@@ -352,8 +351,20 @@ export class WindowStore {
     this.emit();
   }
 
-  registerCloseGuard(id: string, guard: () => boolean): () => void {
-    this.closeGuards.set(id, guard);
+  /** Force-close every window of an app (disable, uninstall, isolation). */
+  closeAllForApp(appId: AppId): number {
+    const before = this.windows.length;
+    const closedFocus = this.focusedId ? this.get(this.focusedId)?.appId === appId : false;
+    this.windows = this.windows.filter((item) => item.appId !== appId);
+    const closed = before - this.windows.length;
+    if (closed === 0) return 0;
+    this.applyZOrder();
+    if (closedFocus) this.focusedId = this.topVisible()?.id ?? null;
+    this.emit();
+    return closed;
+  }
+
+  registerCloseGuard(id: string, guard: () => boolean): () => void {    this.closeGuards.set(id, guard);
     return () => {
       if (this.closeGuards.get(id) === guard) this.closeGuards.delete(id);
     };

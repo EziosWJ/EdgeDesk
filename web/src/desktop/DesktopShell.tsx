@@ -18,6 +18,8 @@ export type HealthState = 'checking' | 'online' | 'offline';
 type Props = {
   onLogout: () => void;
   health: HealthState;
+  registryVersion: number;
+  onExtensionsChanged: () => void;
 };
 
 function useClock(): Date {
@@ -35,7 +37,7 @@ function clockText(now: Date): string {
 }
 
 /** Desktop shell: wallpaper, icons, window layer, Dock, launcher and shortcuts. */
-export function DesktopShell({ onLogout, health }: Props) {
+export function DesktopShell({ onLogout, health, registryVersion, onExtensionsChanged }: Props) {
   const desktop = useDesktopState();
   const windows = useWindows();
   const focusedId = useFocusedWindowId();
@@ -118,6 +120,7 @@ export function DesktopShell({ onLogout, health }: Props) {
     <div
       className={`ed-desktop${narrow ? ' narrow' : ''}${fullscreen ? ' has-fullscreen' : ''}`}
       data-testid="desktop-shell"
+      data-registry-version={registryVersion}
     >
       <div
         className="ed-desktop-wallpaper"
@@ -131,7 +134,7 @@ export function DesktopShell({ onLogout, health }: Props) {
           <strong>
             Edge<span>Desk</span>
           </strong>
-          <span className="ed-desktop-version">V1.2</span>
+          <span className="ed-desktop-version">V1.3</span>
         </div>
         <div className="ed-desktop-topbar-meta">
           <span className="ed-desktop-hostname" title={latest?.hostname ?? undefined}>
@@ -167,7 +170,7 @@ export function DesktopShell({ onLogout, health }: Props) {
         </div>
       )}
 
-      <WindowLayer onLogout={onLogout} />
+      <WindowLayer onLogout={onLogout} onExtensionsChanged={onExtensionsChanged} />
 
       <div className="ed-desktop-shortcut-hint" aria-hidden="true">
         <Icon icon={ShieldCheck} size={12} />

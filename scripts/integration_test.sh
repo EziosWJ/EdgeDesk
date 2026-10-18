@@ -31,6 +31,11 @@ STATE="$ROOT/state"
 DATA="$ROOT/data"
 AUTH_DATA="$ROOT/auth-data"
 CORRUPT_DATA="$ROOT/corrupt-data"
+APPS="$ROOT/apps"
+EXT_DATA="$ROOT/ext-data"
+EXT_STATE="$ROOT/ext-state"
+EXT_APPS="$ROOT/ext-apps"
+EXT_FILES="$ROOT/ext-files"
 TOKEN="integration-token-$$"
 PASSWORD="integration password one"
 NEW_PASSWORD="integration password two"
@@ -46,7 +51,8 @@ start_server() {
   shift
   local -a runner=()
   if [ -n "$RUNNER" ]; then read -r -a runner <<< "$RUNNER"; fi
-  "${runner[@]}" "$BIN" --host 127.0.0.1 --port "$port" "$@" > "$ROOT/server-$port.log" 2>&1 &
+  "${runner[@]}" "$BIN" --host 127.0.0.1 --port "$port" "$@" \
+    --apps-root "${ACTIVE_APPS:-$APPS}" > "$ROOT/server-$port.log" 2>&1 &
   SERVER_PID=$!
   PIDS+=("$SERVER_PID")
 }
@@ -92,7 +98,7 @@ wait_health() {
   return 1
 }
 
-mkdir -p "$DATA/docs" "$STATE" "$AUTH_DATA" "$CORRUPT_DATA"
+mkdir -p "$DATA/docs" "$STATE" "$AUTH_DATA" "$CORRUPT_DATA" "$APPS" "$EXT_DATA" "$EXT_STATE" "$EXT_APPS" "$EXT_FILES"
 printf 'hello\n' > "$DATA/a.txt"
 printf '# note\n' > "$DATA/docs/n.md"
 
@@ -127,6 +133,8 @@ grep -q '"credential_version":2' "$AUTH_DATA/auth.json"
 
 python3 scripts/api_test.py 127.0.0.1 "$RESTART_PORT" "$TOKEN" "$DATA" "$NEW_PASSWORD"
 python3 scripts/ws_test.py 127.0.0.1 "$RESTART_PORT" "$NEW_PASSWORD"
+python3 scripts/extension_test.py --host 127.0.0.1 --port "$RESTART_PORT" \
+  --password "$NEW_PASSWORD" --apps-root "$APPS" --file-root "$DATA" --state-dir "$STATE"
 
 # The rate-limit instance needs exclusive access to the same auth data dir.
 stop_pid "$FUNCTIONAL_PID"
@@ -190,6 +198,27 @@ wait_health "$((PORT + 3))"
 python3 scripts/auth_test.py --host 127.0.0.1 --port "$((PORT + 3))" \
   --password "$CORRUPT_PASSWORD" --setup-only
 stop_pid "$CORRUPT_PID"
+
+log "extension transfer crash recovery"
+ACTIVE_APPS="$EXT_APPS"
+start_server "$((PORT + 6))" --file-root "$EXT_FILES" --data-dir "$EXT_DATA" --state-dir "$EXT_STATE" \
+  --login-rate-limit 200 --rate-limit 1000 --rate-limit-burst 2000
+CRASH_PID=$SERVER_PID
+wait_health "$((PORT + 6))"
+python3 scripts/auth_test.py --host 127.0.0.1 --port "$((PORT + 6))" \
+  --password "$NEW_PASSWORD" --setup-only
+python3 scripts/extension_test.py --host 127.0.0.1 --port "$((PORT + 6))" \
+  --password "$NEW_PASSWORD" --apps-root "$EXT_APPS" --file-root "$EXT_FILES" --begin-dangling-upload
+kill -9 "$CRASH_PID" 2>/dev/null || true
+wait "$CRASH_PID" 2>/dev/null || true
+start_server "$((PORT + 6))" --file-root "$EXT_FILES" --data-dir "$EXT_DATA" --state-dir "$EXT_STATE" \
+  --login-rate-limit 200 --rate-limit 1000 --rate-limit-burst 2000
+CRASH_PID=$SERVER_PID
+wait_health "$((PORT + 6))"
+python3 scripts/extension_test.py --host 127.0.0.1 --port "$((PORT + 6))" \
+  --password "$NEW_PASSWORD" --apps-root "$EXT_APPS" --file-root "$EXT_FILES" --check-clean
+stop_pid "$CRASH_PID"
+unset ACTIVE_APPS
 
 log "audit log sanity"
 if [ -f "$STATE/audit.log" ]; then

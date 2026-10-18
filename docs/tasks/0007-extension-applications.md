@@ -1,10 +1,28 @@
 # SPEC-0007 实施计划：扩展应用平台
 
-- 状态：**Planned（仅计划，未实现）**
+- 状态：**Implemented（Phase 0～9 已完成；宿主 L0/L1、集成与真实浏览器已验证；L2 平台矩阵待 CI）**
 - 需求基线：[SPEC-0007](../spec/0007-extension-applications.md)
 - 架构决策：[ADR-0011](../adr/0011-extension-runtime-and-packages.md)、[ADR-0012](../adr/0012-extension-security-and-communication.md)、[ADR-0013](../adr/0013-extension-file-api-and-transfer.md)
 - 风险：[扩展应用风险清单](../security/extension-app-risk-register.md)
 - 原则：保留现有 EdgeDesk 业务功能与 V1.2 行为；本文中的 Issue 为建议拆分，尚未创建为 GitHub Issue。
+
+## 0. 实现结果（2026-10-18）
+
+| 阶段 | 交付 | 验收证据 |
+| --- | --- | --- |
+| Phase 0 | manifest/SemVer、JSON-RPC 方法目录、错误码、SQLite schema、状态机、握手/传输契约 | [实现契约](../extension-platform-contracts.md) |
+| Phase 1 | SQLite store、权限/KV/操作日志、启动恢复、0700/0600 | `extension_store_test` |
+| Phase 2 | 流式 ZIP、逐文件 SHA-256、原子修订、升级/覆盖/降级、保留/固定/清理、隔离 | `extension_package_test` |
+| Phase 3 | `/apps/...` 静态路由、CSP/MIME/SPA/缓存、sandbox iframe、WindowManager 接入 | 浏览器 E2E、集成测试 |
+| Phase 4 | postMessage 握手、MessagePort JSON-RPC、权限快照、事件、外部来源 CSP | 浏览器 E2E、`manifest_test`、集成测试 |
+| Phase 5 | KV get/set/delete/list/transaction、5 MiB/256 KiB、卸载保留/恢复/删除 | `extension_store_test`、集成测试 |
+| Phase 6 | 虚拟路径、游标、1 MiB 分块、原子提交、共享/独占锁、审计 | `file_lock_test`、集成测试 |
+| Phase 7 | 应用管理 UI、启动器动态注册、窗口恢复校验、错误/重载、完整性 UI | 浏览器 E2E、前端测试 |
+| Phase 8 | SDK、Node CLI、vanilla/React/Vue/Svelte 模板、模板打包 | SDK CLI 测试、vanilla 包安装运行 |
+| Phase 9 | 文档、风险证据、L0/L1、真实浏览器检查、崩溃恢复 | [测试矩阵](../testing.md) |
+
+未完成/未验证：L2 平台矩阵（musl/ARM64/qemu/真实硬件）本轮未运行；发布前必须执行。
+数字签名、公共市场、应用间通信、秘密存储、后端/脚本运行时按需求保持非目标。
 
 ## 1. 实施前强制盘点
 

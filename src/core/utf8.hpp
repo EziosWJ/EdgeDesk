@@ -13,6 +13,9 @@ namespace edgedesk {
 // UTF-8 and can be embedded in JSON text without throwing.
 std::string sanitize_utf8(std::string_view input);
 
+// Strict UTF-8 validation (no overlongs, surrogates or > U+10FFFF).
+bool is_valid_utf8(std::string_view input);
+
 // Streaming sanitizer for chunked byte producers. A valid multi-byte sequence
 // split across feed() calls is carried over to the next call instead of being
 // replaced. finish() flushes an incomplete trailing sequence as U+FFFD.

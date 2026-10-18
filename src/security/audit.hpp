@@ -34,6 +34,11 @@ public:
     void record(std::string_view event, std::string_view outcome, std::string_view detail = {},
                 std::string_view ip = {}, std::string_view path = {});
 
+    // Drops records older than `cutoff_seconds` from the active log and all
+    // rotated files. Rewrites are atomic per file; unparseable lines are kept.
+    // Applies the configured retention policy from the maintenance thread.
+    bool prune_older_than(std::int64_t cutoff_seconds, std::size_t& removed, std::string& error);
+
     bool enabled() const { return enabled_; }
     const std::string& path() const { return options_.path; }
 
