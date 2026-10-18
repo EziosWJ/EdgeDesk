@@ -1,5 +1,3 @@
-import { ShieldCheck } from 'lucide-react';
-import { Icon } from '../../components/Icon';
 import { windowStore } from '../../stores/windowStore';
 import { FileWorkspace } from './FileWorkspace';
 
@@ -8,23 +6,13 @@ type Props = {
   windowId?: string;
 };
 
-/** File management app: compact header plus the tree/list workspace. */
+/**
+ * File management app. The window chrome already shows the app identity, so
+ * the workspace fills the window edge-to-edge with its own command bar.
+ */
 export function FilesView({ initialPath = '/', windowId }: Props) {
   return (
     <div className="ed-view ed-files-view">
-      <div className="ed-view-header ed-view-header-compact">
-        <div>
-          <h1>文件管理</h1>
-          <p>浏览、编辑和管理设备上的文件；所有操作限制在配置的根目录内。</p>
-        </div>
-        <span
-          className="ed-badge subtle ed-sandbox-badge"
-          title="目录树按需加载；上传、下载、编辑与删除均经过统一路径沙箱；文本保存采用原子替换并保留原权限。"
-        >
-          <Icon icon={ShieldCheck} size={13} />
-          路径沙箱已启用
-        </span>
-      </div>
       <FileWorkspace
         initialPath={initialPath}
         onPathChange={

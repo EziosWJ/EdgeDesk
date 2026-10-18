@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { PanelLeftClose, RefreshCw } from 'lucide-react';
+import { PanelLeftClose, RefreshCw, ShieldCheck } from 'lucide-react';
 import { Icon } from '../../components/Icon';
 import { api } from '../../services/api';
 import { DirectoryTreeNode, type TreeChildrenState } from './DirectoryTreeNode';
@@ -169,6 +169,10 @@ export function DirectoryTree({ currentPath, showHidden, revision, onSelect, onC
           onRetry={retry}
         />
       </div>
+      <footer className="ed-tree-foot" title="目录按需加载；上传、下载、编辑与删除均经过统一路径沙箱。">
+        <Icon icon={ShieldCheck} size={13} />
+        <span>路径沙箱 · 按需加载</span>
+      </footer>
     </div>
   );
 }

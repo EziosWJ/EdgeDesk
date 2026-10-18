@@ -3,10 +3,13 @@ import {
   ArrowDown,
   ArrowUp,
   Download,
+  FolderPlus,
+  Home,
   LayoutGrid,
   List,
   PenLine,
   RefreshCw,
+  Search,
   SlidersHorizontal,
   SquareTerminal,
   Trash2,
@@ -99,13 +102,13 @@ export function FileToolbar({
       <div className="ed-breadcrumb-row">
         <button
           type="button"
-          className="ed-button small"
+          className="ed-icon-button ed-nav-up"
           onClick={onUp}
           disabled={path === '/'}
           title="上级目录"
+          aria-label="上级目录"
         >
-          <Icon icon={ArrowUp} size={14} />
-          上级
+          <Icon icon={ArrowUp} size={15} />
         </button>
         <nav className="ed-breadcrumbs" aria-label="当前路径">
           {breadcrumbs.map((crumb, index) => (
@@ -116,12 +119,14 @@ export function FileToolbar({
                 onClick={() => onNavigate(crumb.target)}
                 aria-current={crumb.target === path ? 'page' : undefined}
               >
+                {crumb.target === '/' && <Icon icon={Home} size={13} />}
                 {crumb.label}
               </button>
             </span>
           ))}
         </nav>
         <label className="ed-filter">
+          <Icon icon={Search} size={14} />
           <span className="ed-visually-hidden">在当前目录筛选文件名</span>
           <input
             type="search"
@@ -193,16 +198,17 @@ export function FileToolbar({
             </>
           ) : (
             <>
-              <button type="button" className="ed-button primary" onClick={onUpload}>
+              <button type="button" className="ed-button primary ed-action-upload" onClick={onUpload}>
                 <Icon icon={Upload} size={15} />
                 上传文件
               </button>
               <button type="button" className="ed-button" onClick={onNewFolder}>
+                <Icon icon={FolderPlus} size={15} />
                 新建文件夹
               </button>
               <button
                 type="button"
-                className="ed-button"
+                className="ed-button ed-button-ghost"
                 onClick={onOpenTerminal}
                 title="在浮动窗口中打开 Bash"
               >
