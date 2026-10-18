@@ -2,12 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { SetupView } from '../features/auth/SetupView';
 import { CorruptStateView } from '../features/auth/CorruptStateView';
 import { LoginView } from '../features/auth/LoginView';
-import { DashboardView } from '../features/dashboard/DashboardView';
-import { FilesView } from '../features/files/FilesView';
-import { TerminalView } from '../features/terminal/TerminalView';
-import { SettingsView } from '../features/settings/SettingsView';
-import { Sidebar, type HealthState, type ModuleId } from '../components/Sidebar';
-import { WindowLayer } from '../components/WindowLayer';
+import { DesktopShell, type HealthState } from '../desktop/DesktopShell';
+import { restoreDesktop } from '../desktop/desktopPersistence';
+import { desktopStore } from '../desktop/desktopStore';
 import { api } from '../services/api';
 import { MetricsSocket } from '../services/metricsSocket';
 import { sessionStore } from '../stores/sessionStore';
@@ -25,10 +22,10 @@ function applyTheme(theme: 'light' | 'dark' | 'system'): void {
 }
 
 export default function App() {
-  const [active, setActive] = useState<ModuleId>('dashboard');
   const [authView, setAuthView] = useState<AuthView>('checking');
   const [health, setHealth] = useState<HealthState>('checking');
   const metricsSocketRef = useRef<MetricsSocket | null>(null);
+  const restoredRef = useRef(false);
   const preferences = usePreferences();
 
   useEffect(() => {
@@ -78,6 +75,7 @@ export default function App() {
 
   useEffect(() => {
     if (authView !== 'authenticated') return;
+    let cancelled = false;
     void preferencesStore.load().catch(() => undefined);
     const socket = new MetricsSocket();
     socket.onHistory = (samples, intervalMs) => sessionStore.setMetricsHistory(samples, intervalMs);
@@ -85,23 +83,40 @@ export default function App() {
     socket.connect();
     metricsSocketRef.current = socket;
 
-    const refreshTerminals = () => {
+    const refreshTerminals = () =>
       api
         .terminalSessions()
         .then((data) => {
+          if (cancelled) return null;
           sessionStore.setSessions(data.sessions);
           sessionStore.setShellInfo({
             shell: data.shell,
             shellAvailable: data.shell_available,
             maxSessions: data.max_sessions,
           });
+          return data.sessions;
         })
-        .catch(() => undefined);
-    };
-    refreshTerminals();
+        .catch(() => {
+          if (!cancelled) sessionStore.setTerminalsLoaded(false);
+          return null;
+        });
+
+    // Restore after authentication and after the first real session list so a
+    // stale saved session is marked ended instead of being silently replaced.
+    windowStore.setViewport({ width: window.innerWidth, height: window.innerHeight });
+    void refreshTerminals().then((sessions) => {
+      if (cancelled || restoredRef.current) return;
+      restoredRef.current = true;
+      restoreDesktop({
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        sessions,
+      });
+    });
+
     const interval = window.setInterval(refreshTerminals, 30000);
 
     return () => {
+      cancelled = true;
       window.clearInterval(interval);
       socket.close();
       metricsSocketRef.current = null;
@@ -109,13 +124,18 @@ export default function App() {
   }, [authView]);
 
   const handleAuthenticated = () => {
+    restoredRef.current = false;
     setAuthView('authenticated');
     api.health().then(() => setHealth('online')).catch(() => setHealth('offline'));
   };
 
   const handleLogout = () => {
+    // Detach runtime windows but keep non-sensitive layout in localStorage;
+    // the next login still re-validates terminal sessions and files.
     windowStore.closeAll();
     preferencesStore.reset();
+    desktopStore.reset();
+    restoredRef.current = false;
     setAuthView('anonymous');
   };
 
@@ -132,20 +152,5 @@ export default function App() {
     return <LoginView onSuccess={handleAuthenticated} />;
   }
 
-  return (
-    <div className="shell">
-      <Sidebar active={active} health={health} onSelect={setActive} />
-
-      <div className="content-shell">
-        <main className="main-area">
-          {active === 'dashboard' && <DashboardView />}
-          {active === 'files' && <FilesView />}
-          {active === 'terminal' && <TerminalView />}
-          {active === 'settings' && <SettingsView onLogout={handleLogout} />}
-        </main>
-      </div>
-
-      <WindowLayer />
-    </div>
-  );
+  return <DesktopShell onLogout={handleLogout} health={health} />;
 }

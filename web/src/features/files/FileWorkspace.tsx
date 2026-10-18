@@ -15,6 +15,7 @@ import { PromptDialog } from '../../components/PromptDialog';
 import { api, formatBytes } from '../../services/api';
 import { asset } from '../../services/assets';
 import { preferencesStore, usePreferences } from '../../stores/preferencesStore';
+import { sessionStore } from '../../stores/sessionStore';
 import { windowStore } from '../../stores/windowStore';
 import type { FileEntry } from '../../types';
 import { DirectoryTree } from './DirectoryTree';
@@ -124,7 +125,13 @@ function dropDetails(drop: DropConfirm): string[] {
  * clicking an entry opens it. The toolbar swaps in selection actions in place
  * so the content below never shifts.
  */
-export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
+export function FileWorkspace({
+  initialPath = '/',
+  onPathChange,
+}: {
+  initialPath?: string;
+  onPathChange?: (path: string) => void;
+}) {
   const preferences = usePreferences();
   const [path, setPath] = useState(() => normalizePath(initialPath));
   const [showHidden, setShowHidden] = useState(preferences.files_show_hidden);
@@ -218,8 +225,9 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
       setFilter('');
       setActionError(null);
       setSelected(new Set());
+      onPathChange?.(next);
     },
-    [path],
+    [path, onPathChange],
   );
 
   const refresh = useCallback(() => {
@@ -229,11 +237,19 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
   }, [reload]);
 
   const openInEditor = (entry: FileEntry) => {
-    windowStore.open({ kind: 'editor', title: `编辑 ${entry.name}`, payload: { path: entry.path } });
+    windowStore.launch('editor', {
+      title: `编辑 ${entry.name}`,
+      payload: { path: entry.path },
+      instanceKey: entry.path,
+    });
   };
 
   const openInPreview = (entry: FileEntry) => {
-    windowStore.open({ kind: 'preview', title: `预览 ${entry.name}`, payload: { path: entry.path } });
+    windowStore.launch('preview', {
+      title: `预览 ${entry.name}`,
+      payload: { path: entry.path },
+      instanceKey: entry.path,
+    });
   };
 
   const openEntry = (entry: FileEntry) => {
@@ -253,7 +269,12 @@ export function FileWorkspace({ initialPath = '/' }: { initialPath?: string }) {
     setActionError(null);
     try {
       const data = await api.createTerminal({ cwd: path, cols: 100, rows: 30 });
-      windowStore.open({ kind: 'terminal', title: `${path} · Bash`, payload: { sessionId: data.session.id } });
+      sessionStore.upsert(data.session);
+      windowStore.launch('terminal', {
+        title: `${path} · Bash`,
+        payload: { sessionId: data.session.id },
+        instanceKey: `session:${data.session.id}`,
+      });
     } catch (caught) {
       setActionError(describeError(caught));
     }

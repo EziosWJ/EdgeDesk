@@ -1,6 +1,6 @@
 # V1.2 实施计划：桌面工作区与应用窗口管理
 
-- 状态：**Ready for implementation planning**
+- 状态：**Implemented（V1.2.0；验收证据见 docs/testing.md）**
 - 需求基线：[SPEC-0006](../spec/0006-desktop-workspace.md)
 - 架构决策：[ADR-0009](../adr/0009-desktop-workspace-architecture.md)、[ADR-0010](../adr/0010-desktop-persistence-and-recovery.md)
 - 原则：保留现有业务能力；本文件用于规划，不代表功能已经实现。
@@ -127,3 +127,10 @@
 4. localStorage 数据损坏/升级、会话过期、服务重启、文件路径失效、窄屏和键盘焦点场景有验证结果。
 5. scripts/test-pr.sh 通过；发布前按 AGENTS.md 和 docs/testing.md 执行适用的 L2 构建/平台验证。
 6. docs/README.md 中 SPEC/ADR/实施计划索引更新；人工目视验收记录可追溯。
+
+## 6. 实施结果（2026-10-18）
+
+- Phase 1/2/2.5/3/4/5 全部落地：`web/src/desktop/`（AppRegistry、DesktopShell、DesktopPersistence、Dock、Launcher、图标布局）、扩展后的 `windowStore`、NAS 风格设备概览、终端会话恢复与编辑器关闭保护。
+- Issue #4–#12 的实现与验收标准已覆盖；自动化结果与浏览器目视记录见 [docs/testing.md](../testing.md)。
+- 前端 124 项单元/DOM 测试、11 项原生测试、L1 集成套件，以及 host-embed、x86_64 musl `#embed`、ARM64 musl `#embed`（qemu）验证均通过。
+- 未验证项：ARM32、真实 ARM 硬件、GitHub Actions 新配置（保持“未验证”，不声明通过）。

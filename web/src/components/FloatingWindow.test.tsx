@@ -94,8 +94,13 @@ describe('FloatingWindow interactions', () => {
     act(() => buttons[0].click());
     expect(windowStore.getSnapshot().find((item) => item.id === id)?.state).toBe('minimized');
     render();
-    expect(container.querySelector('.ed-window')).toBeNull();
-    // restore via focus (taskbar behaviour)
+    // Minimized windows stay mounted (hidden) so editor/terminal state survives.
+    const minimized = container.querySelector<HTMLElement>('.ed-window');
+    expect(minimized).not.toBeNull();
+    expect(minimized?.classList.contains('ed-window--minimized')).toBe(true);
+    expect(minimized?.style.display).toBe('none');
+    expect(container.querySelector('.ed-test-content')).not.toBeNull();
+    // restore via focus (Dock/taskbar behaviour)
     act(() => windowStore.focus(id));
     render();
     const buttonsAgain = container.querySelectorAll<HTMLButtonElement>('.ed-window-actions button');

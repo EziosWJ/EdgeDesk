@@ -1,6 +1,6 @@
 # ADR-0009：桌面工作区与应用窗口管理架构
 
-- 状态：**Accepted（V1.2 规划决策，尚未实施）**
+- 状态：**Accepted（V1.2.0 已实施）**
 - 日期：2026-10-18
 - 关联：[SPEC-0006 桌面工作区](../spec/0006-desktop-workspace.md)、[ADR-0001 技术栈](0001-technology-stack.md)、[ADR-0005 终端架构](0005-terminal-architecture.md)
 

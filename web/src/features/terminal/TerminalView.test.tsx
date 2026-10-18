@@ -63,6 +63,7 @@ describe('TerminalView', () => {
       running: 1,
       sessions: SESSIONS,
     });
+    vi.spyOn(api, 'createTerminal');
     document.body.innerHTML = '';
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -106,5 +107,23 @@ describe('TerminalView', () => {
     expect(container.querySelector('[role="tabpanel"]')?.getAttribute('aria-labelledby')).toBe(
       'ed-terminal-tab-ses-two',
     );
+  });
+
+  it('marks a restored session that no longer exists without creating a replacement', async () => {
+    act(() => {
+      root.render(<TerminalView initialSessionId="session-that-is-gone" windowId="terminal:restored" />);
+    });
+    for (let index = 0; index < 3; index += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    expect(container.textContent).toContain('恢复的终端会话已结束或不可恢复');
+    expect(container.textContent).toContain('未创建替代 Bash 会话');
+    // It falls back to a real session that still exists, never to a fabricated one.
+    expect(container.querySelector('[role="tabpanel"]')?.getAttribute('aria-labelledby')).toBe(
+      'ed-terminal-tab-ses-one',
+    );
+    expect(api.createTerminal).not.toHaveBeenCalled();
   });
 });

@@ -37,9 +37,14 @@ export function TerminalPane({
   const socketRef = useRef<TerminalSocket | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const createdRef = useRef(false);
+  // A pane bound to an existing session must never create a replacement when
+  // that session has ended; only a pane intentionally started without an id may.
+  const autoCreateRef = useRef(sessionId === null);
+  const missingRef = useRef(false);
   const [status, setStatus] = useState<'connecting' | 'open' | 'closed' | 'error'>('connecting');
   const [guard, setGuard] = useState<string | null>(null);
   const [exited, setExited] = useState<number | null>(null);
+  const [missing, setMissing] = useState(false);
   const [currentId, setCurrentId] = useState<string | null>(sessionId);
   const [size, setSize] = useState<{ cols: number; rows: number } | null>(null);
 
@@ -73,7 +78,7 @@ export function TerminalPane({
     socket.onStatus = (next, detail) => {
       setStatus(next);
       if (next === 'open') {
-        if (!socket.id && !createdRef.current) {
+        if (!socket.id && !createdRef.current && autoCreateRef.current) {
           createdRef.current = true;
           socket.createSession({ cwd: autoCreateCwd, cols: terminal.cols, rows: terminal.rows });
         } else if (socket.id) {
@@ -81,7 +86,9 @@ export function TerminalPane({
         }
       }
       if (next === 'error' && detail) terminal.writeln(`\x1b[31m[edgedesk] ${detail}\x1b[0m`);
-      if (next === 'closed') terminal.writeln('\r\n\x1b[33m[edgedesk] 连接已断开，正在尝试重连（会话保持运行）…\x1b[0m');
+      if (next === 'closed' && !missingRef.current) {
+        terminal.writeln('\r\n\x1b[33m[edgedesk] 连接已断开，正在尝试重连（会话保持运行）…\x1b[0m');
+      }
     };
     socket.onOutput = (data) => terminal.write(data);
     socket.onGuard = (reason) => setGuard(reason);
@@ -94,6 +101,15 @@ export function TerminalPane({
       setCurrentId(session.id);
       setExited(session.exited ? session.exit_code : null);
       onSessionCreated?.(session);
+    };
+    socket.onSessionMissing = () => {
+      // Do not fall back to `create`: the requested session is gone and a new
+      // shell would silently replace it. Mark the window ended and stay put.
+      missingRef.current = true;
+      setMissing(true);
+      setStatus('error');
+      terminal.writeln('\r\n\x1b[31m[edgedesk] 会话已结束或不可恢复，不会自动创建替代会话。\x1b[0m');
+      socket.disconnect();
     };
     terminal.onData((data) => socket.input(data));
 
@@ -133,8 +149,9 @@ export function TerminalPane({
     terminal.options.fontSize = preferences.terminal_font_size;
   }, [preferences.terminal_font_size]);
 
-  const statusText =
-    status === 'open'
+  const statusText = missing
+    ? '会话已结束'
+    : status === 'open'
       ? exited !== null
         ? `已退出 (${exited})`
         : '已连接'
@@ -146,6 +163,12 @@ export function TerminalPane({
 
   return (
     <div className="ed-terminal-pane">
+      {missing && (
+        <div className="ed-alert danger ed-terminal-missing" role="alert">
+          <strong>会话已结束或不可恢复。</strong>
+          <span>为保护真实状态，EdgeDesk 不会自动创建替代 Bash 会话。可在终端工作区中显式新建会话。</span>
+        </div>
+      )}
       {guard && (
         <div className="ed-guard-bar">
           <strong>已被 CommandGuard 拦截：</strong>

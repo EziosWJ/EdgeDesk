@@ -7,7 +7,7 @@
 
 | 层级 | 入口 | 覆盖 | 何时运行 |
 | --- | --- | --- | --- |
-| L0 编辑循环 | `scripts/test-fast.sh` | `host-offline-tests` 构建 + 11 项原生单测 + 前端单测（`web/node_modules` 存在时） | 每次改动 |
+| L0 编辑循环 | `scripts/test-fast.sh` | `host-offline-tests` 构建 + 11 项原生单测 + 前端单测（`web/node_modules` 存在时；V1.2 为 124 项） | 每次改动 |
 | L1 任务/PR | `scripts/test-pr.sh` | `dev-disk` 构建 + 11 项原生单测 + 全量集成 + 前端 `npm test` / `npm run build` | 提交前 |
 | L2 全矩阵 | 见下方“构建与平台矩阵” | `release-embed`、`release-embed-arm64`、`release-disk`、x86_64-musl、arm64-disk、arm64-musl、CI | main/nightly/release；当前 CI 对 PR 也执行全矩阵 |
 
@@ -27,9 +27,10 @@ scripts/test-pr.sh
   `cmake --preset dev-disk -DEDGEDESK_BUILD_WEB=ON`）。
 - 集成测试使用 `N..N+5`；默认 `19091`，冲突时用 `--port N` 换一组端口。
 
-> 2026-10-17 本机实际执行：`scripts/test-fast.sh` 通过（11/11 原生 + 77 项前端，
-> 首次含重建约 15 s，热缓存约 6 s）；`scripts/test-pr.sh` 此前通过（10/10 原生 +
-> 全量集成，约 2 分钟，含一次 dev-disk 重建）。CI 新配置尚未在 GitHub Actions 上运行。
+> 2026-10-18 V1.2 本机实际执行：`scripts/test-fast.sh` 通过（11/11 原生 + 124 项前端，
+> 约 14 s）；`scripts/test-pr.sh` 通过（11/11 原生 + 全量集成 + 前端测试/构建，102 s）。
+> 2026-10-17 的 V1.1 记录为：L0 通过（11/11 原生 + 77 项前端）；L1 通过（10/10 原生 +
+> 全量集成）。CI 新配置尚未在 GitHub Actions 上运行。
 
 ## 自动化测试清单
 
@@ -46,22 +47,34 @@ scripts/test-pr.sh
 | `terminal_session_test` | 真实 Bash 登录 Shell、`~/.profile` 加载、UTF-8/ANSI、TIOCSWINSZ resize、CommandGuard 拦截不执行、回放缓冲有界、订阅断开不杀会话、会话上限/空闲回收、缺 Bash 报错而非回退 sh | GCC 13.3 host + /bin/bash 5.2 | 通过 |
 | `system_metrics_test` | /proc/stat、loadavg、meminfo（含旧内核回退）、net/dev 速率差分、IPv4/IPv6 地址格式化与 `getifaddrs` 枚举（排除 lo）、mounts 过滤、采样线程与环形缓冲 | GCC 13.3 host | 通过 |
 | `embed_generator_test` | `#embed` 生成器的确定性、路径校验、ETag | Python 3.12 | 通过 |
-| 前端单元测试 | windowStore（开关/层级/拖动/缩放/最大化/关闭、不可变快照）、会话持久化（仅 id/title）、metrics 窗口有界、字节/百分比/运行时间格式化、FloatingWindow DOM 交互（指针拖动、缩放把手、按钮）、Sidebar（导航选中、收起/展开与 localStorage 持久化恢复、服务状态）、仪表盘图表工具（窗口切片、变化值、速率单位、时间刻度、开机时刻）、DonutChart（可用部分绿色/已使用主色/不可用态）、DashboardView DOM 渲染（KPI 六卡、三图表面板、磁盘环形图与挂载点切换、网卡 IP 地址、在线/数据中断状态、空数据不造假）、文件管理（路径助手/视图偏好/上传名校验、按扩展名与特殊文件名解析文件类型图标、Go/C++/Markdown 渲染不同图标、目录树按需加载与缓存/祖先展开/失败重试/刷新/不跟随链接、叶子节点隐藏角标与"无子目录"文案、单击打开与仅复选框选中、选中操作在工具栏就地切换、拖拽上传确认/跳过文件夹/取消不上传、树面板收起展开与宽度调整持久化、列表↔网格共享选择、本地筛选、隐藏文件联动、分页排序、失败态与重试、批量删除确认与失败不报成功、浮动终端/编辑器窗口）、V1.1 认证页面（密码登录、初始化确认校验、提交）、设置页（系统信息、Token 状态、偏好保存）、偏好 store（加载/乐观保存/失败保留） | Node 24.14 / vitest 3.2 / happy-dom | 通过（80 项）；`npm run build`（tsc + vite，含 unplugin-icons 文件类型图标）通过 |
+| 前端单元/DOM 测试 | **V1.2 桌面**：AppRegistry（默认注册、未知 appId、重复注册、元数据/尺寸校验、单/多实例、启动器搜索）、桌面图标布局（网格命中、拖拽换位、边界、去重）、WindowManager（单/多实例、稳定实例 ID、z-index 有界、最小化保持挂载/恢复、最大化几何还原、移动/缩放/视口约束、关闭守卫）、DesktopPersistence（序列化往返、损坏 JSON、版本不兼容、未知 appId、重复单实例、非法几何、敏感字段剥离、localStorage 不可用、恢复时会话失效标记、防抖自动保存）、DesktopShell（单击/双击、Dock 启动/聚焦/多窗口选择、最小化恢复、启动器搜索/空态/Esc/焦点返回、Alt 快捷键与输入焦点保护、窄屏强制最大化、退出登录）、终端恢复（session_not_found 不创建替代会话、无 session ID 时才 create、attached 状态）、编辑器生命周期（最小化保留缓冲、未保存关闭确认、外部修改保护、文件消失拒绝保存）、NAS 设备概览（CPU/内存/存储/网卡/系统/服务小组件、多挂载点、多网卡、loopback 排除、缺失值 vs 0、采集中断、加载空态）。**V1.1 回归**：会话持久化、metrics 窗口有界、格式化、FloatingWindow DOM 交互、Sidebar、图表工具、Dashboard 旧断言已迁移、文件管理、认证、设置、偏好。 | Node 24.14 / vitest 3.2 / happy-dom | 通过（124 项）；`npm run build`（tsc + vite）通过 |
 | `auth_test.py` | 初始化状态门禁、首次设置密码、重复初始化 409、密码登录、Cookie 属性（含 `--cookie-secure`）、改密后旧 Cookie/旧密码失效、Bearer 不受影响、CSRF、设置白名单、系统信息脱敏、重启后旧 Cookie 失效、损坏状态失败关闭、本机恢复 | dev-disk / host-embed / release-embed / release-embed-arm64 / release-disk / x86_64-musl / arm64-disk / arm64-musl | 全部通过 |
 | `api_test.py` | health 契约、密码登录/会话/Bearer、CSRF、目录浏览（含 `dirs_only` 只返回直接子目录）、文本读写、mkdir/rename/delete、流式上传字节一致、Range 206/416、路径沙箱拒绝、JSON 体积限制、系统指标（含 `network[].addresses` 字段） | 见下（三种二进制） | 通过 |
 | `ws_test.py` | 未认证/异源握手拒绝、终端 create/input/输出/resize/guard、断线重连（回放）、会话存活、显式关闭、metrics 快照+增量 | 同上 | 通过 |
 | `rate_limit_test.py` | 登录限流与通用限流在严格配置下触发 429；伪造 `X-Forwarded-For` 不能绕过 peer-IP 限流 | 同上 | 通过 |
 | 审计校验 | `auth.setup`、`login`、`auth.password_change`、`auth.reset`、`file.upload`、`terminal.create` 事件落盘且不含秘密 | 同上 | 通过 |
 
-### 原型还原度（视觉）验收
+### 原型还原度与浏览器目视验收
 
-- 逐项对照表：`docs/design/prototype-conformance.md`（每个原型页一份）。
-- 规则：业务功能通过 ≠ 页面验收通过；表中“待目视核对”的条目必须由人工在浏览器中对照原型图确认。
-- 当前状态：**逐项目视核对未执行**。本机已安装 headless Chromium，可用
-  `scripts/screenshot.sh` 截图；代码级结构与样式已按对照表落地；仪表盘
-  数据全部来自 `/api/system/summary` 与 `/ws/metrics` 的真实采样，文件管理页的目录树、
-  列表/网格数据全部来自 `/api/files`（目录树使用 `dirs_only=1` 按需加载），不使用原型演示数值。
-- 核对步骤见该文档“人工核对步骤”一节；核对结论必须回填表格，不能口头声明通过。
+- 逐项对照表：`docs/design/prototype-conformance.md`；快捷键与焦点规则：
+  `docs/design/desktop-keyboard-shortcuts.md`。
+- 规则：业务功能通过 ≠ 页面验收通过；未在浏览器中实际检查的条目不得标记为通过。
+- **2026-10-18 V1.2 实际目视验收（headless Chromium 1.64.1，Playwright，本机）**：
+  - 环境：`dev-disk` 二进制 + 未提交的临时 `--data-dir` / `--file-root` / `--state-dir`；
+    真实 hostname、真实 `/proc` 指标与真实 Bash PTY；无演示数据。
+  - 视口与主题：1440×900 深色为主，1440×900 浅色，390×844 窄屏；浏览器语言 `zh-CN`。
+  - 检查页面：桌面、应用启动器、设备概览、文件管理、终端、系统设置，共 6 个页面。
+  - 交互结果：登录后进入桌面；单击图标不启动、双击打开设备概览；Dock 打开文件/终端/设置；
+    启动器搜索 “设置” 命中、搜索 “zzz” 显示空结果、Esc 关闭并把焦点返回启动器按钮；
+    标题栏拖动位移 140×78 px 后标题栏仍可见；最小化后窗口 `display:none` 但 8 个小组件仍挂载，
+    Dock 恢复入口可还原；双击标题栏最大化/还原；Dock `z-index=400` 高于窗口层 `200`；
+    刷新后恢复 4 个窗口；浅色主题下文字/图标/卡片可辨识；390×844 下 4 个窗口自动最大化，
+    `scrollWidth == clientWidth == 390`，无横向溢出。
+  - 真实数据核对：CPU 使用率/核心数/负载、内存已用/可用/缓存/Swap、4 个真实挂载点、
+    4 个网卡接口（聚合速率排除 loopback）、系统信息与服务状态均来自 API/WS；
+    缺失字段显示“—”，未出现原型演示数值。
+  - 控制台：无 console error / page error；localStorage 布局存在，且不包含密码、Token 或会话 Cookie。
+  - 截图仅保存在临时目录用于人工查看，未提交到 Git；未使用整页截图切片作为生产 UI。
 
 ### 端到端套件（`scripts/integration_test.sh`）
 
@@ -75,6 +88,13 @@ scripts/test-pr.sh
 | `arm64-disk`（gcc-aarch64-linux-gnu 13，qemu-user 8.2.2 运行） | 磁盘资源，AArch64 原生 Bash PTY | 全部通过（V1.1 全流程；9 个原生测试二进制在 qemu 下通过） |
 | `arm64-musl`（musl cross GCC 11.2，`-static-pie`，qemu 运行） | 磁盘资源，AArch64 Bash PTY | 全部通过（V1.1 全流程） |
 
+> 2026-10-18 V1.2.0 重新执行了以下 L2 lane，均通过：`host-embed`（GCC 15.2.0 glibc，
+> 11/11 原生 + 全量集成）、`release-embed`（Bootlin x86_64 musl GCC 15.3，static-pie +
+> `#embed`，11/11 原生 + 全量集成）、`release-embed-arm64`（Bootlin aarch64 musl GCC 15.3，
+> static-pie + `#embed`，qemu-user 运行，全量集成）。V1.2 未改 C++ 业务逻辑，但仍按发布门槛
+> 复跑了上述平台。`release-disk`、musl.cc GCC 11 磁盘模式、ARM32 与真实硬件本次未重新执行，
+> 相关历史结果仅代表 V1.1 状态。
+>
 > Argon2id 基线参数 `m=64 MiB, t=3, p=1` 的实测：宿主 Debug 库约 0.77 s/次；
 > AArch64 Release 库在 qemu-user 下约 0.62 s/次（单次登录哈希，单 worker）。
 > 这是本地测量，不是 ARM 真实硬件基准；真实设备仍需复测。
@@ -159,12 +179,11 @@ libhv v1.3.4 的部分头文件依赖“隐式包含”（`struct stat`、fcntl 
 - **ARM32 与真实设备**没有运行证据；`cmake/toolchains/arm-linux-musleabihf.cmake`
   已支持 musl.cc 与 Bootlin 两种布局，但未安装工具链、未构建、未运行。
   不是“已成功”的声明。
-- Playwright headless Chromium 已安装，并完成初始化页截图冒烟验证；
-  Chrome/Firefox 手工交互与逐项目视核对仍未执行；前端行为通过单元测试
-  （含 happy-dom DOM 交互测试）与 WebSocket/REST 集成测试间接覆盖，
-  浮动窗口的拖拽/缩放由 DOM 测试断言状态变化。
-- 原型还原度的**逐项目视核对未执行**；`scripts/screenshot.sh` 已可用于
-  headless 截图；对照表见 `docs/design/prototype-conformance.md`，未完成的条目不视为通过。
+- Playwright headless Chromium 已完成 V1.2 桌面、启动器、设备概览、文件管理、终端、设置
+  六个页面的实际目视验收（1440×900 深/浅色与 390×844 窄屏），详见上文。Chrome/Firefox
+  的非 Chromium 手工交互、真实移动设备与 Safari 仍未验证；不声明通过。
+- 原型还原度：V1.2 页面已按对照表完成浏览器目视核对并回填；V1.1 历史条目中仍未复跑的
+  细节保持原状态，不因本轮 V1.2 验收自动标记为通过。
 - 性能与资源占用没有做基准测试，不提供数字。
 
 ## ARM64 QEMU 运行环境（复现说明）

@@ -1,6 +1,6 @@
 # SPEC-0006：桌面工作区与应用窗口管理
 
-- 状态：**Approved（产品决策已确认，尚未实施）**
+- 状态：**Approved（V1.2.0 已实现并验证；见 docs/testing.md）**
 - 目标版本：V1.2
 - 日期：2026-10-18
 - 前置基线：[SPEC-0001 产品范围](0001-product-scope.md)、[SPEC-0002 文件管理](0002-file-management.md)、[SPEC-0003 终端工作区](0003-terminal-workspace.md)、[SPEC-0004 设备仪表盘](0004-device-dashboard.md)、[SPEC-0005 认证与设置](0005-authentication-and-settings.md)

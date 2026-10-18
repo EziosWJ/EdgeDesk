@@ -1,7 +1,8 @@
-# EdgeDesk V1.1 架构
+# EdgeDesk V1.2 架构
 
-> 状态：**已实现**（V1.1.0）。描述当前代码的真实结构；行为契约见 `docs/spec`，
+> 状态：**已实现**（V1.2.0）。描述当前代码的真实结构；行为契约见 `docs/spec`，
 > 技术决策见 `docs/adr`，接口见 `docs/api.md`，配置见 `docs/config.md`。
+> V1.2 主要是前端桌面化，C++ 后端模块、线程模型与 API 边界保持不变。
 
 ## 目录与职责
 
@@ -54,6 +55,39 @@ src/
 
 分层规则：`Route → Service → Platform(POSIX)`。路由只做协议适配与错误映射，
 不实现路径校验、PTY 管理或指标采集。`src/core` 不包含 libhv 类型。
+
+## 前端桌面层（web/src）
+
+```text
+web/src/
+├── app/App.tsx              认证状态机、主题、指标 WebSocket、终端列表刷新、桌面恢复入口
+├── desktop/
+│   ├── appRegistry.ts       appId、名称、图标 sprite、说明、单/多实例策略、默认/最小尺寸
+│   ├── desktopStore.ts      桌面图标槽位、Dock 固定项、持久化提示
+│   ├── desktopPersistence.ts 版本化 localStorage、校验/迁移/回退、自动保存
+│   ├── DesktopShell.tsx     壁纸、顶栏、桌面图标、窗口层、Dock、启动器、快捷键
+│   ├── DesktopIcons.tsx     单击选中、双击启动、拖拽换位
+│   ├── Dock.tsx             固定应用、运行指示、最小化恢复、多窗口选择器
+│   ├── Launcher.tsx         AppRegistry 搜索、应用说明、空结果、焦点返回
+│   ├── AppSurface.tsx       appId → 业务组件（dashboard/files/terminal/settings/editor/preview）
+│   └── desktop.css          桌面/窗口/Dock/启动器/NAS 小组件样式与浅色主题覆盖
+├── stores/windowStore.ts    统一窗口生命周期、实例规则、z-index、几何约束、关闭守卫
+├── stores/sessionStore.ts   服务端会话列表与指标窗口镜像
+├── components/
+│   ├── WindowLayer.tsx      渲染所有窗口；最小化隐藏但不卸载
+│   └── FloatingWindow.tsx   标题栏拖动、缩放、最小化/最大化/关闭、焦点反馈
+└── features/                既有 dashboard/files/terminal/settings 业务组件
+```
+
+关键不变量：
+
+- 主业务入口统一由 `appRegistry` 提供；桌面图标、Dock、启动器不维护第二份应用清单。
+- `windowStore` 是窗口状态的唯一写入点；业务组件不直接修改 z-index 或其他窗口。
+- z-index 由数组顺序重新计算（`10 + index`），连续聚焦不会无限增长。
+- 最小化只设置状态并隐藏视觉层；组件保持挂载，编辑器缓冲与终端 WebSocket 订阅不被销毁。
+- 关闭终端窗口只卸载 UI；后端 `TerminalSession` 独立存活。恢复时按服务端真实会话列表校验，
+  会话不存在只显示“已结束/不可恢复”，绝不自动 `create` 替代会话。
+- `DesktopPersistence` 只保存非敏感的桌面布局与重连标识；认证 Cookie、Token、文件正文不落盘。
 
 ## 认证与持久化边界
 
@@ -123,8 +157,10 @@ state_handler(HP_MESSAGE_COMPLETE)
 ## 终端会话生命周期
 
 见 [ADR-0005](adr/0005-terminal-architecture.md) 与 [API 文档](api.md)。
-要点：WS 断开只解绑订阅者；刷新/导航/切换 Tab 不销毁 PTY；显式 close 或空闲
-超时才回收；回放缓冲让重连客户端看到断线期间输出。
+要点：WS 断开只解绑订阅者；刷新/导航/切换 Tab/最小化窗口不销毁 PTY；关闭终端窗口只卸载
+UI，不调用会话关闭接口；显式 close 或空闲超时才回收；回放缓冲让重连客户端看到断线期间输出。
+桌面恢复先读取 `/api/terminal/sessions` 的真实列表，再按保存的 session ID 关联；已消失的
+会话保留窗口并显示结束状态，不创建替代 Bash。
 
 ## 静态资源双模式
 

@@ -255,6 +255,35 @@ export function SettingsView({ onLogout }: { onLogout: () => void }) {
         </article>
 
         <article className="ed-panel ed-info-card">
+          <h2>桌面与快捷键</h2>
+          <dl className="ed-metric-list">
+            <div>
+              <dt>打开应用启动器</dt>
+              <dd><kbd>Alt</kbd> + <kbd>K</kbd></dd>
+            </div>
+            <div>
+              <dt>最大化 / 还原当前窗口</dt>
+              <dd><kbd>Alt</kbd> + <kbd>M</kbd></dd>
+            </div>
+            <div>
+              <dt>最小化当前窗口</dt>
+              <dd><kbd>Alt</kbd> + <kbd>H</kbd></dd>
+            </div>
+            <div>
+              <dt>切换窗口</dt>
+              <dd><kbd>Alt</kbd> + <kbd>,</kbd> / <kbd>.</kbd></dd>
+            </div>
+            <div>
+              <dt>关闭启动器 / 菜单</dt>
+              <dd><kbd>Esc</kbd></dd>
+            </div>
+          </dl>
+          <p className="ed-panel-note">
+            快捷键不会拦截浏览器保留组合；当焦点位于输入框、编辑器或终端时不会触发。窄屏下窗口自动最大化并停用自由拖动。
+          </p>
+        </article>
+
+        <article className="ed-panel ed-info-card">
           <h2>高级配置（只读）</h2>
           <dl className="ed-metric-list">
             <div>

@@ -26,6 +26,8 @@ export class TerminalSocket {
   onStatus: StatusHandler = () => {};
   onGuard: GuardHandler = () => {};
   onAttached: (session: TerminalSessionInfo) => void = () => {};
+  /** The requested session no longer exists (server restart, idle reaping, explicit close). */
+  onSessionMissing: () => void = () => {};
 
   constructor(sessionId: string | null) {
     this.sessionId = sessionId;
@@ -84,6 +86,7 @@ export class TerminalSocket {
           this.onStatus('error', String(message.message ?? code));
           if (code === 'session_not_found') {
             this.sessionId = null;
+            this.onSessionMissing();
           }
           break;
         }

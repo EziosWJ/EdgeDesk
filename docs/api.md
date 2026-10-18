@@ -1,6 +1,7 @@
-# EdgeDesk V1.1 API 与 WebSocket 协议
+# EdgeDesk V1.2 API 与 WebSocket 协议
 
-> 状态：**已实现（V1.1.0）**。所有业务端点默认要求认证（见下文），响应均为
+> 状态：**已实现（V1.2.0）**。V1.2 桌面化未新增或修改后端 API/WS 协议；桌面布局仅保存在
+> 浏览器 localStorage。所有业务端点默认要求认证（见下文），响应均为
 > `application/json; charset=utf-8`，错误体统一为
 > `{"ok":false,"error":"<slug>","message":"...","errno":<可选>}`。
 

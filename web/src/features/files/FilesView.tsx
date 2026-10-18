@@ -1,9 +1,15 @@
 import { ShieldCheck } from 'lucide-react';
 import { Icon } from '../../components/Icon';
+import { windowStore } from '../../stores/windowStore';
 import { FileWorkspace } from './FileWorkspace';
 
-/** File management page: compact header plus the tree/list workspace. */
-export function FilesView({ initialPath = '/' }: { initialPath?: string }) {
+type Props = {
+  initialPath?: string;
+  windowId?: string;
+};
+
+/** File management app: compact header plus the tree/list workspace. */
+export function FilesView({ initialPath = '/', windowId }: Props) {
   return (
     <div className="ed-view ed-files-view">
       <div className="ed-view-header ed-view-header-compact">
@@ -19,7 +25,14 @@ export function FilesView({ initialPath = '/' }: { initialPath?: string }) {
           路径沙箱已启用
         </span>
       </div>
-      <FileWorkspace initialPath={initialPath} />
+      <FileWorkspace
+        initialPath={initialPath}
+        onPathChange={
+          windowId
+            ? (path) => windowStore.updatePayload(windowId, { initialPath: path })
+            : undefined
+        }
+      />
     </div>
   );
 }

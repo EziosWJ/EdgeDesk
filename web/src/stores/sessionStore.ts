@@ -12,6 +12,7 @@ class SessionStore {
   private shell = '/bin/bash';
   private shellAvailable = true;
   private maxSessions = 8;
+  private terminalsLoaded = false;
   private listeners = new Set<Listener>();
 
   private metrics: MetricsSample[] = [];
@@ -33,7 +34,21 @@ class SessionStore {
 
   setSessions(sessions: TerminalSessionInfo[]): void {
     this.terminals = sessions;
+    this.terminalsLoaded = true;
     this.emit();
+  }
+
+  /** True once the server session list has been fetched at least once. */
+  get sessionsLoaded(): boolean {
+    return this.terminalsLoaded;
+  }
+
+  getSessions(): readonly TerminalSessionInfo[] {
+    return this.terminals;
+  }
+
+  setTerminalsLoaded(loaded: boolean): void {
+    this.terminalsLoaded = loaded;
   }
 
   setShellInfo(info: { shell: string; shellAvailable: boolean; maxSessions: number }): void {

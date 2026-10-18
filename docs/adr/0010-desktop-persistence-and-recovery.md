@@ -1,6 +1,6 @@
 # ADR-0010：桌面布局持久化与终端会话恢复
 
-- 状态：**Accepted（V1.2 规划决策，尚未实施）**
+- 状态：**Accepted（V1.2.0 已实施）**
 - 日期：2026-10-18
 - 关联：[SPEC-0006 桌面工作区](../spec/0006-desktop-workspace.md)、[ADR-0005 终端架构](0005-terminal-architecture.md)、[ADR-0008 认证与设置](0008-authentication-and-settings.md)
 

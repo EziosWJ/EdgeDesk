@@ -47,6 +47,21 @@
   --ed-sidebar-width-collapsed: 72px;
   --ed-z-overlay: 100;
   --ed-z-floating: 200;
+  --ed-z-desktop-icons: 20;
+  --ed-z-desktop-topbar: 350;
+  --ed-z-window: 200;
+  --ed-z-dock: 400;
+  --ed-z-launcher: 500;
+  --ed-topbar-height: 48px;
+  --ed-dock-clearance: 92px;
+  --ed-desktop-topbar-bg: rgb(7 20 35 / 0.58);
+  --ed-desktop-topbar-border: rgb(255 255 255 / 0.14);
+  --ed-desktop-glass: rgb(17 38 61 / 0.68);
+  --ed-desktop-glass-border: rgb(238 247 255 / 0.26);
+  --ed-desktop-icon-text: #f5f9ff;
+  --ed-desktop-icon-shadow: 0 2px 8px rgb(0 0 0 / 0.7);
+  --ed-desktop-overlay: linear-gradient(90deg, rgb(4 17 31 / 0.34), transparent 38%), linear-gradient(0deg, rgb(4 17 31 / 0.46), transparent 46%);
+  --ed-wallpaper-filter: none;
 }
 .ed-panel {
   background: var(--ed-surface);

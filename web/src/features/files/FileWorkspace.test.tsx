@@ -146,7 +146,7 @@ describe('FileWorkspace', () => {
     act(() => rowFor('README.md').querySelector<HTMLElement>('.ed-entry')!.click());
     await flush();
     // The name opens the editor; it never selects and never refetches.
-    expect(windowStore.getSnapshot().map((item) => item.kind)).toEqual(['editor']);
+    expect(windowStore.getSnapshot().map((item) => item.appId)).toEqual(['editor']);
     expect(rowFor('README.md').className).not.toContain('selected');
     expect(rowFor('README.md').querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(false);
     expect(container.querySelector('.ed-selection-count')).toBeNull();
@@ -378,11 +378,11 @@ describe('FileWorkspace', () => {
     act(() => rowFor('README.md').querySelector<HTMLElement>('.ed-entry')!.click());
     act(() => rowFor('archive.bin').querySelector<HTMLElement>('.ed-entry')!.click());
     await flush();
-    expect(windowStore.getSnapshot().map((item) => item.kind).sort()).toEqual(['editor', 'preview']);
+    expect(windowStore.getSnapshot().map((item) => item.appId).sort()).toEqual(['editor', 'preview']);
 
     act(() => buttonByText('在当前目录打开终端').click());
     await flush();
-    const terminal = windowStore.getSnapshot().find((item) => item.kind === 'terminal');
+    const terminal = windowStore.getSnapshot().find((item) => item.appId === 'terminal');
     expect(terminal?.title).toBe('/ · Bash');
     expect(mock.calls.some((call) => call.url === '/api/terminal/sessions' && call.method === 'POST')).toBe(true);
 

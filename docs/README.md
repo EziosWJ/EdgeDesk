@@ -3,7 +3,7 @@
 > 所有文档用于记录已确认的决策、需求、实现状态与待确认问题。文档完成 != 功能完成。
 > 功能完成情况以代码、自动化测试与 [验证矩阵](testing.md) 的实际结果为准。
 
-## 当前实现（V1.1）
+## 当前实现（V1.2）
 
 - [架构、线程模型与资源边界](architecture.md)
 - [API 与 WebSocket 协议](api.md)
@@ -12,12 +12,13 @@
 - [Coding Agent 开发规范](../AGENTS.md)
 - [Phase 1 工程骨架（历史记录）](phase1.md)
 
-## V1.2 规划：桌面工作区
+## V1.2 桌面工作区
 
-- [SPEC-0006：桌面工作区与应用窗口管理](spec/0006-desktop-workspace.md)（产品决策已确认，尚未实施）
-- [ADR-0009：桌面工作区与应用窗口管理架构](adr/0009-desktop-workspace-architecture.md)（已接受，尚未实施）
-- [ADR-0010：桌面布局持久化与终端会话恢复](adr/0010-desktop-persistence-and-recovery.md)（已接受，尚未实施）
+- [SPEC-0006：桌面工作区与应用窗口管理](spec/0006-desktop-workspace.md)（已实现）
+- [ADR-0009：桌面工作区与应用窗口管理架构](adr/0009-desktop-workspace-architecture.md)（已实现）
+- [ADR-0010：桌面布局持久化与终端会话恢复](adr/0010-desktop-persistence-and-recovery.md)（已实现）
 - [V1.2 实施计划与 Issue 拆分](tasks/0006-desktop-workspace.md)
+- [桌面快捷键与焦点规则](design/desktop-keyboard-shortcuts.md)
 
 ## ADR（为什么这样做）
 
@@ -31,8 +32,8 @@
 | [ADR-0006](adr/0006-system-metrics.md) | 指标采集、内存窗口与增量推送 | 已确认 |
 | [ADR-0007](adr/0007-frontend-icon-library.md) | 前端图标库：Lucide（ISC，全站 UI）+ VS Code Icons 按需编译（文件类型） | 已确认（2026-10-17） |
 | [ADR-0008](adr/0008-authentication-and-settings.md) | V1.1 单管理员密码认证、首次初始化、独立 API Token 与系统设置 | 已实现（V1.1.0） |
-| [ADR-0009](adr/0009-desktop-workspace-architecture.md) | 桌面壳层、应用注册表、统一窗口管理与自研交互 | 已接受（V1.2 规划） |
-| [ADR-0010](adr/0010-desktop-persistence-and-recovery.md) | 浏览器本地桌面布局、窗口恢复与终端会话重连 | 已接受（V1.2 规划） |
+| [ADR-0009](adr/0009-desktop-workspace-architecture.md) | 桌面壳层、应用注册表、统一窗口管理与自研交互 | 已实现（V1.2.0） |
+| [ADR-0010](adr/0010-desktop-persistence-and-recovery.md) | 浏览器本地桌面布局、窗口恢复与终端会话重连 | 已实现（V1.2.0） |
 
 ## Spec（要做什么）
 
@@ -60,6 +61,7 @@
 - [素材使用指南](design/asset-usage.md)：资源清单、React 引用、打包与验收
 - [原型实现规范](design/prototype-guidelines.md)：视觉 Token、NAS 风格资源小组件和功能/展示边界
 - [原型还原度对照表](design/prototype-conformance.md)：视觉验收清单
+- [桌面快捷键与焦点规则](design/desktop-keyboard-shortcuts.md)：按键映射、输入/终端焦点保护和窄屏行为
 
 可复用素材位于 [web/public/assets](../web/public/assets/)，其中新增桌面壁纸与应用图标 sprite 位于 [web/public/assets/desktop](../web/public/assets/desktop/)；设计 Token 位于 [web/src/styles/edgedesk-tokens.css](../web/src/styles/edgedesk-tokens.css)。
 
@@ -78,7 +80,7 @@
 - OpenHarmony ARM64 是否作为正式发行平台。
 - V1.1 首期是否开放高级部署配置的网页写入（当前决定为只读展示，后续逐项评估）。
 - 多用户/角色不在当前规划内；会话不跨服务进程重启持久化。
-- V1.1 现有浮动窗口布局不自动恢复；V1.2 规划的桌面布局恢复以 SPEC-0006 为准，尚未实施。
+- V1.2 桌面布局已在浏览器 localStorage 中恢复（schema v1，见 ADR-0010）；跨浏览器同步不在范围内。
 
 ## 变更约定
 

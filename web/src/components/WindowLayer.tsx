@@ -1,41 +1,29 @@
-import { Eye, PenLine, SquareTerminal } from 'lucide-react';
 import { FloatingWindow } from './FloatingWindow';
-import { Icon } from './Icon';
-import { EditorPane } from '../features/files/EditorPane';
-import { PreviewPane } from '../features/files/PreviewPane';
-import { TerminalPane } from '../features/terminal/TerminalPane';
-import { windowStore, useWindows } from '../stores/windowStore';
-import { sessionStore } from '../stores/sessionStore';
+import { AppSurface } from '../desktop/AppSurface';
+import { useNarrowScreen } from '../desktop/useNarrowScreen';
+import { useFocusedWindowId, useWindows } from '../stores/windowStore';
 
-export function WindowLayer() {
+type Props = {
+  onLogout: () => void;
+};
+
+/**
+ * Renders every open window. Minimized windows stay mounted (hidden), so
+ * editor buffers and terminal WebSocket subscriptions are not destroyed by a
+ * minimize/restore cycle. Closing a window is the only action that unmounts.
+ */
+export function WindowLayer({ onLogout }: Props) {
   const windows = useWindows();
-  const minimized = windows.filter((item) => item.state === 'minimized');
+  const focusedId = useFocusedWindowId();
+  const narrow = useNarrowScreen();
 
   return (
-    <>
+    <div className="ed-window-layer">
       {windows.map((item) => (
-        <FloatingWindow key={item.id} window={item}>
-          {item.kind === 'terminal' && (
-            <TerminalPane
-              sessionId={item.payload.sessionId ?? null}
-              title={item.title}
-              onSessionCreated={(session) => sessionStore.upsert(session)}
-            />
-          )}
-          {item.kind === 'editor' && item.payload.path && <EditorPane path={item.payload.path} />}
-          {item.kind === 'preview' && item.payload.path && <PreviewPane path={item.payload.path} />}
+        <FloatingWindow key={item.id} window={item} narrow={narrow} focused={item.id === focusedId}>
+          <AppSurface window={item} onLogout={onLogout} />
         </FloatingWindow>
       ))}
-      {minimized.length > 0 && (
-        <div className="ed-taskbar" role="toolbar" aria-label="最小化的窗口">
-          {minimized.map((item) => (
-            <button key={item.id} type="button" onClick={() => windowStore.focus(item.id)} title="恢复窗口">
-              <Icon icon={item.kind === 'terminal' ? SquareTerminal : item.kind === 'editor' ? PenLine : Eye} size={13} />
-              {item.title}
-            </button>
-          ))}
-        </div>
-      )}
-    </>
+    </div>
   );
 }

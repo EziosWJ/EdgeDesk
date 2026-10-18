@@ -9,9 +9,17 @@ import { windowStore } from '../../stores/windowStore';
 
 const asset = (path: string) => `${import.meta.env.BASE_URL}assets/${path}`;
 
-export function TerminalView() {
+export function TerminalView({
+  initialSessionId = null,
+  restoredSessionMissing = false,
+  windowId,
+}: {
+  initialSessionId?: string | null;
+  restoredSessionMissing?: boolean;
+  windowId?: string;
+}) {
   const sessions = useTerminals();
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(initialSessionId);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const tabRefs = useRef(new Map<string, HTMLDivElement>());
@@ -44,9 +52,15 @@ export function TerminalView() {
       return;
     }
     if (!activeId || !sessions.some((session) => session.id === activeId)) {
-      setActiveId(sessions[0].id);
+      setActiveId(initialSessionId && sessions.some((session) => session.id === initialSessionId) ? initialSessionId : sessions[0].id);
     }
-  }, [sessions, activeId]);
+  }, [sessions, activeId, initialSessionId]);
+
+  // Persist the active session on the owning window so a refresh restores the
+  // same tab. The session id is not a credential; the server still authorizes it.
+  useEffect(() => {
+    if (windowId && activeId) windowStore.updatePayload(windowId, { sessionId: activeId });
+  }, [activeId, windowId]);
 
   const createSession = async () => {
     setBusy(true);
@@ -68,7 +82,11 @@ export function TerminalView() {
     await api.closeTerminal(sessionId);
     sessionStore.remove(sessionId);
     storeTerminals(loadStoredTerminals().filter((item) => item.id !== sessionId));
-    windowStore.close(`terminal:${sessionId}`);
+    // Explicitly ending a session also detaches any UI window showing it.
+    windowStore
+      .getSnapshot()
+      .filter((item) => item.appId === 'terminal' && item.payload.sessionId === sessionId)
+      .forEach((item) => windowStore.forceClose(item.id));
     setActiveId((current) => (current === sessionId ? (sessions.find((s) => s.id !== sessionId)?.id ?? null) : current));
   };
 
@@ -98,6 +116,13 @@ export function TerminalView() {
   };
 
   const active = sessions.find((session) => session.id === activeId) ?? null;
+  // A restored window keeps its ended state even when the first session list
+  // arrives later (for example after a transient API failure).
+  const missingRestoredSession =
+    restoredSessionMissing ||
+    (initialSessionId !== null &&
+      sessionStore.sessionsLoaded &&
+      !sessions.some((session) => session.id === initialSessionId));
 
   return (
     <div className="ed-view ed-terminal-view">
@@ -115,6 +140,11 @@ export function TerminalView() {
       </div>
 
       {error && <div className="ed-alert danger">{error}</div>}
+      {missingRestoredSession && (
+        <div className="ed-alert warning" role="status">
+          恢复的终端会话已结束或不可恢复；未创建替代 Bash 会话。其他真实会话仍可在下方打开。
+        </div>
+      )}
       {!sessionStore.shellInfo.available && (
         <div className="ed-alert warning">
           未找到可用的登录 Shell（{sessionStore.shellInfo.shell}）。EdgeDesk 不会回退到 /bin/sh，请先在设备上安装 Bash。
@@ -168,10 +198,10 @@ export function TerminalView() {
                     aria-label={`在浮动窗口中打开 ${session.title}`}
                     onClick={(event) => {
                       event.stopPropagation();
-                      windowStore.open({
-                        kind: 'terminal',
+                      windowStore.launch('terminal', {
                         title: session.title,
                         payload: { sessionId: session.id },
+                        instanceKey: `session:${session.id}`,
                       });
                     }}
                   >

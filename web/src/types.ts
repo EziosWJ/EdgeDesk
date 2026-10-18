@@ -84,9 +84,11 @@ export type MetricsSample = {
   unavailable: string[];
 };
 
-export type AuthState = 'uninitialized' | 'initialized' | 'corrupt';
+export type NetworkSample = MetricsSample['network'][number];
+export type DiskSample = MetricsSample['disks'][number];
+export type MemorySample = NonNullable<MetricsSample['memory']>;
 
-export type SessionInfo = {
+export type AuthState = 'uninitialized' | 'initialized' | 'corrupt';export type SessionInfo = {
   ok: boolean;
   authenticated: boolean;
   method: 'cookie' | 'bearer' | 'none';
@@ -131,17 +133,36 @@ export type SystemInfo = {
   api_token_configured: boolean;
 };
 
-export type WindowKind = 'terminal' | 'editor' | 'preview';
+/** Registered applications plus the two internal document window types. */
+export type AppId = 'dashboard' | 'files' | 'terminal' | 'settings' | 'editor' | 'preview';
+
+export type WindowKind = AppId;
+
+export type WindowStatus = 'normal' | 'minimized' | 'maximized';
+
+/** Only non-sensitive, reconnect-relevant context belongs here. */
+export type WindowPayload = {
+  sessionId?: string;
+  path?: string;
+  initialPath?: string;
+  /** True when a terminal window was restored from local layout. */
+  restored?: boolean;
+};
 
 export type WindowState = {
   id: string;
-  kind: WindowKind;
+  appId: AppId;
   title: string;
   x: number;
   y: number;
   width: number;
   height: number;
   zIndex: number;
-  state: 'normal' | 'minimized' | 'maximized';
-  payload: { sessionId?: string; path?: string };
+  state: WindowStatus;
+  payload: WindowPayload;
+  maxRestore?: { x: number; y: number; width: number; height: number };
+  /** Set when a restored resource (terminal session, directory) is no longer valid. */
+  restoreError?: 'session_ended' | 'session_unavailable' | null;
 };
+
+export type ViewportSize = { width: number; height: number };

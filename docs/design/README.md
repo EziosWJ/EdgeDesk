@@ -4,6 +4,8 @@
 - [V1.2 独立页面原型](prototypes/README.md)：桌面、启动器、设备概览、文件管理、终端、设置与组件素材
 - [素材使用指南](asset-usage.md)：路径、资源清单、React 引用、打包与验收
 - [原型实现规范](prototype-guidelines.md)：四页原型拆解、视觉 Token、功能/展示边界
+- [原型还原度对照表](prototype-conformance.md)：V1.2 已实现页面与目视验收记录
+- [桌面快捷键与焦点规则](desktop-keyboard-shortcuts.md)：Alt 快捷键、输入/终端焦点保护和窄屏行为
 
 实际 SVG 素材：[`web/public/assets/`](../../web/public/assets/)，新增桌面壁纸与应用图标 sprite 位于 [`web/public/assets/desktop/`](../../web/public/assets/desktop/)。
 

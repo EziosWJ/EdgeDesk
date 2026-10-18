@@ -1,6 +1,6 @@
 # EdgeDesk V1.1 配置与部署
 
-> 状态：**已实现（V1.1.0）**。优先级：**默认值 < 配置文件 < 环境变量 < 命令行**。
+> 状态：**已实现（V1.2.0）**。优先级：**默认值 < 配置文件 < 环境变量 < 命令行**。
 > `--help` 打印完整选项列表（与本文档一致）。
 
 ## 命令行 / 配置文件
@@ -106,6 +106,20 @@ edgedesk --reset-admin-password --data-dir /var/lib/edgedesk
 - `--file-root` 是**文件 API 的边界，不是终端的沙箱**：Bash 以服务用户的
   真实权限运行。
 - 服务不需要数据库、不需要 Node/Python 运行时；embed 模式连前端目录也不需要。
+
+## 浏览器本地桌面布局（V1.2）
+
+桌面布局不写入服务端配置文件，也不新增后端接口：
+
+| 键 | 内容 | 说明 |
+| --- | --- | --- |
+| `edgedesk.desktop.layout.v1` | `schemaVersion`、桌面图标槽位、Dock 固定项、窗口 `appId`/几何/状态/非敏感 payload | 单浏览器 localStorage；JSON，带版本校验 |
+| `edgedesk.terminals.v1` | 终端 session id 与标题 | 既有键；仅用于会话列表提示 |
+
+- 保存内容不包含密码、认证 Cookie、API Token、文件正文或其他凭据。
+- 版本不支持、JSON 损坏、单条窗口记录非法或 localStorage 不可用时，桌面以默认布局启动并显示非阻塞提示。
+- 主题等跨浏览器偏好仍由 `/api/settings` 管理，不复制到桌面布局。
+- 服务端从不信任布局中的路径或 session id；恢复时仍按现有认证、路径沙箱和会话归属校验执行。
 
 ## 信号与退出
 
