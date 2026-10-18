@@ -37,6 +37,8 @@ scripts/test-pr.sh
 > 未保存编辑器阻止退出、最小化后从图标/Dock/启动器重开保留最大化状态、嵌套相对
 > 符号链接（含 `..`）解析、终端订阅回调可重入会话 API。L1 已执行：
 > `scripts/test-pr.sh` 通过（11/11 原生 + 140 项前端 + `tsc`/Vite 构建 + 全量集成，126 s）。
+> GitHub Actions 全矩阵已在 PR #14 实际运行并通过：`frontend`、`host-build`、
+> `gcc15-embed`、`arm64-cross`、`x86_64-musl-static`（5/5，2026-10-18）。
 
 ## 自动化测试清单
 
@@ -139,7 +141,7 @@ bash scripts/integration_test.sh out/build/release-embed-arm64/bin/edgedesk 1959
 | GCC 15 + musl + `#embed` 组合 | Bootlin stable-2026.08（GCC 15.3） | 通过（x86_64 与 aarch64，见上） |
 | OpenHarmony ARM64 | 需要对应 SDK | **未验证** |
 | 真实设备（工控板/网关） | 目标硬件 | **未验证**（当前仅有 QEMU 运行证据） |
-| GitHub Actions CI | 本仓库 workflow：frontend + host-build / gcc15-embed / arm64-cross / x86_64-musl-static；npm/ccache/交叉工具链缓存，`web/dist` 通过 artifact 复用 | **新配置未验证**；旧配置于 2026-10-17 V1.1 PR #2 通过四个目标 job |
+| GitHub Actions CI | 本仓库 workflow：frontend + host-build / gcc15-embed / arm64-cross / x86_64-musl-static；npm/ccache/交叉工具链缓存，`web/dist` 通过 artifact 复用 | 通过（PR #14，2026-10-18，5/5 jobs） |
 
 > 2026-10-17 之后 CI 配置增加了 `frontend` 前置 job、npm/ccache/交叉工具链缓存和
 > `web/dist` artifact 复用；`x86_64-musl-static` 已改为 musl + `#embed` 静态发布
@@ -147,6 +149,9 @@ bash scripts/integration_test.sh out/build/release-embed-arm64/bin/edgedesk 1959
 > 宿主 GCC 15 兼容性验证。新配置需在下一个 PR 实际运行后回填结果。
 > `frontend` 失败时依赖它的 `host-build`/`gcc15-embed` 会显式失败；仍建议把
 > `frontend` 加入 required checks。
+> 2026-10-18 已在 V1.2.1 PR #14 上实际运行新配置：`frontend`（35 s）、
+> `host-build`（2m13s）、`gcc15-embed`（2m6s）、`arm64-cross`（2m5s）、
+> `x86_64-musl-static`（1m57s）全部成功，无失败 job。
 
 ### 发布产物体积与静态校验
 
