@@ -8,6 +8,7 @@
 - `docs/architecture.md`（模块/线程/资源边界）、`docs/api.md`（HTTP 与 WS 协议）、
   `docs/config.md`（配置项与部署）、`docs/testing.md`（验证矩阵）描述当前实现。
 - `docs/phase1.md` 是历史骨架记录；不要将其当作当前功能范围。
+- 扩展应用平台唯一需求基线为 `docs/spec/0007-extension-applications.md`，配套决策为 `docs/adr/0011-extension-runtime-and-packages.md`、`docs/adr/0012-extension-security-and-communication.md`、`docs/adr/0013-extension-file-api-and-transfer.md`，风险与阶段计划分别见 `docs/security/extension-app-risk-register.md`、`docs/tasks/0007-extension-applications.md`。这些文档当前只表示已确认设计，不能声称扩展平台已实现。
 - React + TypeScript + Vite 与 xterm.js 已确认为前端基线（ADR-0001）；不要再讨论替换。
 
 ## 固定的技术边界
@@ -15,7 +16,7 @@
 - 后端：C++17，锁定 libhv v1.3.4，GCC 15+ Linux Release；musl 静态链接是目标，需要匹配的工具链。
 - 资源模式：Release 下使用 GCC 15 `#embed`，本地开发使用磁盘模式。切勿用大量生成的 `0xNN` C++ 数组替代。
 - 前端 Phase 1：React + TypeScript + Vite，使用 `web/public/assets` 和来自 `web/src/styles/edgedesk-tokens.css` 的 token。
-- 不使用数据库、ORM、设备上的 Node 运行时，也不引入不必要的第三方框架。
+- 现有核心模块不引入数据库/ORM，设备不运行 Node.js。**SPEC-0007 是明确的局部例外：扩展平台使用 SQLite 保存扩展元数据与应用 KV，不得因此迁移认证、设置、终端或指标模块。** 独立 SDK/CLI 可使用 Node.js 作为开发构建工具，但不得要求设备运行 Node.js。不要引入未获批准的第三方框架。
 
 ## 目录归属
 
@@ -51,9 +52,10 @@ V1.1 认证由 `AuthStore`（auth.json/锁）、`PasswordHashService`（Argon2id
 5. PTY Bash 进程必须在切换标签页、路由变化和刷新后依然存活，且独立于单个 WebSocket 生命周期。不要用 `/bin/sh` 代替 Bash，也不要假设 `.bashrc` 总是被加载。
 6. **禁止公网绑定 / 绕过凭据：** Phase 1 仅绑定回环地址。在认证、授权、CSWSH 防护和传输安全经过设计并测试之前，不得暴露 0.0.0.0 或新增特权端点。
 7. 切勿用无界的文件系统、进程或监控工作阻塞 libhv 事件循环。
-8. 静态资源路由与设备文件管理必须严格分离。
-9. 区分宿主机构建、交叉编译和真机测试；只声明实际运行过的内容。
-10. 新增依赖需要理由说明、版本锁定、许可证检查以及 ARM/musl 影响分析。
+8. 静态资源路由与设备文件管理必须严格分离；扩展静态资源路由也必须与特权 API 路由分离。
+9. 扩展应用不得绕过宿主桥接直接访问特权 API；所有扩展文件操作继续通过 `FileService`/`PathSandbox`，不得用前端 `../` 字符串检查替代现有目录 FD、`openat` 和符号链接防护。
+10. 区分宿主机构建、交叉编译和真机测试；只声明实际运行过的内容。
+11. 新增依赖需要理由说明、版本锁定、许可证检查以及 ARM/musl 影响分析。
 
 ## 每个任务的完成标准
 
