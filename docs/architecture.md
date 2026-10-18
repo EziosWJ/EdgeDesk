@@ -116,6 +116,9 @@ web/src/
 共享状态一律有明确互斥：会话注册表（`TerminalManager::mutex_`）、会话回放与订阅
 （`TerminalSession::mutex_`）、指标环形缓冲（`SystemMetrics::mutex_`）、限流桶、
 审计写入。WS 通道发送由 libhv 自身加锁，跨线程投递是安全的。
+`TerminalSession` 的订阅回调（回放、实时输出、退出）不得在 `mutex_` 持有期间调用，
+否则回调重入 `info()`/`unsubscribe()` 会自锁；每个订阅者的 `delivery_mutex` 只用于
+保证回放 → 实时输出 → 退出的顺序，回调内部可以安全地再次访问会话。
 
 ## 资源边界
 

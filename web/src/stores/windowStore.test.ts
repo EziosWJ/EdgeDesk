@@ -81,6 +81,42 @@ describe('windowStore', () => {
     expect(windowStore.getSnapshot().find((item) => item.id === id)?.state).toBe('maximized');
   });
 
+  it('keeps a maximized window maximized when it is reopened from a minimized state', () => {
+    const id = windowStore.launch('dashboard');
+    windowStore.toggleMaximize(id);
+    windowStore.minimize(id);
+    expect(windowStore.getSnapshot().find((item) => item.id === id)?.state).toBe('minimized');
+
+    // Launching a single-instance app from an icon/dock/launcher must restore
+    // the state it had before minimizing, not downgrade it to normal.
+    const reopened = windowStore.launch('dashboard');
+    expect(reopened).toBe(id);
+    const window = windowStore.getSnapshot().find((item) => item.id === id)!;
+    expect(window.state).toBe('maximized');
+    expect(window.maxRestore).toBeDefined();
+  });
+
+  it('vetoes a full close when any window guard blocks (logout protection)', () => {
+    const editor = windowStore.launch('editor', {
+      title: '编辑 /a.txt',
+      payload: { path: '/a.txt' },
+      instanceKey: '/a.txt',
+    });
+    const dashboard = windowStore.launch('dashboard');
+    let dirty = true;
+    const unregister = windowStore.registerCloseGuard(editor, () => !dirty);
+
+    expect(windowStore.requestCloseAll()).toBe(false);
+    expect(windowStore.getSnapshot()).toHaveLength(2);
+    expect(windowStore.get(editor)).toBeDefined();
+
+    dirty = false;
+    expect(windowStore.requestCloseAll()).toBe(true);
+    expect(windowStore.getSnapshot()).toHaveLength(0);
+    expect(windowStore.get(dashboard)).toBeUndefined();
+    unregister();
+  });
+
   it('raises focus, keeps z-index bounded and skips minimized windows', () => {
     const ids = Array.from({ length: 8 }, (_, index) => windowStore.launch('files', { instanceKey: `f${index}` }));
     for (let round = 0; round < 20; round += 1) {

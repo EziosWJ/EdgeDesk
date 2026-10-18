@@ -9,6 +9,7 @@
 #include <fstream>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -148,6 +149,88 @@ void test_login_bash() {
     session->request_close();
     CHECK(collector.wait_for_exit());
     CHECK(!session->running());
+}
+
+/**
+ * Starts `action` on another thread and waits briefly for it to finish.
+ * Joining is deliberately deferred: if a subscription callback is invoked
+ * while the session mutex is held, the worker cannot finish until subscribe()
+ * returns. Callers must call join() after subscribe() to avoid leaking a
+ * joinable thread.
+ */
+class LockProbe {
+public:
+    void run(const std::function<void()>& action, int timeout_ms = 500) {
+        done_ = std::make_shared<std::atomic<bool>>(false);
+        thread_ = std::make_shared<std::thread>([action, done = done_] {
+            action();
+            done->store(true, std::memory_order_release);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        while (!done_->load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        // Capture the result before the callback returns: subscribe() releases
+        // the session lock immediately afterwards, which would let a blocked
+        // worker finish and hide the re-entrancy bug.
+        finished_ = done_->load(std::memory_order_acquire);
+    }
+
+    bool finished() const { return finished_; }
+
+    void join() {
+        if (thread_ && thread_->joinable()) thread_->join();
+    }
+
+private:
+    std::shared_ptr<std::atomic<bool>> done_;
+    std::shared_ptr<std::thread> thread_;
+    bool finished_ = false;
+};
+
+void test_subscription_callbacks_reenter_session() {
+    OutputCollector collector;
+    auto session = create_session(collector);
+    CHECK(session != nullptr);
+    if (!session) return;
+
+    session->send_raw("echo REPLAY_MARKER\r");
+    CHECK(collector.wait_for("REPLAY_MARKER"));
+
+    // Backlog replay happens inside subscribe(). A callback that asks the
+    // session for metadata must not deadlock on the same mutex.
+    std::atomic<int> output_callbacks{0};
+    std::atomic<bool> probe_started{false};
+    LockProbe output_probe;
+    const auto token = session->subscribe(TerminalSession::Subscriber{
+        [&](const char*, std::size_t) {
+            output_callbacks.fetch_add(1);
+            if (!probe_started.exchange(true)) {
+                output_probe.run([session] { (void)session->info(); });
+            }
+        },
+        nullptr});
+    const bool output_reentry_ok = output_probe.finished();
+    output_probe.join();
+    CHECK(token != 0);
+    CHECK(output_callbacks.load() > 0);
+    CHECK(output_reentry_ok);
+
+    // Exit delivery for an already-finalized session is also a subscription
+    // callback and must run outside the session lock.
+    session->request_close();
+    CHECK(collector.wait_for_exit());
+    LockProbe exit_probe;
+    const auto exit_token = session->subscribe(TerminalSession::Subscriber{
+        nullptr,
+        [&](int code) {
+            (void)code;
+            exit_probe.run([session] { (void)session->info(); });
+        }});
+    const bool exit_reentry_ok = exit_probe.finished();
+    exit_probe.join();
+    CHECK(exit_token != 0);
+    CHECK(exit_reentry_ok);
 }
 
 void test_guard_blocks_without_executing() {
@@ -307,6 +390,7 @@ int main() {
         return 0;
     }
     test_login_bash();
+    test_subscription_callbacks_reenter_session();
     test_guard_blocks_without_executing();
     test_login_profile_loading();
     test_shell_missing_is_reported();

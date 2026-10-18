@@ -80,7 +80,9 @@ export function SettingsView({ onLogout }: { onLogout: () => void }) {
   };
 
   const logout = () => {
-    void api.logout().finally(onLogout);
+    // The app owns sign-out: it honors window close guards and invalidates the
+    // server session before returning to the login view.
+    onLogout();
   };
 
   return (

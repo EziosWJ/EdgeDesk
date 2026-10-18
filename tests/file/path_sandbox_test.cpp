@@ -19,6 +19,7 @@ fs::path make_root() {
     const auto root = fs::temp_directory_path() / ("edgedesk-sandbox-test-" + std::to_string(::getpid()));
     fs::remove_all(root);
     fs::create_directories(root / "a" / "b");
+    fs::create_directories(root / "a" / "dir" / "sub");
     fs::create_directories(root / "data2");
     {
         std::ofstream file(root / "f.txt");
@@ -28,10 +29,23 @@ fs::path make_root() {
         std::ofstream file(root / "data2" / "other.txt");
         file << "other";
     }
+    {
+        std::ofstream file(root / "a" / "dir" / "sub" / "file.txt");
+        file << "nested";
+    }
+    {
+        std::ofstream file(root / "a" / "b" / "target.txt");
+        file << "target";
+    }
     fs::create_symlink("/etc", root / "escape");
     fs::create_symlink("a", root / "into");
     fs::create_symlink("l2", root / "l1");
     fs::create_symlink("l1", root / "l2");
+    // Relative targets are resolved against the directory containing the link.
+    fs::create_symlink("dir", root / "a" / "alias");
+    fs::create_symlink("b/target.txt", root / "a" / "file-link");
+    fs::create_symlink("../..", root / "a" / "b" / "back");
+    fs::create_symlink("../../../etc", root / "a" / "b" / "escape-rel");
     return root;
 }
 
@@ -155,6 +169,37 @@ void test_follow_symlinks(const fs::path& root) {
 
     // Symlink loop is detected.
     error = sandbox->open_file("/l1/x", O_RDONLY, file);
+    CHECK(!error.ok());
+    CHECK_EQ(static_cast<int>(error.code), static_cast<int>(ErrorCode::permission_denied));
+
+    // Relative directory targets resolve against the link's own directory.
+    // These links are intermediate components, so they exercise PathSandbox::walk.
+    error = sandbox->open_file("/a/alias/sub/file.txt", O_RDONLY, file);
+    CHECK(error.ok());
+    if (error.ok()) {
+        char buffer[16] = {0};
+        const auto count = ::read(file.get(), buffer, sizeof(buffer));
+        CHECK_EQ(count, 6L);
+        CHECK_STR_EQ(std::string(buffer, 6), "nested");
+    }
+
+    // A relative directory target that climbs out of its directory but stays
+    // inside the sandbox root ("/a/b" + "../.." => "/") must resolve.
+    error = sandbox->open_file("/a/b/back/f.txt", O_RDONLY, file);
+    CHECK(error.ok());
+    if (error.ok()) {
+        char buffer[16] = {0};
+        const auto count = ::read(file.get(), buffer, sizeof(buffer));
+        CHECK_EQ(count, 5L);
+        CHECK_STR_EQ(std::string(buffer, 5), "hello");
+    }
+
+    // Relative final-component targets keep working as well.
+    error = sandbox->open_file("/a/file-link", O_RDONLY, file);
+    CHECK(error.ok());
+
+    // A relative target that actually escapes the root is still rejected.
+    error = sandbox->open_file("/a/b/escape-rel/passwd", O_RDONLY, file);
     CHECK(!error.ok());
     CHECK_EQ(static_cast<int>(error.code), static_cast<int>(ErrorCode::permission_denied));
 }

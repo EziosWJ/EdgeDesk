@@ -7,7 +7,7 @@
 
 | 层级 | 入口 | 覆盖 | 何时运行 |
 | --- | --- | --- | --- |
-| L0 编辑循环 | `scripts/test-fast.sh` | `host-offline-tests` 构建 + 11 项原生单测 + 前端单测（`web/node_modules` 存在时；V1.2 为 124 项） | 每次改动 |
+| L0 编辑循环 | `scripts/test-fast.sh` | `host-offline-tests` 构建 + 11 项原生单测 + 前端单测（`web/node_modules` 存在时；V1.2.1 为 140 项） | 每次改动 |
 | L1 任务/PR | `scripts/test-pr.sh` | `dev-disk` 构建 + 11 项原生单测 + 全量集成 + 前端 `npm test` / `npm run build` | 提交前 |
 | L2 全矩阵 | 见下方“构建与平台矩阵” | `release-embed`、`release-embed-arm64`、`release-disk`、x86_64-musl、arm64-disk、arm64-musl、CI | main/nightly/release；当前 CI 对 PR 也执行全矩阵 |
 
@@ -31,6 +31,12 @@ scripts/test-pr.sh
 > 约 14 s）；`scripts/test-pr.sh` 通过（11/11 原生 + 全量集成 + 前端测试/构建，102 s）。
 > 2026-10-17 的 V1.1 记录为：L0 通过（11/11 原生 + 77 项前端）；L1 通过（10/10 原生 +
 > 全量集成）。CI 新配置尚未在 GitHub Actions 上运行。
+>
+> 2026-10-18 V1.2.1 稳定性与安全加固：`scripts/test-fast.sh` 通过（11/11 原生 +
+> 140 项前端，约 10 s）。新增回归覆盖：顶部退出登录调用 `POST /api/auth/logout`、
+> 未保存编辑器阻止退出、最小化后从图标/Dock/启动器重开保留最大化状态、嵌套相对
+> 符号链接（含 `..`）解析、终端订阅回调可重入会话 API。L1 已执行：
+> `scripts/test-pr.sh` 通过（11/11 原生 + 140 项前端 + `tsc`/Vite 构建 + 全量集成，126 s）。
 
 ## 自动化测试清单
 
@@ -41,13 +47,13 @@ scripts/test-pr.sh
 | `auth_store_test` | 未初始化/已初始化/损坏状态、原子写入、0600/0700、flock、恢复重置 | GCC 13.3 host | 通过 |
 | `password_hash_test` | 密码策略、Argon2id hash/verify、盐独立、参数升级、有界 worker 队列 | GCC 13.3 host | 通过 |
 | `settings_store_test` | 默认值、白名单保存、非法枚举/越界拒绝、损坏文件回退、持久化 | GCC 13.3 host | 通过 |
-| `path_sandbox_test` | `..` 穿越、URL 编码、绝对路径、前缀欺骗目录、符号链接逃逸/循环（含 follow 模式）、lstat 语义 | GCC 13.3 host | 通过 |
+| `path_sandbox_test` | `..` 穿越、URL 编码、绝对路径、前缀欺骗目录、符号链接逃逸/循环（含 follow 模式）、嵌套相对目标（`dir`、`../..`、逃逸拒绝）、lstat 语义 | GCC 13.3 host | 通过 |
 | `file_service_test` | 列表/排序/分页/隐藏文件、`dirs_only` 直接子目录（符号链接不跟随）、文本读写与原子保存保留权限、二进制拒绝、上传/中止/超限、递归删除计数、Range 解析、MIME 判定 | GCC 13.3 host | 通过 |
 | `command_guard_test` | 危险命令命中（rm -rf 根、块设备写入、fork 炸弹、关机…）与安全命令不误报 | GCC 13.3 host | 通过 |
-| `terminal_session_test` | 真实 Bash 登录 Shell、`~/.profile` 加载、UTF-8/ANSI、TIOCSWINSZ resize、CommandGuard 拦截不执行、回放缓冲有界、订阅断开不杀会话、会话上限/空闲回收、缺 Bash 报错而非回退 sh | GCC 13.3 host + /bin/bash 5.2 | 通过 |
+| `terminal_session_test` | 真实 Bash 登录 Shell、`~/.profile` 加载、UTF-8/ANSI、TIOCSWINSZ resize、CommandGuard 拦截不执行、回放缓冲有界、订阅断开不杀会话、订阅回调（回放/退出）可重入会话 API 且不死锁、会话上限/空闲回收、缺 Bash 报错而非回退 sh | GCC 13.3 host + /bin/bash 5.2 | 通过 |
 | `system_metrics_test` | /proc/stat、loadavg、meminfo（含旧内核回退）、net/dev 速率差分、IPv4/IPv6 地址格式化与 `getifaddrs` 枚举（排除 lo）、mounts 过滤、采样线程与环形缓冲 | GCC 13.3 host | 通过 |
 | `embed_generator_test` | `#embed` 生成器的确定性、路径校验、ETag | Python 3.12 | 通过 |
-| 前端单元/DOM 测试 | **V1.2 桌面**：AppRegistry（默认注册、未知 appId、重复注册、元数据/尺寸校验、单/多实例、启动器搜索）、桌面图标布局（网格命中、拖拽换位、边界、去重）、WindowManager（单/多实例、稳定实例 ID、z-index 有界、最小化保持挂载/恢复、最大化几何还原、移动/缩放/视口约束、中等视口完整可见、关闭守卫）、DesktopPersistence（序列化往返、损坏 JSON、版本不兼容、未知 appId、重复单实例、非法几何、敏感字段剥离、localStorage 不可用、恢复时会话失效标记、防抖自动保存）、DesktopShell（单击/双击、Dock 启动/聚焦/多窗口选择、最小化恢复、真全屏与桌面框架恢复、启动器搜索/空态/Esc/焦点返回、Alt 快捷键与输入焦点保护、窄屏强制最大化、退出登录）、终端恢复（session_not_found 不创建替代会话、无 session ID 时才 create、attached 状态）、编辑器生命周期（最小化保留缓冲、未保存关闭确认、外部修改保护、文件消失拒绝保存）、NAS 设备概览（CPU/内存/存储/网卡/系统/服务小组件、多挂载点、多网卡、loopback 排除、缺失值 vs 0、采集中断、加载空态）。**V1.1 回归**：会话持久化、metrics 窗口有界、格式化、FloatingWindow DOM 交互、Sidebar、图表工具、Dashboard 旧断言已迁移、文件管理、认证、设置、偏好。 | Node 24.14 / vitest 3.2 / happy-dom | 通过（136 项）；`npm run build`（tsc + vite）通过 |
+| 前端单元/DOM 测试 | **V1.2 桌面**：AppRegistry（默认注册、未知 appId、重复注册、元数据/尺寸校验、单/多实例、启动器搜索）、桌面图标布局（网格命中、拖拽换位、边界、去重）、WindowManager（单/多实例、稳定实例 ID、z-index 有界、最小化保持挂载/恢复、最大化几何还原、移动/缩放/视口约束、中等视口完整可见、关闭守卫）、DesktopPersistence（序列化往返、损坏 JSON、版本不兼容、未知 appId、重复单实例、非法几何、敏感字段剥离、localStorage 不可用、恢复时会话失效标记、防抖自动保存）、DesktopShell（单击/双击、Dock 启动/聚焦/多窗口选择、最小化恢复、真全屏与桌面框架恢复、启动器搜索/空态/Esc/焦点返回、Alt 快捷键与输入焦点保护、窄屏强制最大化、退出登录）、终端恢复（session_not_found 不创建替代会话、无 session ID 时才 create、attached 状态）、编辑器生命周期（最小化保留缓冲、未保存关闭确认、外部修改保护、文件消失拒绝保存）、NAS 设备概览（CPU/内存/存储/网卡/系统/服务小组件、多挂载点、多网卡、loopback 排除、缺失值 vs 0、采集中断、加载空态）。**V1.2.1 回归**：顶部退出登录注销服务端会话并由脏编辑器否决退出、最小化后重开保留最大化状态。**V1.1 回归**：会话持久化、metrics 窗口有界、格式化、FloatingWindow DOM 交互、Sidebar、图表工具、Dashboard 旧断言已迁移、文件管理、认证、设置、偏好。 | Node 24.14 / vitest 3.2 / happy-dom | 通过（140 项）；`npm run build`（tsc + vite）通过 |
 | `auth_test.py` | 初始化状态门禁、首次设置密码、重复初始化 409、密码登录、Cookie 属性（含 `--cookie-secure`）、改密后旧 Cookie/旧密码失效、Bearer 不受影响、CSRF、设置白名单、系统信息脱敏、重启后旧 Cookie 失效、损坏状态失败关闭、本机恢复 | dev-disk / host-embed / release-embed / release-embed-arm64 / release-disk / x86_64-musl / arm64-disk / arm64-musl | 全部通过 |
 | `api_test.py` | health 契约、密码登录/会话/Bearer、CSRF、目录浏览（含 `dirs_only` 只返回直接子目录）、文本读写、mkdir/rename/delete、流式上传字节一致、Range 206/416、路径沙箱拒绝、JSON 体积限制、系统指标（含 `network[].addresses` 字段） | 见下（三种二进制） | 通过 |
 | `ws_test.py` | 未认证/异源握手拒绝、终端 create/input/输出/resize/guard、断线重连（回放）、会话存活、显式关闭、metrics 快照+增量 | 同上 | 通过 |

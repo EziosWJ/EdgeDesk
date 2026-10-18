@@ -200,7 +200,7 @@ Error PathSandbox::walk(const std::string& normalized, int depth, UniqueFd& out_
                     if (!resolve_link_target(join_logical(prefix, component), target, depth).ok()) {
                         return Error::make(ErrorCode::permission_denied, "cannot resolve symlink: " + component);
                     }
-                    std::string remainder = target;
+                    std::string remainder = join_logical(prefix, target);
                     for (std::size_t j = i + 1; j < components.size(); ++j) {
                         remainder += "/" + components[j];
                     }
@@ -235,7 +235,7 @@ Error PathSandbox::walk(const std::string& normalized, int depth, UniqueFd& out_
             if (!resolve_link_target(join_logical(prefix, component), target, depth).ok()) {
                 return Error::make(ErrorCode::permission_denied, "cannot resolve symlink: " + component);
             }
-            std::string remainder = target;
+            std::string remainder = join_logical(prefix, target);
             for (std::size_t j = i + 1; j < components.size(); ++j) {
                 remainder += "/" + components[j];
             }
@@ -262,13 +262,20 @@ Error PathSandbox::resolve_link_target(std::string_view logical_path, std::strin
     UniqueFd dir;
     std::string name;
     if (!normalized.empty() && normalized != "/") {
-        // Walk to the parent of the link itself.
         const auto slash = normalized.rfind('/');
         const std::string parent = slash == std::string::npos || slash == 0 ? "/" : normalized.substr(0, slash);
-        std::string parent_name;
-        Error error = walk(parent, depth, dir, parent_name);
-        if (!error.ok()) return error;
         name = slash == std::string::npos ? normalized : normalized.substr(slash + 1);
+        // Open the directory that contains the link. walk() separates the final
+        // component, so append "." to obtain the directory itself. Reading the
+        // link from the wrong directory made nested links look nonexistent.
+        if (parent == "/") {
+            Error error = open_root(dir);
+            if (!error.ok()) return error;
+        } else {
+            std::string parent_name;
+            Error error = walk(parent + "/.", depth, dir, parent_name);
+            if (!error.ok()) return error;
+        }
     } else {
         Error error = open_root(dir);
         if (!error.ok()) return error;

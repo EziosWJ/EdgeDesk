@@ -126,6 +126,11 @@ export class WindowStore {
     this.applyZOrder();
   }
 
+  /** State to use when a minimized window is brought back. */
+  private restoredState(target: WindowState): WindowStatus {
+    return target.maxRestore ? 'maximized' : 'normal';
+  }
+
   private topVisible(): WindowState | null {
     for (let index = this.windows.length - 1; index >= 0; index -= 1) {
       if (this.windows[index].state !== 'minimized') return this.windows[index];
@@ -162,7 +167,7 @@ export class WindowStore {
     const existing = app.instancePolicy === 'single' ? this.windows.find((item) => item.appId === app.id) : undefined;
     if (existing) {
       this.update(existing.id, {
-        state: existing.state === 'minimized' ? 'normal' : existing.state,
+        state: existing.state === 'minimized' ? this.restoredState(existing) : existing.state,
         payload: { ...existing.payload, ...(request.payload ?? {}) },
         title: sanitizeTitle(request.title, existing.title),
       });
@@ -257,7 +262,7 @@ export class WindowStore {
     const target = this.get(id);
     if (!target) return;
     if (target.state === 'minimized') {
-      this.update(id, { state: target.maxRestore ? 'maximized' : 'normal' });
+      this.update(id, { state: this.restoredState(target) });
     }
     this.bringToFront(id);
     this.focusedId = id;
@@ -434,6 +439,21 @@ export class WindowStore {
   /** Serialization-ready copies; the persistence layer decides what is safe to store. */
   exportWindows(): WindowState[] {
     return this.windows.map((item) => ({ ...item, payload: { ...item.payload } }));
+  }
+
+  /**
+   * Attempts to close every window through the registered guards, for example
+   * when signing out. If any app vetoes (unsaved editor content), nothing is
+   * closed and the caller must abort the sign-out. Guards may open their own
+   * confirmation UI as a side effect.
+   */
+  requestCloseAll(): boolean {
+    for (const item of this.windows) {
+      const guard = this.closeGuards.get(item.id);
+      if (guard && guard() === false) return false;
+    }
+    this.closeAll();
+    return true;
   }
 
   closeAll(): void {

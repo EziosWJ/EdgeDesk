@@ -99,7 +99,7 @@ void TerminalSession::append_backlog_locked(const char* data, std::size_t length
 }
 
 void TerminalSession::finalize(int exit_code) {
-    std::vector<Subscriber> targets;
+    std::vector<std::shared_ptr<SubscriberState>> targets;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (finalized_state_) return;
@@ -110,8 +110,10 @@ void TerminalSession::finalize(int exit_code) {
         for (const auto& item : subscribers_) targets.push_back(item.second);
     }
     if (pty_) pty_->terminate_and_reap();
-    for (const auto& subscriber : targets) {
-        if (subscriber.on_exit) subscriber.on_exit(exit_code);
+    for (const auto& state : targets) {
+        if (!state->callbacks.on_exit) continue;
+        std::lock_guard<std::mutex> delivery(state->delivery_mutex);
+        state->callbacks.on_exit(exit_code);
     }
     if (on_exit_notify_) on_exit_notify_(exit_code);
 }
@@ -143,7 +145,7 @@ void TerminalSession::read_loop() {
         const long read = pty_->read_some(buffer.data(), buffer.size());
         if (read > 0) {
             const auto length = static_cast<std::size_t>(read);
-            std::vector<Subscriber> targets;
+            std::vector<std::shared_ptr<SubscriberState>> targets;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (finalized_state_) continue;
@@ -153,9 +155,12 @@ void TerminalSession::read_loop() {
                 for (const auto& item : subscribers_) targets.push_back(item.second);
             }
             // Delivered outside the lock: callbacks may unsubscribe or send on
-            // sockets, and must not hold up this session's reader.
-            for (const auto& subscriber : targets) {
-                if (subscriber.on_output) subscriber.on_output(buffer.data(), length);
+            // sockets, and must not hold up this session's reader. delivery_mutex
+            // waits for any in-progress backlog replay so output stays ordered.
+            for (const auto& state : targets) {
+                if (!state->callbacks.on_output) continue;
+                std::lock_guard<std::mutex> delivery(state->delivery_mutex);
+                state->callbacks.on_output(buffer.data(), length);
             }
             continue;
         }
@@ -301,27 +306,41 @@ void TerminalSession::join() {
 
 std::uint64_t TerminalSession::subscribe(Subscriber subscriber) {
     if (!subscriber.on_output && !subscriber.on_exit) return 0;
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (subscribers_.size() >= kMaxSubscribers) return 0;
-    // Replay first (still under the lock) so no output is lost or duplicated
-    // when a WebSocket attaches while the session is producing data.
-    if (subscriber.on_output) {
-        if (dropped_notice_) {
-            const std::string notice = std::string(kBacklogNoticePrefix) + std::to_string(dropped_bytes_) +
-                                       kBacklogNoticeSuffix;
-            subscriber.on_output(notice.data(), notice.size());
+
+    auto state = std::make_shared<SubscriberState>();
+    state->callbacks = std::move(subscriber);
+
+    // Hold the delivery lock across registration and replay. The reader thread
+    // takes the same lock before delivering live output, so it cannot overtake
+    // the replay. Never call user callbacks while mutex_ is held.
+    std::lock_guard<std::mutex> delivery(state->delivery_mutex);
+
+    std::string replay;
+    std::uint64_t token = 0;
+    bool finalized_at_insert = false;
+    int finalized_code = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (subscribers_.size() >= kMaxSubscribers) return 0;
+        token = next_token_++;
+        // Snapshot the replay while registering, so no output is lost between
+        // the backlog snapshot and the live subscription.
+        if (state->callbacks.on_output) {
+            if (dropped_notice_) {
+                replay = std::string(kBacklogNoticePrefix) + std::to_string(dropped_bytes_) + kBacklogNoticeSuffix;
+            }
+            replay += backlog_;
         }
-        if (!backlog_.empty()) {
-            subscriber.on_output(backlog_.data(), backlog_.size());
-        }
+        finalized_at_insert = finalized_state_;
+        finalized_code = exit_code_;
+        subscribers_.emplace(token, state);
     }
-    const std::uint64_t token = next_token_++;
-    subscribers_.emplace(token, std::move(subscriber));
-    if (finalized_state_) {
-        auto it = subscribers_.find(token);
-        if (it != subscribers_.end() && it->second.on_exit) {
-            it->second.on_exit(exit_code_);
-        }
+
+    if (state->callbacks.on_output && !replay.empty()) {
+        state->callbacks.on_output(replay.data(), replay.size());
+    }
+    if (finalized_at_insert && state->callbacks.on_exit) {
+        state->callbacks.on_exit(finalized_code);
     }
     return token;
 }

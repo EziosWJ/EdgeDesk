@@ -130,13 +130,20 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    // Detach runtime windows but keep non-sensitive layout in localStorage;
-    // the next login still re-validates terminal sessions and files.
-    windowStore.closeAll();
-    preferencesStore.reset();
-    desktopStore.reset();
-    restoredRef.current = false;
-    setAuthView('anonymous');
+    // Unsaved editor content can veto closing the workspace; the editor shows
+    // its own confirmation and the server session stays valid until the user
+    // resolves it and signs out again.
+    if (!windowStore.requestCloseAll()) return;
+    // Always invalidate the server-side session, even if the request fails
+    // (for example when the session already expired or the device is offline).
+    void api.logout().finally(() => {
+      // Detach runtime windows but keep non-sensitive layout in localStorage;
+      // the next login still re-validates terminal sessions and files.
+      preferencesStore.reset();
+      desktopStore.reset();
+      restoredRef.current = false;
+      setAuthView('anonymous');
+    });
   };
 
   if (authView === 'checking') {

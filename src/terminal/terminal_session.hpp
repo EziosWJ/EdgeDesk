@@ -94,6 +94,15 @@ private:
     void finalize(int exit_code);
     void append_backlog_locked(const char* data, std::size_t length);
 
+    // Callbacks run on the reader/WebSocket threads and may re-enter this
+    // session, so they are never invoked while mutex_ is held. delivery_mutex
+    // is held across backlog replay so the reader thread cannot deliver live
+    // output before the replay or the exit callback.
+    struct SubscriberState {
+        Subscriber callbacks;
+        std::mutex delivery_mutex;
+    };
+
     static constexpr std::size_t kMaxSubscribers = 8;
     static constexpr std::size_t kMaxTrackedLine = 8192;
 
@@ -108,7 +117,7 @@ private:
     std::string backlog_;
     std::size_t dropped_bytes_ = 0;
     bool dropped_notice_ = false;
-    std::map<std::uint64_t, Subscriber> subscribers_;
+    std::map<std::uint64_t, std::shared_ptr<SubscriberState>> subscribers_;
     std::uint64_t next_token_ = 1;
 
     // Guard tracking (all guarded by mutex_)
