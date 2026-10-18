@@ -4,7 +4,6 @@ import {
   ArrowUp,
   Download,
   FolderPlus,
-  Home,
   LayoutGrid,
   List,
   PenLine,
@@ -119,7 +118,6 @@ export function FileToolbar({
                 onClick={() => onNavigate(crumb.target)}
                 aria-current={crumb.target === path ? 'page' : undefined}
               >
-                {crumb.target === '/' && <Icon icon={Home} size={13} />}
                 {crumb.label}
               </button>
             </span>
@@ -138,7 +136,7 @@ export function FileToolbar({
         </label>
         <button
           type="button"
-          className="ed-icon-button"
+          className="ed-icon-button ed-refresh-button"
           title="刷新"
           aria-label="刷新"
           onClick={onRefresh}

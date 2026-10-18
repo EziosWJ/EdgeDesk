@@ -13,6 +13,7 @@ type Props = {
 export function FilesView({ initialPath = '/', windowId }: Props) {
   return (
     <div className="ed-view ed-files-view">
+      <h1 className="ed-visually-hidden">文件管理</h1>
       <FileWorkspace
         initialPath={initialPath}
         onPathChange={

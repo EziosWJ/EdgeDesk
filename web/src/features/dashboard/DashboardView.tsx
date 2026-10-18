@@ -20,7 +20,7 @@ import {
   usageDelta,
 } from './chartUtils';
 
-/** Wall clock for the dashboard header (real time, not sample time). */
+/** Wall clock for stale-sample detection and the service widget. */
 function useClock(): Date {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -30,16 +30,14 @@ function useClock(): Date {
   return now;
 }
 
-function clockText(now: Date): string {
-  const two = (value: number) => String(value).padStart(2, '0');
-  return `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${two(now.getHours())}:${two(now.getMinutes())}:${two(now.getSeconds())}`;
-}
-
 type WidgetStatus = 'ok' | 'warning' | 'unavailable' | 'loading';
+
+type WidgetTone = 'blue' | 'violet' | 'amber' | 'teal' | 'green' | 'slate';
 
 function Widget({
   sprite,
   title,
+  tone = 'blue',
   status = 'ok',
   badge,
   children,
@@ -48,6 +46,7 @@ function Widget({
 }: {
   sprite: string;
   title: string;
+  tone?: WidgetTone;
   status?: WidgetStatus;
   badge?: ReactNode;
   children: ReactNode;
@@ -55,7 +54,7 @@ function Widget({
   className?: string;
 }) {
   return (
-    <article className={`ed-nas-widget ${className}`.trim()} data-status={status}>
+    <article className={`ed-nas-widget tone-${tone} ${className}`.trim()} data-status={status}>
       <header className="ed-nas-widget-head">
         <h2>
           <span className="ed-nas-widget-glyph" aria-hidden="true">
@@ -179,6 +178,7 @@ function ServiceStatusWidget({
     <Widget
       sprite="service"
       title="服务状态"
+      tone="green"
       status={apiStatus === 'unavailable' || metricsStatus === 'unavailable' ? 'unavailable' : 'ok'}
       badge={apiStatus === 'unavailable' || metricsStatus === 'unavailable' ? '部分不可用' : '运行中'}
       className="ed-nas-service-widget"
@@ -310,21 +310,28 @@ export function DashboardView() {
 
   return (
     <div className="ed-view ed-dashboard ed-nas-dashboard">
-      <div className="ed-view-header">
-        <div>
-          <h1>设备概览</h1>
-          <p>实时监控设备资源与服务状态；所有数值来自后端采样，不使用演示数据。</p>
+      <header className="ed-dash-bar">
+        <div className="ed-dash-identity">
+          <h1 className="ed-dash-host" title={latest?.hostname || system?.hostname || undefined}>
+            {latest?.hostname || system?.hostname || '设备概览'}
+          </h1>
+          <span className="ed-dash-sub">
+            {latest
+              ? `${latest.arch || '架构未知'} · ${latest.kernel || '内核未知'}`
+              : system
+                ? `${system.arch || '架构未知'} · ${system.kernel || '内核未知'}`
+                : '等待设备信息'}
+          </span>
         </div>
-        <div className="ed-toolbar ed-dashboard-meta">
-          <span className="ed-clock">{clockText(now)}</span>
-          <span className={`ed-status-pill ${status.tone}`}>
+        <div className="ed-dash-controls">
+          <span className={`ed-status-pill ${status.tone}`} title={status.detail}>
             <span className="ed-status-dot" />
             {status.text}
           </span>
-          <span className="ed-live">
+          <span className="ed-live" title="数值来自后端实时采样">
             <span className="ed-live-dot" />
             <span className="ed-live-label">
-              实时 · {samples.length} 个样本 / 窗口 {Math.round((samples.length * intervalMs) / 1000)} 秒
+              {latest ? `实时 · ${samples.length} 个样本 · 窗口 ${Math.round((samples.length * intervalMs) / 1000)} 秒` : '连接指标服务…'}
             </span>
           </span>
           <div className="ed-range-control">
@@ -332,9 +339,10 @@ export function DashboardView() {
             <RangeSelect value={rangeSeconds} onChange={changeRange} />
           </div>
         </div>
-      </div>
+      </header>
 
-      {!latest ? (
+      <div className="ed-dash-body">
+        {!latest ? (
         <>
           <div className="ed-panel ed-empty small">
             <img src={asset('illustrations/monitor-unavailable.svg')} alt="" />
@@ -369,6 +377,7 @@ export function DashboardView() {
             <Widget
               sprite="cpu"
               title="CPU 使用率"
+              tone="blue"
               status={cpuUnavailable ? 'unavailable' : 'ok'}
               badge={cpuUnavailable ? '不可用' : `${latest.cpu.cores} 核`}
               footer={
@@ -396,6 +405,7 @@ export function DashboardView() {
             <Widget
               sprite="memory"
               title="内存使用率"
+              tone="violet"
               status={memoryUnavailable ? 'unavailable' : 'ok'}
               badge={memoryUnavailable ? '不可用' : latest.memory ? formatBytes(latest.memory.total_kb * 1024) : '—'}
               footer={
@@ -428,8 +438,9 @@ export function DashboardView() {
             <Widget
               sprite="storage"
               title="存储空间"
+              tone="amber"
               status={disks.length === 0 ? 'unavailable' : criticalDisk ? 'warning' : 'ok'}
-              badge={disks.length === 0 ? '不可用' : criticalDisk ? '空间紧张' : `${disks.length} 个挂载点`}
+              badge={disks.length === 0 ? '不可用' : criticalDisk ? '有挂载点接近满' : `${disks.length} 个挂载点`}
               footer={
                 primaryDisk ? (
                   <>
@@ -457,6 +468,7 @@ export function DashboardView() {
             <Widget
               sprite="network"
               title="网络吞吐"
+              tone="teal"
               status={
                 latest.network.length === 0 ? 'unavailable' : unavailable.has('network_rate_initial') ? 'warning' : 'ok'
               }
@@ -487,23 +499,6 @@ export function DashboardView() {
                 label="网络吞吐趋势"
                 showValue={false}
               />
-              <div className="ed-nas-stats">
-                <StatRow
-                  label="接口"
-                  value={physicalInterfaces.length > 0 ? physicalInterfaces.map((item) => item.name).join('、') : '—'}
-                />
-                <StatRow
-                  label="IP"
-                  value={
-                    physicalInterfaces.length > 0
-                      ? physicalInterfaces
-                          .map((item) => primaryAddress(item.addresses))
-                          .filter((address): address is string => address !== null)
-                          .join('、') || 'IP 未分配'
-                      : '—'
-                  }
-                />
-              </div>
             </Widget>
           </section>
 
@@ -511,6 +506,7 @@ export function DashboardView() {
             <Widget
               sprite="storage"
               title="存储挂载点"
+              tone="amber"
               status={disks.length === 0 ? 'unavailable' : 'ok'}
               badge={disks.length > 0 ? `${disks.length} 个` : '不可用'}
             >
@@ -546,6 +542,7 @@ export function DashboardView() {
             <Widget
               sprite="network"
               title="网卡状态"
+              tone="teal"
               status={latest.network.length === 0 ? 'unavailable' : 'ok'}
               badge={latest.network.length > 0 ? `${latest.network.length} 个接口` : '不可用'}
             >
@@ -582,7 +579,7 @@ export function DashboardView() {
               )}
             </Widget>
 
-            <Widget sprite="system" title="系统信息" badge={latest.arch || '只读'}>
+            <Widget sprite="system" title="系统信息" tone="slate" badge={latest.arch || '只读'}>
               <dl className="ed-nas-info-list">
                 <div>
                   <dt>主机名</dt>
@@ -708,6 +705,7 @@ export function DashboardView() {
           </article>
         </>
       )}
+      </div>
     </div>
   );
 }
