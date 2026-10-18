@@ -1,6 +1,6 @@
 # SPEC-0008 实施计划：扩展应用平台安全与可靠性加固
 
-- 状态：**Planned（GitHub Tickets 建立后回填编号；实现尚未开始）**
+- 状态：**Planned（GitHub Issues 已创建；实现尚未开始）**
 - 需求基线：[SPEC-0008](../spec/0008-extension-platform-hardening.md)
 - 前置基线：[SPEC-0007](../spec/0007-extension-applications.md)
 - 架构决策：[ADR-0011](../adr/0011-extension-runtime-and-packages.md)、[ADR-0012](../adr/0012-extension-security-and-communication.md)、[ADR-0013](../adr/0013-extension-file-api-and-transfer.md)
@@ -10,19 +10,19 @@
 
 ## 1. Ticket 拆分
 
-本计划拆分为一个总任务和八个可独立验收的实现 Ticket。GitHub Issue 编号在创建后回填。
+本计划拆分为一个总任务和八个可独立验收的实现 Ticket。总任务为 [#16](https://github.com/EziosWJ/EdgeDesk/issues/16)，实现 Ticket 为 [#17](https://github.com/EziosWJ/EdgeDesk/issues/17)～[#24](https://github.com/EziosWJ/EdgeDesk/issues/24)。
 
 | ID | 建议标题 | 优先级 | 依赖 | 主要范围 |
 | --- | --- | --- | --- | --- |
-| T-00 | [V1.3][P0] 扩展平台安全与可靠性加固总任务 | P0 | 无 | 汇总修复、追踪依赖与发布门槛 |
-| T-01 | [V1.3][P0] 阻止扩展文件 API 访问平台内部数据 | P0 | 无 | 文件安全边界、受保护路径与别名测试 |
-| T-02 | [V1.3][P0] 修复扩展网络权限与来源策略执行 | P0 | 无 | 授权驱动 CSP、升级来源复核、实际浏览器导航验证 |
-| T-03 | [V1.3][P1] 完整性清单覆盖实际资源并修正隔离范围 | P1 | 无 | 未登记文件拒绝服务、实际文件集合比对、历史修订隔离语义 |
-| T-04 | [V1.3][P1] 保证重装失败时应用 KV 数据不丢失 | P1 | 无 | 数据删除与安装状态提交事务化、失败/崩溃恢复 |
-| T-05 | [V1.3][P1] 控制扩展包安装与静态资源服务的内存占用 | P1 | 无 | 流式处理、减少元数据副本、静态资源传输设计与峰值内存验证 |
-| T-06 | [V1.3][P1] 统一清理过期扩展会话及关联资源 | P1 | 无 | 终端、传输、临时文件、锁与事件订阅的幂等清理 |
-| T-07 | [V1.3][P2] 对扩展错误上报与审计信息进行脱敏 | P2 | 无 | 敏感值脱敏、URL 参数处理、日志结构与长度限制 |
-| T-08 | [Build][P0] 修复 x86_64-musl 与 ARM64-musl 的 ZLIB 依赖 | P0 | 无 | 目标 sysroot、CMake 查找、静态链接和完整 CI |
+| T-00 | [ [#16](https://github.com/EziosWJ/EdgeDesk/issues/16) ] [V1.3][P0] 扩展平台安全与可靠性加固总任务 | P0 | 无 | 汇总修复、追踪依赖与发布门槛 |
+| T-01 | [ [#17](https://github.com/EziosWJ/EdgeDesk/issues/17) ] [V1.3][P0] 阻止扩展文件 API 访问平台内部数据 | P0 | 无 | 文件安全边界、受保护路径与别名测试 |
+| T-02 | [ [#18](https://github.com/EziosWJ/EdgeDesk/issues/18) ] [V1.3][P0] 修复扩展网络权限与来源策略执行 | P0 | 无 | 授权驱动 CSP、升级来源复核、实际浏览器导航验证 |
+| T-03 | [ [#19](https://github.com/EziosWJ/EdgeDesk/issues/19) ] [V1.3][P1] 完整性清单覆盖实际资源并修正隔离范围 | P1 | 无 | 未登记文件拒绝服务、实际文件集合比对、历史修订隔离语义 |
+| T-04 | [ [#20](https://github.com/EziosWJ/EdgeDesk/issues/20) ] [V1.3][P1] 保证重装失败时应用 KV 数据不丢失 | P1 | 无 | 数据删除与安装状态提交事务化、失败/崩溃恢复 |
+| T-05 | [ [#21](https://github.com/EziosWJ/EdgeDesk/issues/21) ] [V1.3][P1] 控制扩展包安装与静态资源服务的内存占用 | P1 | 无 | 流式处理、减少元数据副本、静态资源传输设计与峰值内存验证 |
+| T-06 | [ [#22](https://github.com/EziosWJ/EdgeDesk/issues/22) ] [V1.3][P1] 统一清理过期扩展会话及关联资源 | P1 | 无 | 终端、传输、临时文件、锁与事件订阅的幂等清理 |
+| T-07 | [ [#23](https://github.com/EziosWJ/EdgeDesk/issues/23) ] [V1.3][P2] 对扩展错误上报与审计信息进行脱敏 | P2 | 无 | 敏感值脱敏、URL 参数处理、日志结构与长度限制 |
+| T-08 | [ [#24](https://github.com/EziosWJ/EdgeDesk/issues/24) ] [Build][P0] 修复 x86_64-musl 与 ARM64-musl 的 ZLIB 依赖 | P0 | 无 | 目标 sysroot、CMake 查找、静态链接和完整 CI |
 
 > T-00 是协调/验收总任务；T-01 至 T-08 各自建立独立 GitHub Issue 与实现 PR。不要把所有改动塞进一个大 PR。
 
