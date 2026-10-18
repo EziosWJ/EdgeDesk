@@ -20,6 +20,17 @@
 - [V1.2 实施计划与 Issue 拆分](tasks/0006-desktop-workspace.md)
 - [桌面快捷键与焦点规则](design/desktop-keyboard-shortcuts.md)
 
+## 扩展应用平台（计划中，尚未实现）
+
+- [SPEC-0007：扩展应用平台与静态 Web 应用运行时](spec/0007-extension-applications.md)：完整记录第 1～98 轮已确认决策及验收标准。
+- [ADR-0011：扩展应用包、运行时与数据存储](adr/0011-extension-runtime-and-packages.md)
+- [ADR-0012：扩展应用权限、通信与网络安全边界](adr/0012-extension-security-and-communication.md)
+- [ADR-0013：扩展文件 API、分块传输与并发一致性](adr/0013-extension-file-api-and-transfer.md)
+- [扩展应用安全风险清单](security/extension-app-risk-register.md)：已接受风险、强制安全边界和发布门槛。
+- [扩展应用分阶段实施计划](tasks/0007-extension-applications.md)：阶段、建议 Issue 依赖、验收与发布门槛。
+
+> 本节文档仅冻结需求与技术决策；扩展运行时、安装器、SQLite 管理器和文件桥接尚未因此实现。不得将计划文档当作功能完成证明。
+
 ## ADR（为什么这样做）
 
 | 文档 | 内容 | 状态 |
@@ -34,6 +45,9 @@
 | [ADR-0008](adr/0008-authentication-and-settings.md) | V1.1 单管理员密码认证、首次初始化、独立 API Token 与系统设置 | 已实现（V1.1.0） |
 | [ADR-0009](adr/0009-desktop-workspace-architecture.md) | 桌面壳层、应用注册表、统一窗口管理与自研交互 | 已实现（V1.2.0） |
 | [ADR-0010](adr/0010-desktop-persistence-and-recovery.md) | 浏览器本地桌面布局、窗口恢复与终端会话重连 | 已实现（V1.2.0） |
+| [ADR-0011](adr/0011-extension-runtime-and-packages.md) | 扩展应用包、静态 iframe 运行时、SQLite 局部存储与版本修订 | 已确认；待实施 |
+| [ADR-0012](adr/0012-extension-security-and-communication.md) | 扩展权限快照、JSON-RPC/MessagePort、CSP 与网络安全边界 | 已确认；含已接受风险 |
+| [ADR-0013](adr/0013-extension-file-api-and-transfer.md) | 扩展文件 API、1 MiB 分块、原子上传与文件锁 | 已确认；待实施 |
 
 ## Spec（要做什么）
 
@@ -45,6 +59,7 @@
 | [SPEC-0004](spec/0004-device-dashboard.md) | 设备基本资源与实时曲线 |
 | [SPEC-0005](spec/0005-authentication-and-settings.md) | V1.1 管理员认证、首次初始化、系统设置与验收 |
 | [SPEC-0006](spec/0006-desktop-workspace.md) | V1.2 桌面图标、Dock、启动器、窗口管理、持久化与恢复 |
+| [SPEC-0007](spec/0007-extension-applications.md) | 扩展应用 ZIP 包、安装/审批/升级/卸载、iframe 沙箱、宿主 API、KV 与文件传输；含第 1～98 轮决策台账 |
 
 ## 实施计划
 
@@ -52,6 +67,7 @@
 | --- | --- |
 | [SPEC-0005 开发任务拆分](tasks/0005-authentication-and-settings.md) | V1.1 认证与设置的实现决策、任务依赖、测试矩阵与发布门槛 |
 | [SPEC-0006 V1.2 实施计划](tasks/0006-desktop-workspace.md) | 桌面化分阶段实施、Issue 拆分、通用完成定义与发布门槛 |
+| [SPEC-0007 扩展应用平台实施计划](tasks/0007-extension-applications.md) | Phase 0～9、建议 Issue 依赖、验收标准与发布门槛（待实施） |
 
 ## 设计素材
 
