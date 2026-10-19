@@ -189,7 +189,13 @@ Error ExtensionRuntime::create_session(std::string_view app_id, std::string_view
     out.revision_id = app.active_revision_id;
     out.version = app.active_version;
     out.permissions = app.granted_permissions;
-    for (const auto& origin : manifest.origins) out.origins.push_back(origin.to_string());
+    if (std::find(out.permissions.begin(), out.permissions.end(), permission_name(Permission::network)) !=
+        out.permissions.end()) {
+        std::vector<std::string> approved;
+        error = store_.list_network_origins(app_id, approved);
+        if (!error.ok()) return error;
+        out.origins = intersect_origins(origin_strings(manifest.origins), approved);
+    }
     out.created_at = now_unix_seconds();
 
     std::lock_guard<std::mutex> lock(mutex_);

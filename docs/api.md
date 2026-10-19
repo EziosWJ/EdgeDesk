@@ -194,9 +194,9 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 | `GET` | `/api/extensions/{app_id}` | 应用详情 + 修订列表。 |
 | `PUT` | `/api/extensions/install` | 原始 ZIP body（`Content-Type: application/zip`）。查询参数 `restore_data=1`、`overwrite=1`、`allow_downgrade=1`。流式写入临时文件，不受 JSON/上传大小上限约束。成功 `201`。 |
 | `PUT` | `/api/extensions/{app_id}/upgrade` | 同上传方式；manifest id 必须匹配路径应用。 |
-| `POST` | `/api/extensions/{app_id}/approve` | body `{"permissions":[...],"enable":bool}`；权限必须是申请集合的子集。 |
+| `POST` | `/api/extensions/{app_id}/approve` | body `{"permissions":[...],"enable":bool}`；权限必须是申请集合的子集。授予 `network` 时同时记录当前活动修订声明的来源。 |
 | `POST` | `/api/extensions/{app_id}/enable` / `disable` | 启用前检查修订与宿主 API 兼容；禁用立即终止运行实例。 |
-| `POST` | `/api/extensions/{app_id}/permissions` | 更新有效授权；对现有实例延迟生效。 |
+| `POST` | `/api/extensions/{app_id}/permissions` | 更新有效授权；对现有实例延迟生效。授予 `network` 时记录当前活动修订来源，撤销时清除记录。 |
 | `POST` | `/api/extensions/{app_id}/uninstall` | body `{"data_action":"keep"\|"delete"}`；立即撤销权限，审计保留。 |
 | `POST` | `/api/extensions/{app_id}/activate` | body `{"revision_id":"...","confirm":true}`；主动升级/降级已有修订。 |
 | `POST` | `/api/extensions/{app_id}/pin` | body `{"revision_id":"...","pinned":bool}`；固定修订避免清理。 |
@@ -207,6 +207,12 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 `approval_required`。相同 SemVer 未确认覆盖返回 `409 conflict`；降级需
 `allow_downgrade=1` 或 `activate`。
 
+网络来源授权：有效来源为活动修订声明来源与管理员已批准来源的交集，且必须存在
+`network` 授权。升级或 `activate` 切换修订时，若新修订来源集合超出已批准集合，
+安装/切换仍成功且应用保持启用，但 `network` 从 `granted_permissions` 移除，
+需再次调用 `approve`/`permissions` 审核；撤销、卸载（含保留数据）、隔离与重装
+清除批准记录。旧 schema 中已有 `network` 授权而无批准来源时按未批准处理。
+
 ## 扩展静态资源
 
 `GET|HEAD /apps/{appId}/{version}/{revisionId}/{relativePath}`
@@ -215,8 +221,10 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
   完整性正常**的修订；其他状态返回 `404`。
 - 无扩展名路径回退 `index.html`；带扩展名的缺失资源返回 `404`，不做 SPA 回退。
 - 响应 `Cache-Control: public, max-age=31536000, immutable`，带完整性 SHA-256 `ETag`。
-- 应用专属 CSP 列出声明来源；`object-src 'none'`、`base-uri 'none'`、
-  `frame-ancestors 'self'`；`X-Frame-Options: SAMEORIGIN`。
+- 应用专属 CSP 只列出**有效来源**（声明 ∩ 已批准，且存在 `network` 授权）；无授权时
+  不产生任何外部 source。CSP 不约束 `window.open`、`target="_blank"` 或 iframe 自身
+  顶层导航；`object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'self'`；
+  `X-Frame-Options: SAMEORIGIN`。
 
 ## 扩展运行时 API
 
@@ -226,7 +234,7 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `POST` | `/api/extensions/runtime/sessions` | body `{"app_id":"...","instance_id":"..."}`；返回权限快照、来源、静态基址和 `token`。 |
+| `POST` | `/api/extensions/runtime/sessions` | body `{"app_id":"...","instance_id":"..."}`；返回权限快照、**有效网络来源**（声明 ∩ 批准，无授权时为空）、静态基址和 `token`。 |
 | `DELETE` | `/api/extensions/runtime/sessions` | 结束当前令牌对应实例并关闭其终端/传输。 |
 | `POST` | `/api/extensions/runtime/storage/get\|set\|delete\|list\|transaction` | 隔离 KV；键 1..1024 字节，值 JSON ≤256 KiB/键，5 MiB/应用；事务全成全败。 |
 | `POST` | `/api/extensions/runtime/files/list\|stat\|read\|mkdir\|rename\|delete` | 虚拟路径；目录游标分页；`CURSOR_STALE` 返回 `409 cursor_stale`。 |

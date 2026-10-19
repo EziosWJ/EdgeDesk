@@ -4,6 +4,7 @@
 #include "extensions/extension_store.hpp"
 
 #include <filesystem>
+#include <sqlite3.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -243,6 +244,124 @@ void test_operations_and_persistence(const fs::path& root) {
     CHECK_STR_EQ(entry.value, "value");
 }
 
+void test_network_origins(const fs::path& root) {
+    Error error;
+    auto store = ExtensionStore::open(root.string(), error);
+    CHECK(store != nullptr);
+    if (!store) return;
+    const std::string app = "io.example.origins";
+    CHECK(store->upsert_app(make_app(app)).ok());
+
+    std::vector<std::string> origins;
+    CHECK(store->list_network_origins(app, origins).ok());
+    CHECK(origins.empty());
+
+    CHECK(store->replace_network_origins(app, {"https://*.example.com", "http://127.0.0.1:8080"}).ok());
+    origins.clear();
+    CHECK(store->list_network_origins(app, origins).ok());
+    CHECK_EQ(origins.size(), std::size_t{2});
+    CHECK_STR_EQ(origins[0], "http://127.0.0.1:8080");  // ordered
+    CHECK_STR_EQ(origins[1], "https://*.example.com");
+
+    // Replacement is exact.
+    CHECK(store->replace_network_origins(app, {"https://example.com"}).ok());
+    origins.clear();
+    CHECK(store->list_network_origins(app, origins).ok());
+    CHECK_EQ(origins.size(), std::size_t{1});
+    CHECK_STR_EQ(origins[0], "https://example.com");
+
+    CHECK(store->clear_network_origins(app).ok());
+    origins.clear();
+    CHECK(store->list_network_origins(app, origins).ok());
+    CHECK(origins.empty());
+
+    // Foreign-key cascade removes approvals with the app row.
+    CHECK(store->replace_network_origins(app, {"https://example.com"}).ok());
+    CHECK(store->delete_app_record(app).ok());
+    origins.clear();
+    CHECK(store->list_network_origins(app, origins).ok());
+    CHECK(origins.empty());
+}
+
+bool raw_sqlite_exec(const std::string& path, const char* sql) {
+    sqlite3* db = nullptr;
+    if (sqlite3_open(path.c_str(), &db) != SQLITE_OK) {
+        if (db != nullptr) sqlite3_close(db);
+        return false;
+    }
+    const bool ok = sqlite3_exec(db, sql, nullptr, nullptr, nullptr) == SQLITE_OK;
+    sqlite3_close(db);
+    return ok;
+}
+
+void test_v1_schema_migration(const fs::path& root) {
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const std::string db_path = (root / "extensions.db").string();
+    const char* v1_schema = R"SQL(
+PRAGMA user_version=1;
+CREATE TABLE apps (
+    app_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    active_revision_id TEXT,
+    active_version TEXT,
+    data_retained INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE permission_grants (
+    app_id TEXT NOT NULL,
+    module TEXT NOT NULL,
+    granted_at INTEGER NOT NULL,
+    PRIMARY KEY(app_id, module),
+    FOREIGN KEY(app_id) REFERENCES apps(app_id) ON DELETE CASCADE
+);
+INSERT INTO apps(app_id, display_name, status, created_at, updated_at)
+VALUES('io.example.legacy', 'Legacy App', 'enabled', 1, 1);
+INSERT INTO permission_grants(app_id, module, granted_at)
+VALUES('io.example.legacy', 'network', 1);
+)SQL";
+    CHECK(raw_sqlite_exec(db_path, v1_schema));
+
+    Error error;
+    auto store = ExtensionStore::open(root.string(), error);
+    CHECK(store != nullptr);
+    if (!store) {
+        std::fprintf(stderr, "migration open error: %s\n", error.message.c_str());
+        return;
+    }
+    bool found = false;
+    AppRecord app;
+    CHECK(store->get_app("io.example.legacy", app, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(app.display_name, "Legacy App");
+    CHECK_EQ(app.granted_permissions.size(), std::size_t{1});
+    CHECK_STR_EQ(app.granted_permissions[0], "network");
+
+    // New table is usable after the in-place upgrade.
+    CHECK(store->replace_network_origins("io.example.legacy", {"https://example.com"}).ok());
+    std::vector<std::string> origins;
+    CHECK(store->list_network_origins("io.example.legacy", origins).ok());
+    CHECK_EQ(origins.size(), std::size_t{1});
+    CHECK_STR_EQ(origins[0], "https://example.com");
+}
+
+void test_schema_version_after_migration(const fs::path& root) {
+    sqlite3* db = nullptr;
+    CHECK(sqlite3_open((root / "extensions.db").c_str(), &db) == SQLITE_OK);
+    if (db == nullptr) return;
+    sqlite3_stmt* stmt = nullptr;
+    int version = 0;
+    if (sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &stmt, nullptr) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW) {
+        version = sqlite3_column_int(stmt, 0);
+    }
+    if (stmt != nullptr) sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    CHECK_EQ(version, 2);
+}
+
 void test_recovery_after_process_crash(const fs::path& root) {
     // A pending operation whose revision row is missing must be markable as
     // failed, and a second open must observe the same consistent schema.
@@ -269,6 +388,11 @@ int main() {
     test_apps_permissions_revisions(root);
     test_kv(root);
     test_operations_and_persistence(root);
+    test_network_origins(root);
+    const auto migration_root = fs::path(root.string() + "-migration");
+    test_v1_schema_migration(migration_root);
+    test_schema_version_after_migration(migration_root);
+    std::filesystem::remove_all(migration_root);
     test_recovery_after_process_crash(root);
     std::filesystem::remove_all(root);
     return edgedesk::test::finish("extension_store_test");

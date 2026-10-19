@@ -317,9 +317,38 @@ bool Manifest::host_api_compatible() const {
     return extensions::host_api_compatible(host, min_host_api, max_host_api);
 }
 
-std::string Manifest::csp_policy() const {
+std::vector<std::string> origin_strings(const std::vector<NetworkOrigin>& origins) {
+    std::vector<std::string> out;
+    out.reserve(origins.size());
+    for (const auto& origin : origins) out.push_back(origin.to_string());
+    return out;
+}
+
+std::vector<std::string> intersect_origins(const std::vector<std::string>& declared,
+                                           const std::vector<std::string>& approved) {
+    std::vector<std::string> out;
+    for (const auto& origin : declared) {
+        if (std::find(approved.begin(), approved.end(), origin) != approved.end()) out.push_back(origin);
+    }
+    return out;
+}
+
+bool origins_subset(const std::vector<std::string>& declared,
+                    const std::vector<std::string>& approved) {
+    for (const auto& origin : declared) {
+        if (std::find(approved.begin(), approved.end(), origin) == approved.end()) return false;
+    }
+    return true;
+}
+
+std::string Manifest::csp_policy() const { return csp_policy({}); }
+
+std::string Manifest::csp_policy(const std::vector<std::string>& origins) const {
     std::vector<std::string> external;
-    for (const auto& origin : origins) {
+    for (const auto& text : origins) {
+        NetworkOrigin origin;
+        std::string error;
+        if (!NetworkOrigin::parse(text, origin, error)) continue;
         const auto sources = origin.csp_sources();
         external.insert(external.end(), sources.begin(), sources.end());
     }

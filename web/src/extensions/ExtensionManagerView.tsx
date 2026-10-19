@@ -471,6 +471,12 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
                       );
                     })}
                   </div>
+                  {selected.requested_permissions.includes('network') &&
+                    !selected.granted_permissions.includes('network') && (
+                      <p className="ed-ext-hint" role="status">
+                        网络来源尚未授权，应用无法加载任何外部资源。升级新增或扩大的来源需要管理员重新审核后才会生效。
+                      </p>
+                    )}
                   {selected.network_origins.length > 0 && (
                     <div className="ed-ext-origins">
                       <span>已声明的外部来源（共用白名单，http/明文风险自担）</span>

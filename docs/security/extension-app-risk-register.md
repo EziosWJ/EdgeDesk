@@ -15,8 +15,8 @@
 | R-01 | 管理员上传、结构校验、默认拒绝权限、首次审批、未验证发布者 UI 警告 | `extension_package_test`、集成测试 | 风险仍接受 |
 | R-02/R-19 | 流式解压、声明大小磁盘预检、临时目录、失败清理、原子激活；无固定包大小/文件数上限 | `extension_package_test` | 风险仍接受 |
 | R-03 | 每消息结构与权限校验、异常隔离；保留核心 HTTP 限流/请求体积限制；不新增扩展级限额 | 代码审查、集成测试 | 风险仍接受且未消除 |
-| R-04 | 统一来源白名单、通配符含根域名、CSP、UI 展示来源与 HTTP 明文提示 | `manifest_test`、浏览器 CSP 检查 | 重定向/HTTP 风险仍接受 |
-| R-05 | 弹窗离开 sandbox 但宿主 API 仅接受指定 `event.source`/opaque origin/随机握手；`window.opener` 风险保留 | 浏览器 E2E、代码审查 | 残余风险接受 |
+| R-04 | 有效来源 = 声明 ∩ 批准且需 network 授权；升级扩大来源清空 network 授权；CSP 覆盖资源加载；UI 展示来源与 HTTP 明文提示 | `manifest_test`、`extension_store_test`、`extension_package_test`、集成测试、浏览器边界脚本 | 授权执行缺陷已修复；HTTP/重定向风险仍接受 |
+| R-05 | 弹窗离开 sandbox 但宿主 API 仅接受指定 `event.source`/opaque origin/随机握手；`window.opener` 风险保留 | 浏览器边界脚本、代码审查 | 顶层导航/弹窗逃逸为已记录残余风险（ADR-0014 Proposed） |
 | R-06 | 特权 API 仅经 MessagePort；运行时令牌只存宿主页面；后端按会话快照复核 | 集成测试、E2E | 已实现 |
 | R-07 | 权限快照；禁用/升级/卸载/隔离立即失效令牌并关闭终端；单权限撤销延迟 | 集成测试（禁用后 401/403） | 已实现 |
 | R-08 | 复用 `PathSandbox`/`openat`；扩展不拼接绝对路径 | 既有 + 扩展测试 | 不弱化核心防护 |
@@ -78,9 +78,29 @@
 
 所有外部用途共用一份获批来源白名单，HTTP/HTTPS 均可用，且只校验初始 URL。批准一个域名可能同时允许该域名的脚本、图片、iframe、表单和 API 请求；HTTP 可被中间人读取/篡改；重定向可能把浏览器带到初始白名单之外。CSP 必须正确配置，但不能承诺其对每种资源类型提供相同的逐跳目标校验。上线前需要使用真实目标浏览器验证实际行为，并在管理员授权界面清晰展示来源范围和 HTTP 风险。
 
-### R-05 弹窗 opener
+2026-10-19（T-02 / #18）区分如下：
+
+- **已修复缺陷**：未授予 `network` 时仍注入 manifest 全部来源；升级扩大来源后仍保留
+  `network` 授权；运行会话快照未考虑授权。现在有效来源为“活动修订声明 ∩ 管理员批准”，
+  且必须存在 `network` 授权；升级/回滚切换修订时若来源集合扩大则移除 `network` 授权，
+  需重新审批。批准记录存于 SQLite `network_origins`，撤销/卸载/隔离/重装时清除。
+- **仍接受的残余风险**：HTTP 明文、统一白名单跨用途共用、只校验初始 URL 与重定向跳转、
+  以及 CSP 不覆盖 `window.open`/`target="_blank"`/iframe 自身顶层导航。最后一项由
+  [ADR-0014](../adr/0014-extension-popup-navigation-boundary.md)（Proposed）记录，
+  浏览器边界脚本实际确认了逃逸行为，不得声称网络权限阻止了任意顶层导航。
+
+### R-05 弹窗 opener 与顶层导航
 
 标准 window.opener 有助于第三方登录回调，但外部页面可能尝试导航 opener。回调必须验证预期来源、窗口引用、nonce、state 和消息结构；禁止在回调消息中接受任意宿主 API 指令或可重用宿主凭据。仅校验 origin 不足以完全解决反向标签页劫持。未来若安全等级要求更高，需要重新评估无 opener 的授权回调设计，并走决策变更。
+
+2026-10-19（T-02 / #18）浏览器实测确认：sandbox iframe 的 `window.open`、
+`target="_blank"` 链接和 iframe 自身 `location.href` 导航在“网络未授权”和
+“已授权”两种 CSP 下都会到达未声明来源。`allow-popups-to-escape-sandbox` 使弹窗
+脱离 sandbox 后不受扩展 CSP 约束；SDK 的 `openExternal()` 校验只是开发者辅助，
+不能拦截直接浏览器调用，**不是安全边界**。保留该能力是为了不破坏已确认的 OAuth
+流程；宿主桥接继续通过 `event.source`、opaque origin、随机握手和权限快照隔离，
+弹窗不能获得宿主凭据或应用 KV。该残余风险与后续选项见
+[ADR-0014](../adr/0014-extension-popup-navigation-boundary.md)（Proposed）。
 
 ### R-06/R-07 权限执行边界与延迟撤销
 

@@ -61,6 +61,12 @@ std::vector<std::string> intersect(const std::vector<std::string>& left,
     return out;
 }
 
+constexpr const char* kNetworkPermission = "network";
+
+void revoke_network(std::vector<std::string>& grants) {
+    grants.erase(std::remove(grants.begin(), grants.end(), kNetworkPermission), grants.end());
+}
+
 Error read_small_file(const PathSandbox& sandbox, const std::string& path, std::size_t max_bytes,
                       std::string& out) {
     UniqueFd fd;
@@ -450,9 +456,10 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
 
     const auto requested = permission_names(manifest.permissions);
     const std::string previous_active = upgrading ? existing.active_revision_id : "";
-    const auto retained_grants = upgrading ? intersect(existing.granted_permissions, requested)
-                                           : std::vector<std::string>{};
+    auto retained_grants = upgrading ? intersect(existing.granted_permissions, requested)
+                                     : std::vector<std::string>{};
     const bool requires_fresh_approval = !found || reinstall || existing.status == app_status::isolated;
+    const auto declared_origins = origin_strings(manifest.origins);
 
     error = store_->run_transaction([&]() -> Error {
         if (!previous_active.empty()) {
@@ -474,11 +481,22 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
         transaction_error = store_->replace_permission_requests(manifest.id, requested);
         if (!transaction_error.ok()) return transaction_error;
         if (requires_fresh_approval) {
-            transaction_error = store_->replace_permission_grants(manifest.id, {});
-        } else {
-            transaction_error = store_->replace_permission_grants(manifest.id, retained_grants);
+            retained_grants.clear();
+        } else if (contains(retained_grants, kNetworkPermission)) {
+            // Keeping network requires the new revision to stay inside the
+            // administrator's previously approved origin set. Expanded or
+            // changed origins force an explicit re-review.
+            std::vector<std::string> approved;
+            transaction_error = store_->list_network_origins(manifest.id, approved);
+            if (!transaction_error.ok()) return transaction_error;
+            if (!origins_subset(declared_origins, approved)) {
+                revoke_network(retained_grants);
+            }
         }
-        return transaction_error;
+        transaction_error = store_->replace_permission_grants(manifest.id, retained_grants);
+        if (!transaction_error.ok()) return transaction_error;
+        if (contains(retained_grants, kNetworkPermission)) return Error::none();
+        return store_->clear_network_origins(manifest.id);
     });
     if (!error.ok()) {
         fail_operation(operation_id, temp_path, destination, error.message);
@@ -565,17 +583,28 @@ Error PackageManager::approve(std::string_view app_id, const std::vector<std::st
         if (!contains(unique, permission)) unique.push_back(permission);
     }
     std::sort(unique.begin(), unique.end());
+    Manifest manifest;
+    bool manifest_loaded = false;
     if (enable) {
-        Manifest manifest;
         Error manifest_error = active_manifest(app_id, manifest);
         if (!manifest_error.ok()) return manifest_error;
+        manifest_loaded = true;
         if (app.status == app_status::isolated) {
             return Error::make(ErrorCode::conflict,
                                "application is isolated after an integrity failure; reinstall it first");
         }
     }
+    const bool network_granted = contains(unique, kNetworkPermission);
+    if (network_granted && !manifest_loaded) {
+        Error manifest_error = active_manifest(app_id, manifest);
+        if (!manifest_error.ok()) return manifest_error;
+    }
+    const auto approved_origins = network_granted ? origin_strings(manifest.origins)
+                                                  : std::vector<std::string>{};
     error = store_->run_transaction([&]() -> Error {
         Error transaction_error = store_->replace_permission_grants(app_id, unique);
+        if (!transaction_error.ok()) return transaction_error;
+        transaction_error = store_->replace_network_origins(app_id, approved_origins);
         if (!transaction_error.ok()) return transaction_error;
         if (enable) return store_->set_app_status(app_id, app_status::enabled);
         if (app.status == app_status::pending_review) return store_->set_app_status(app_id, app_status::disabled);
@@ -634,7 +663,19 @@ Error PackageManager::update_permissions(std::string_view app_id,
         if (!contains(unique, permission)) unique.push_back(permission);
     }
     std::sort(unique.begin(), unique.end());
-    error = store_->replace_permission_grants(app_id, unique);
+    const bool network_granted = contains(unique, kNetworkPermission);
+    Manifest manifest;
+    if (network_granted) {
+        Error manifest_error = active_manifest(app_id, manifest);
+        if (!manifest_error.ok()) return manifest_error;
+    }
+    const auto approved_origins = network_granted ? origin_strings(manifest.origins)
+                                                  : std::vector<std::string>{};
+    error = store_->run_transaction([&]() -> Error {
+        Error transaction_error = store_->replace_permission_grants(app_id, unique);
+        if (!transaction_error.ok()) return transaction_error;
+        return store_->replace_network_origins(app_id, approved_origins);
+    });
     if (!error.ok()) return error;
     return store_->get_app(app_id, app, found);
 }
@@ -654,6 +695,8 @@ Error PackageManager::uninstall(std::string_view app_id, bool keep_data) {
     const std::string app_id_string(app_id);
     error = store_->run_transaction([&]() -> Error {
         Error transaction_error = store_->clear_permission_grants(app_id);
+        if (!transaction_error.ok()) return transaction_error;
+        transaction_error = store_->clear_network_origins(app_id);
         if (!transaction_error.ok()) return transaction_error;
         transaction_error = store_->replace_permission_requests(app_id, {});
         if (!transaction_error.ok()) return transaction_error;
@@ -725,7 +768,8 @@ Error PackageManager::activate_revision(std::string_view app_id, std::string_vie
     }
     const std::string previous_active = app.active_revision_id;
     const auto requested = permission_names(manifest.permissions);
-    const auto grants = intersect(app.granted_permissions, requested);
+    auto grants = intersect(app.granted_permissions, requested);
+    const auto declared_origins = origin_strings(manifest.origins);
     const bool was_isolated = app.status == app_status::isolated;
     error = store_->run_transaction([&]() -> Error {
         if (!previous_active.empty()) {
@@ -744,8 +788,20 @@ Error PackageManager::activate_revision(std::string_view app_id, std::string_vie
         if (!transaction_error.ok()) return transaction_error;
         transaction_error = store_->replace_permission_requests(app_id, requested);
         if (!transaction_error.ok()) return transaction_error;
+        if (contains(grants, kNetworkPermission)) {
+            // Downgrades and rollbacks follow the same rule as upgrades: an
+            // origin set outside the approved set needs a fresh review.
+            std::vector<std::string> approved;
+            transaction_error = store_->list_network_origins(app_id, approved);
+            if (!transaction_error.ok()) return transaction_error;
+            if (!origins_subset(declared_origins, approved)) revoke_network(grants);
+        }
         transaction_error = store_->replace_permission_grants(app_id, grants);
         if (!transaction_error.ok()) return transaction_error;
+        if (!contains(grants, kNetworkPermission)) {
+            transaction_error = store_->clear_network_origins(app_id);
+            if (!transaction_error.ok()) return transaction_error;
+        }
         if (was_isolated) {
             transaction_error = store_->set_app_status(app_id, app_status::disabled);
         }
@@ -857,6 +913,8 @@ Error PackageManager::check_integrity(std::string_view app_id, std::string_view 
             if (!transaction_error.ok()) return transaction_error;
             transaction_error = store_->clear_permission_grants(app_id);
             if (!transaction_error.ok()) return transaction_error;
+            transaction_error = store_->clear_network_origins(app_id);
+            if (!transaction_error.ok()) return transaction_error;
             result.app_isolated = true;
         }
         return transaction_error;
@@ -944,7 +1002,14 @@ Error PackageManager::read_static(std::string_view app_id, std::string_view vers
     std::vector<std::string> warnings;
     std::string manifest_error;
     if (parse_manifest(document, manifest, manifest_error, warnings)) {
-        asset.csp = manifest.csp_policy();
+        std::vector<std::string> effective_origins;
+        if (contains(app.granted_permissions, kNetworkPermission)) {
+            std::vector<std::string> approved;
+            Error origins_error = store_->list_network_origins(app_id, approved);
+            if (!origins_error.ok()) return origins_error;
+            effective_origins = intersect_origins(origin_strings(manifest.origins), approved);
+        }
+        asset.csp = manifest.csp_policy(effective_origins);
     }
     return Error::none();
 }

@@ -67,8 +67,25 @@ struct Manifest {
 
     bool has_permission(Permission permission) const;
     bool host_api_compatible() const;
+    // Emits a same-origin policy with no external sources. Callers that serve
+    // an application with an effective network grant must use the overload
+    // below; this overload is the secure default.
     std::string csp_policy() const;
+    // `origins` are canonical NetworkOrigin strings that are both declared by
+    // the manifest and covered by the administrator's approval. Only these
+    // become script/style/img/font/connect/media/frame/child/form sources.
+    std::string csp_policy(const std::vector<std::string>& origins) const;
 };
+
+// Canonical `scheme://host[:port]` strings in manifest order.
+std::vector<std::string> origin_strings(const std::vector<NetworkOrigin>& origins);
+// Declared origins that are also present in `approved`, preserving declared
+// order. Used for CSP and runtime session snapshots.
+std::vector<std::string> intersect_origins(const std::vector<std::string>& declared,
+                                           const std::vector<std::string>& approved);
+// True when every declared origin is present in `approved`.
+bool origins_subset(const std::vector<std::string>& declared,
+                    const std::vector<std::string>& approved);
 
 // Validates a complete manifest. Unknown top-level keys are preserved for
 // forward compatibility; execution-oriented backend/script fields are ignored
