@@ -27,6 +27,39 @@
 - 两个失败目标在 CMake 配置阶段均未找到目标 ZLIB 头文件/库；跟踪于 [Issue #24](https://github.com/EziosWJ/EdgeDesk/issues/24)。
 - 该结果不否定旧 PR #14 当时的 5/5 通过记录，但旧 PR 的通过不能代替当前提交的跨平台验收。SPEC-0008 的安全与可靠性修复另见 [总任务 #16](https://github.com/EziosWJ/EdgeDesk/issues/16)。
 
+## 2026-10-19 Issue #24：musl ZLIB 依赖修复的本地验证
+
+- 修复方式：zlib **1.3.1** 固定版本 vendored 到 `third_party/zlib/`（来源与
+  SHA-256 见 `third_party/README.md`），由静态目标 `edgedesk_zlib` 构建并从
+  `edgedesk_core` `PUBLIC` 链接；`find_package(ZLIB)` 已移除，宿主与交叉构建
+  使用同一份源码，不再依赖工具链 sysroot 中的 ZLIB 或宿主 glibc zlib。
+- 工具链：Bootlin `x86-64--musl--stable-2026.08-1` 与
+  `aarch64--musl--stable-2026.08-1`（GCC 15.3）。构建目录为 `out/build/x86_64-musl`
+  与 `out/build/aarch64-musl`，资源模式为 disk（本次未重跑 `#embed` lane）。
+- 同时修复了两个在 musl 目标上暴露的既有问题：四个测试缺少 `<unistd.h>`
+  （`getpid`）；`remove_tree_at` 的 RAII closer 在手动关闭后对 `nullptr` 调用
+  `closedir`（glibc 容忍、musl 段错误）。均为构建/测试阻塞项，未改变产品行为。
+
+| 验证 | 实际命令 | 结果 |
+| --- | --- | --- |
+| 宿主 L0 | `JOBS=12 CTEST_JOBS=6 scripts/test-fast.sh --no-frontend` | **16/16 原生通过**；SDK/CLI **4/4 通过**。当时 `web/node_modules` 不存在，前端按脚本规则跳过。 |
+| 宿主 L1 | `JOBS=12 CTEST_JOBS=6 scripts/test-pr.sh --port 19121` | 前端 **144/144 通过**，`tsc --noEmit` + Vite 构建通过；dev-disk `ctest` **16/16 通过**；完整集成（auth/api/ws/限流/扩展/崩溃恢复）**ALL TESTS PASSED**，共 157 s。 |
+| x86_64 musl 配置/构建 | `EDGEDESK_TOOLCHAIN_ROOT=$HOME/opt/musl/x86-64--musl--stable-2026.08-1 cmake -S . -B out/build/x86_64-musl -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/x86_64-linux-musl.cmake -DEDGEDESK_WEB_MODE=disk -DEDGEDESK_BUILD_WEB=OFF -DEDGEDESK_STATIC_PIE=ON && cmake --build out/build/x86_64-musl -j 12` | 配置与编译通过；`file` 报告 `static-pie linked, stripped`；`x86_64-linux-objdump -p` 无 `INTERP`/`NEEDED`。 |
+| x86_64 musl 单测 | `ctest --test-dir out/build/x86_64-musl -j 6 --output-on-failure` | **16/16 通过**。 |
+| x86_64 musl 集成 | `bash scripts/integration_test.sh out/build/x86_64-musl/bin/edgedesk 19131 web/dist` | **ALL TESTS PASSED**。 |
+| aarch64 musl 配置/构建 | `EDGEDESK_TOOLCHAIN_ROOT=$HOME/opt/musl/aarch64--musl--stable-2026.08-1 cmake -S . -B out/build/aarch64-musl -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-musl.cmake -DEDGEDESK_WEB_MODE=disk -DEDGEDESK_BUILD_WEB=OFF -DEDGEDESK_STATIC_PIE=ON -DCMAKE_CROSSCOMPILING_EMULATOR="$HOME/opt/arm64/root/usr/bin/qemu-aarch64-static;-L;$HOME/opt/arm64/root" && cmake --build out/build/aarch64-musl -j 12` | 配置与编译通过；`file` 报告 `ARM aarch64, static-pie linked, stripped`；`aarch64-linux-objdump -p` 无 `INTERP`/`NEEDED`。 |
+| aarch64 musl 运行 | `qemu-aarch64-static -L $HOME/opt/arm64/root out/build/aarch64-musl/bin/edgedesk --version` | 输出 `EdgeDesk 1.3.0`。 |
+| aarch64 musl 单测 | `ctest --test-dir out/build/aarch64-musl -j 4 --output-on-failure`（CMake 已设置 qemu emulator） | **16/16 通过**（qemu-user；`terminal_session_test` 使用 ARM64 rootfs 中的 Bash）。 |
+| aarch64 musl 集成 | `bash scripts/integration_test.sh out/build/aarch64-musl/bin/edgedesk 19141 web/dist "$HOME/opt/arm64/root/usr/bin/qemu-aarch64-static -L $HOME/opt/arm64/root"` | **ALL TESTS PASSED**。 |
+
+未验证（本次提交不能声明通过）：
+
+- **GitHub Actions 全矩阵尚未在本分支/提交上运行。** 上文的失败结论仍对应
+  run #39132868799；只有合并请求实际跑绿后才能关闭 Issue #24。
+- x86_64 / aarch64 的 `#embed` + static-pie 发布 lane 本次未重跑（本次使用 disk 模式）。
+- ARM32、真实 ARM64 硬件、非 Linux 宿主未验证。
+- 上述结果为本地宿主 + 交叉 + qemu 证据，不替代 L2 发布验收。
+
 ## 测试分层（本地入口）
 
 | 层级 | 入口 | 覆盖 | 何时运行 |
@@ -172,7 +205,7 @@ bash scripts/integration_test.sh out/build/release-embed-arm64/bin/edgedesk 1959
 | GCC 15 + musl + `#embed` 组合 | Bootlin stable-2026.08（GCC 15.3） | 通过（x86_64 与 aarch64，见上） |
 | OpenHarmony ARM64 | 需要对应 SDK | **未验证** |
 | 真实设备（工控板/网关） | 目标硬件 | **未验证**（当前仅有 QEMU 运行证据） |
-| GitHub Actions CI | 本仓库 workflow：frontend + host-build / gcc15-embed / arm64-cross / x86_64-musl-static；npm/ccache/交叉工具链缓存，`web/dist` 通过 artifact 复用 | 通过（PR #14，2026-10-18，5/5 jobs） |
+| GitHub Actions CI | 本仓库 workflow：frontend + host-build / gcc15-embed / arm64-cross / x86_64-musl-static；npm/ccache/交叉工具链缓存，`web/dist` 通过 artifact 复用 | PR #14 曾 5/5 通过；当前复核 run #39132868799 为 3/5（两个 musl job 在 ZLIB 配置阶段失败）。Issue #24 修复后的提交**尚未在 CI 运行**，不能声明通过 |
 
 > 2026-10-17 之后 CI 配置增加了 `frontend` 前置 job、npm/ccache/交叉工具链缓存和
 > `web/dist` artifact 复用；`x86_64-musl-static` 已改为 musl + `#embed` 静态发布

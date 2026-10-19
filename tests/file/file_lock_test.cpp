@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <unistd.h>
 
 using namespace edgedesk;
 
