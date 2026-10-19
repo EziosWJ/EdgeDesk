@@ -248,7 +248,7 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 | `GET` | `/api/extensions/runtime/terminal/sessions` | 列出终端会话。 |
 | `POST` | `/api/extensions/runtime/terminal/sessions` | 创建 PTY；body `title/cwd/cols/rows`。 |
 | `POST` | `/api/extensions/runtime/terminal/close` | body `{"session_id":"..."}`。 |
-| `POST` | `/api/extensions/runtime/errors` | 应用错误上报；只写应用/实例/修订、类型、截断消息与栈到审计。 |
+| `POST` | `/api/extensions/runtime/errors` | 应用错误上报；只写应用/实例/修订、类型、截断消息与栈到审计。type/message/stack 先脱敏、按 UTF-8 边界截断并作为带引号的 `key="value"` 字段编码；审计 sink 再次脱敏 detail/path，并将单字段限制在 8192 字节（超出追加 `[TRUNCATED]`）。不记录原始请求正文。 |
 
 终端输入/输出仍通过宿主页面已有的 `/ws/terminal` 中继到应用；`terminal.access` 权限快照由
 宿主桥接与运行时端点共同检查。会话创建/关闭/列表写审计，不记录原始终端输入输出。

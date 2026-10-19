@@ -136,6 +136,7 @@ add_library(edgedesk_core STATIC
   src/security/auth_store.cpp
   src/security/password_hash.cpp
   src/security/rate_limiter.cpp
+  src/security/redaction.cpp
   src/security/settings_store.cpp
   src/system/cpu_metrics.cpp
   src/system/disk_metrics.cpp
@@ -249,6 +250,7 @@ if(EDGEDESK_BUILD_TESTS)
     auth_store_test:security/auth_store_test.cpp
     password_hash_test:security/password_hash_test.cpp
     settings_store_test:security/settings_store_test.cpp
+    audit_test:security/audit_test.cpp
     command_guard_test:terminal/command_guard_test.cpp
     terminal_session_test:terminal/terminal_session_test.cpp
     system_metrics_test:system/system_metrics_test.cpp

@@ -25,6 +25,17 @@ import zipfile
 FAILURES = []
 ORIGIN = ""
 
+# Fake secrets injected through the runtime error-report bridge. The audit log
+# must never contain these values and must remain one JSON object per line.
+AUDIT_ERROR_SECRETS = [
+    "IT-BEARER-SECRET-0f0f",
+    "IT-COOKIE-SECRET-1a1a",
+    "IT-APIKEY-SECRET-2b2b",
+    "IT-PASSWORD-SECRET-3c3c",
+    "IT-QUERY-SECRET-4d4d",
+    "IT-FRAGMENT-SECRET-5e5e",
+]
+
 
 def check(condition, message):
     if condition:
@@ -192,6 +203,30 @@ def main():
 
         def runtime(path, body):
             return request("POST", "/api/extensions/runtime/" + path, body, cookie, headers=runtime_headers)
+
+        error_message = (
+            "Authorization: Bearer " + AUDIT_ERROR_SECRETS[0] + "\n"
+            "Cookie: edgedesk_session=" + AUDIT_ERROR_SECRETS[1] + "; theme=dark\n"
+            "{\"api_key\":\"" + AUDIT_ERROR_SECRETS[2] + "\"}\n"
+            "password=" + AUDIT_ERROR_SECRETS[3] + "\n"
+            "https://example.com/cb?token=" + AUDIT_ERROR_SECRETS[4] +
+            "#access_token=" + AUDIT_ERROR_SECRETS[5]
+        )
+        status, payload, _ = runtime("errors", {
+            "type": "RuntimeError Bearer " + AUDIT_ERROR_SECRETS[0],
+            "message": error_message,
+            "stack": "Error: token=" + AUDIT_ERROR_SECRETS[4] + " at app.js:1:1",
+        })
+        check(status == 200 and json_body(payload).get("ok") is True,
+              f"runtime error report failed: {status} {payload[:200]!r}")
+
+        # Non-string fields are untrusted input too: they must not crash the
+        # route or be serialized verbatim.
+        status, payload, _ = runtime("errors", {
+            "type": 42, "message": {"nested": True}, "stack": [1, 2],
+        })
+        check(status == 200 and json_body(payload).get("ok") is True,
+              f"non-string error fields should be ignored: {status} {payload[:200]!r}")
 
         status, payload, _ = runtime("storage/set", {"key": "settings", "value": {"n": 1}})
         check(status == 200, f"storage set failed: {status} {payload[:200]!r}")
@@ -567,9 +602,17 @@ def main():
             text = open(audit_path, encoding="utf-8", errors="replace").read()
             for event in ("extension.install", "extension.approve", "extension.upgrade",
                           "extension.integrity", "extension.uninstall", "extension.file",
-                          "extension.terminal", "extension.storage"):
+                          "extension.terminal", "extension.storage", "extension.error"):
                 check(event in text, f"audit event missing: {event}")
             check(args.password not in text, "audit leaked credentials")
+            for line in text.splitlines():
+                try:
+                    json.loads(line)
+                except json.JSONDecodeError:
+                    check(False, f"audit line is not valid JSON: {line[:160]!r}")
+            for secret in AUDIT_ERROR_SECRETS:
+                check(secret not in text, f"audit leaked error-report secret: {secret}")
+            check("[REDACTED]" in text, "audit redaction marker missing")
         else:
             check(False, f"audit log missing: {audit_path}")
 

@@ -6,6 +6,7 @@
 #include "extensions/package_manager.hpp"
 #include "http/upload_state.hpp"
 #include "security/auth.hpp"
+#include "security/redaction.hpp"
 #include "terminal/terminal_manager.hpp"
 
 #include <algorithm>
@@ -115,6 +116,11 @@ bool json_object(HttpRequest* req, hv::Json& body, HttpResponse* resp) {
         return false;
     }
     return true;
+}
+
+std::string string_field(const hv::Json& body, const char* field, const char* fallback) {
+    if (!body.contains(field) || !body[field].is_string()) return fallback;
+    return body[field].get<std::string>();
 }
 
 std::vector<std::string> string_array(const hv::Json& body, const char* field, Error& error) {
@@ -1054,15 +1060,19 @@ int handle_runtime_error_report(RouteContext& ctx, HttpRequest* req, HttpRespons
     if (!runtime_session(ctx, req, resp, session)) return 401;
     hv::Json body;
     if (!json_object(req, body, resp)) return 400;
-    std::string type = body.value("type", "error");
-    std::string message = body.value("message", "");
-    std::string stack = body.value("stack", "");
-    if (type.size() > 120) type.resize(120);
-    if (message.size() > 1024) message.resize(1024);
-    if (stack.size() > 2048) stack.resize(2048);
+    // Extension-supplied diagnostics are untrusted. Redact before applying the
+    // per-field caps, then quote each field so newlines/control characters
+    // cannot forge adjacent key=value entries in the audit detail.
+    const std::string type =
+        truncate_utf8(redact_sensitive(string_field(body, "type", "error")), 120);
+    const std::string message =
+        truncate_utf8(redact_sensitive(string_field(body, "message", "")), 1024);
+    const std::string stack =
+        truncate_utf8(redact_sensitive(string_field(body, "stack", "")), 2048);
     ctx.audit->record("extension.error", "reported",
-                      runtime_detail(session, "error") + " revision=" + session.revision_id + " type=" + type +
-                          " message=" + message + " stack=" + stack,
+                      runtime_detail(session, "error") + " revision=" + session.revision_id +
+                          " type=" + quote_audit_field(type) + " message=" +
+                          quote_audit_field(message) + " stack=" + quote_audit_field(stack),
                       http::client_ip(*ctx.config, req), "");
     hv::Json out;
     out["ok"] = true;
