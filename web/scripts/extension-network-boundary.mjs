@@ -285,6 +285,10 @@ async function runScenario(label, allowApproved) {
   try {
     const page = await openPage(`${HOST_ORIGIN}/host.html?allow=${allowApproved ? 1 : 0}`);
     const results = await page.readResults();
+    // The probe requests a top-level navigation ~100 ms after posting its
+    // results. Give the request time to reach the external server before
+    // closing the page; otherwise the hit list races the navigation.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
     await page.close();
     const hitList = Object.fromEntries(hits);
     console.log(`\n[${label}] iframe results:`, JSON.stringify(results, null, 2));

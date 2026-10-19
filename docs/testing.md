@@ -105,6 +105,9 @@
 - 两种场景下 `window.open`、`target="_blank"` 和 iframe 自身导航均到达未声明
   来源，确认 CSP 不约束顶层导航。该行为按残余风险记录（ADR-0014 Proposed），
   不作为通过项，也不得宣称“网络权限已完全执行”。
+- 集成分支复跑时发现脚本在发出 self-navigation 请求后立即关闭页面，命中记录存在
+  竞态（同一脚本可能间歇性地报缺失）。补充 1.5 s 等待后，denied/approved 两种
+  场景均稳定复现上述导航逃逸；该等待仅用于消除测试竞态，不改变产品行为。
 
 未执行/未验证：`web/node_modules` 不存在，前端单元、Vite 构建及
 `web/scripts/extension-e2e.mjs` 本轮未运行；本轮集成测试使用的 `web/dist`
