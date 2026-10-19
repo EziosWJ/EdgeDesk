@@ -2,7 +2,7 @@
 
 面向嵌入式与边缘 Linux 设备的轻量 Web 运维工作台：单二进制部署，浏览器即可管理
 设备文件、使用真实的 Bash 登录终端并查看设备实时资源占用。设备端不需要安装
-Node/Python/Java 运行时；SQLite 仅作为扩展平台的局部元数据存储。
+Node/Python/Java 运行时；SQLite 仅用于扩展平台元数据与独立 Process Supervisor 管理数据，不迁移认证、设置、终端或指标模块。
 
 > 当前仓库已实现 **V1.3 扩展应用平台首期**：管理员上传 ZIP 静态应用、默认拒绝的模块权限审批、
 > 不可变修订与升级/回滚/完整性隔离、无 `allow-same-origin` 的 iframe 沙箱、
@@ -22,6 +22,7 @@ Node/Python/Java 运行时；SQLite 仅作为扩展平台的局部元数据存�
 | 设备概览 | NAS 风格 CPU、内存、存储（多挂载点）、网卡（多接口，聚合排除 loopback）、系统信息、服务状态小组件 + 实时趋势曲线（WebSocket 增量推送） |
 | 安全 | 单管理员密码登录（Argon2id、首次初始化、本机恢复）、可选 Bearer API Token、CSRF/CSWSH 校验、每 IP 限流、请求体积与并发限制、JSON Lines 审计日志 |
 | 系统设置 | 修改密码、会话/Token 状态、系统信息、主题/文件视图/隐藏文件/终端字体/仪表盘窗口偏好、桌面快捷键说明；部署级配置只读 |
+| 进程管理（规划中） | 独立 Supervisor、自动拉起、进程组停止、日志和跨 init 启动适配；详见 [SPEC-0009](docs/spec/0009-process-supervisor.md)，尚未实现 |
 | 资源模式 | GCC 15 `#embed` 单二进制 / 磁盘模式，共用同一套静态资源抽象 |
 
 ## 快速开始
@@ -151,3 +152,7 @@ scripts/test-pr.sh
 - [前端素材使用说明](docs/design/asset-usage.md)
 - [原型视觉与组件实现规范](docs/design/prototype-guidelines.md)
 - [设计 Token](web/src/styles/edgedesk-tokens.css)
+
+## Process Supervisor 规划
+
+后续版本计划增加独立的 `edgedesk-supervisor`，通过 Unix Domain Socket 由 EdgeDesk 后端管理本机服务。设计基线和验收标准见 [SPEC-0009](docs/spec/0009-process-supervisor.md) 与 [实施计划](docs/tasks/0009-process-supervisor.md)。当前仓库尚未实现该能力；不应将规划中的进程管理或 init 适配描述为现有功能。

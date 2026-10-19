@@ -411,3 +411,26 @@ LD_LIBRARY_PATH=~/opt/arm64/hostlibs cmake -S . -B out/build/arm64-disk -G Ninja
 LD_LIBRARY_PATH=~/opt/arm64/hostlibs cmake --build out/build/arm64-disk -j 6
 file out/build/arm64-disk/bin/edgedesk   # ELF 64-bit ... ARM aarch64
 ```
+
+## Process Supervisor 验收矩阵（规划中，尚未执行）
+
+以下是 SPEC-0009 的计划测试，不是已经执行的结果。当前仓库尚未实现 `edgedesk-supervisor`，因此不得将任何条目标记为通过。
+
+| 类别 | 验收场景 | 通过条件 |
+|---|---|---|
+| 配置与存储 | 创建/更新/删除服务；重启 Supervisor；迁移失败与数据库损坏 | 配置持久化；迁移幂等；损坏时不静默清空数据库 |
+| argv | 参数含空格、引号、空字符串、Unicode | 目标进程收到的 argv 与配置一致；不经过 Shell |
+| 身份隔离 | 普通 UID/GID、无效用户/组、root 显式确认 | 进程身份正确；身份切换失败时无残留进程 |
+| 生命周期 | start/stop/restart、SIGTERM、超时 SIGKILL | 状态转换正确；进程组按契约清理 |
+| 自动恢复 | always/on-failure/never、退避、重启上限、稳定运行计数 | 行为与 SPEC-0009 一致；达到限制后进入 FAILED |
+| Supervisor 崩溃 | 杀死 Supervisor，保留托管服务后重新启动 | 识别现有进程组，不盲目创建重复实例；无法验证时进入 UNKNOWN |
+| 人工停止 | 停止服务后仅重启 Supervisor；再执行系统 reboot 场景 | 当前 boot ID 下保持停止；新 boot ID 下按 autostart 决策 |
+| IPC 安全 | 非授权 UID/GID、错误帧、超长消息、慢客户端、Socket 路径异常 | 拒绝未授权请求；消息和等待有界；无 TCP listener |
+| 日志 | 高频输出、慢速读取、超过大小上限、UI 断开 | 内存和文件大小受控；日志持续采集 |
+| 指标 | 主进程退出、PID 变化、/proc 信息缺失 | 不混淆 PID 复用；缺失值明确标记不可用 |
+| Web 安全 | 未认证、CSRF 失败、扩展 iframe 直接请求 | 任何失败请求都不能执行特权操作 |
+| init 适配 | systemd、OpenRC、BusyBox init | 分别实测 Supervisor 自身的启动、停止与 respawn |
+| 平台 | musl/static-pie、ARM64/QEMU、Buildroot 目标环境 | 记录实际环境、命令和结果；未验证平台保持明确标注 |
+| 回归 | 文件、终端、指标、认证、设置、桌面、扩展应用 | 现有功能测试无回归 |
+
+实施期间仍按本文件前述 L0/L1/L2 规则执行。发布前须实际运行适用的完整矩阵；静态编译成功不能代替进程生命周期、权限和 init 行为的运行验证。

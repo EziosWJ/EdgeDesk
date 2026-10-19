@@ -207,3 +207,20 @@ ReadWritePaths=/srv /var/lib/edgedesk /var/lib/edgedesk/apps /run/edgedesk
 [Install]
 WantedBy=multi-user.target
 ```
+
+## Process Supervisor 部署配置（规划中，尚未实现）
+
+本节记录 SPEC-0009 的目标部署约定，不代表当前发行包已经包含 Supervisor 二进制或这些选项。
+
+| 配置项 | 规划默认值 | 说明 |
+|---|---|---|
+| Supervisor 二进制 | `edgedesk-supervisor` | 独立进程，不嵌入 Web 后端生命周期 |
+| Socket | `/run/edgedesk-supervisor.sock` | Unix Domain Socket；可显式覆盖 |
+| 数据库 | `/var/lib/edgedesk-supervisor/supervisor.db` | 独立 SQLite，需位于可写持久化分区 |
+| 数据目录权限 | `0700` | Supervisor 专属目录 |
+| 数据库权限 | `0600` | 不与扩展平台数据库共用 |
+| Socket 权限 | `root:edgedesk 0660` | 通过专用组与 peer credentials 限制访问，组名/UID 必须按实际部署配置 |
+
+部署适配计划覆盖 systemd、OpenRC 与 BusyBox init。systemd/OpenRC/BusyBox 的具体脚本、respawn 语义和运行目录创建必须在目标系统验证；只提供示例配置不代表已完成平台支持。
+
+只读根文件系统部署必须为数据库和日志配置可写持久化位置。详细安全、恢复与服务配置约定见 [SPEC-0009](spec/0009-process-supervisor.md)。

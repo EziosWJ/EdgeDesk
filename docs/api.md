@@ -268,3 +268,30 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 - 硬上限 4 MiB：任何超过该值的请求在读取 body 前直接断开连接（拒绝恶意大包）。
 - 每 IP 限流 30/s（突发 60），登录/初始化/改密 5/分钟；超限 `429`，上传路径在头阶段拒绝。
 - 默认使用 TCP 对端 IP；只有 `--trusted-proxy` 列出的代理才解析 `X-Forwarded-For`。
+
+## Process Supervisor API（规划中，尚未实现）
+
+以下是 SPEC-0009 的拟新增接口，不属于当前 V1.3 API；在代码实现并通过测试前不得将其视为可调用端点。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/supervisor/health` | Supervisor 连接状态 |
+| GET | `/api/supervisor/services` | 服务列表 |
+| POST | `/api/supervisor/services` | 创建服务 |
+| GET | `/api/supervisor/services/{id}` | 服务详情 |
+| PUT | `/api/supervisor/services/{id}` | 更新配置，不自动重启 |
+| DELETE | `/api/supervisor/services/{id}` | 删除已停止服务 |
+| POST | `/api/supervisor/services/{id}/start` | 启动服务 |
+| POST | `/api/supervisor/services/{id}/stop` | 停止服务 |
+| POST | `/api/supervisor/services/{id}/restart` | 重启服务 |
+| GET | `/api/supervisor/services/{id}/logs` | 读取尾部/游标后的增量日志 |
+
+实现要求：
+
+- 所有端点沿用现有管理员认证、CSRF、限流和统一 JSON 错误响应。
+- Supervisor 不可用时返回明确的 503 错误；不得拖垮其他 EdgeDesk 功能。
+- EdgeDesk 后端通过本机 Unix Domain Socket 调用 Supervisor；不得新增 TCP 管理 listener。
+- IPC 建议采用 JSON-RPC 2.0 语义和 NDJSON 分帧，具备消息大小、并发和超时上限。
+- 不开放任意 PID 信号、任意文件访问或 Shell 命令执行端点。
+
+完整契约见 [SPEC-0009](spec/0009-process-supervisor.md)。

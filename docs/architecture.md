@@ -250,3 +250,28 @@ UI，不调用会话关闭接口；显式 close 或空闲超时才回收；回�
 
 两种模式共用 SPA 回退（未知非 `/api`、`/ws` 路径返回 `index.html`），
 哈希资源 `Cache-Control: immutable`，`index.html` 使用 `no-cache`。
+
+## 规划中的 Process Supervisor（尚未实现）
+
+本节是 SPEC-0009 的目标架构，不属于当前 V1.3 已实现代码清单。
+
+```text
+EdgeDesk Web API -> Supervisor IPC Client -> Unix Domain Socket
+                                             |
+                                             v
+                              edgedesk-supervisor（独立 root 守护进程）
+                                  | SQLite（独立数据库）
+                                  | 进程生命周期/自动重启
+                                  | 进程组、日志与主进程指标
+
+systemd / OpenRC / BusyBox init -> 负责 Supervisor 自身的启动与 respawn
+```
+
+规划约束：
+
+- 新模块独立于现有 EdgeDesk Web 进程；Web 后端重启不得直接终止托管服务。
+- 业务服务由 Supervisor 管理，不为每个服务生成发行版特定的 init 配置。
+- IPC 只使用 Unix Domain Socket；浏览器和扩展 iframe 不直接访问该 Socket。
+- Supervisor 使用专属 SQLite 数据库；不与扩展平台数据库共用。
+- 当前没有 Supervisor 代码、API 路由、服务表或 init 适配文件；实现状态以未来代码与 `docs/testing.md` 的实际记录为准。
+- 完整设计和行为契约见 [SPEC-0009](spec/0009-process-supervisor.md)，技术决策见 [ADR-0015](adr/0015-process-supervisor-architecture.md) 与 [ADR-0016](adr/0016-process-supervisor-security.md)。
