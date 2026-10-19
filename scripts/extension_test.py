@@ -396,6 +396,122 @@ def main():
         status, payload, _ = request("GET", f"/api/extensions/{app_id}", cookie=cookie)
         check(status == 404, f"deleted app record still visible: {status} {payload[:300]!r}")
 
+        # ---- network permission and origin policy ----
+        net_id = "io.example.network"
+        net_v1 = os.path.join(temp, "net-v1.zip")
+        make_zip(net_v1, manifest_for(net_id, "1.0.0", ["storage", "network"],
+                                      ["https://*.example.net"]),
+                 "<h1>network v1</h1>", "console.log('net1')")
+        status, payload, _ = install(cookie, net_v1)
+        check(status == 201, f"network install failed: {status} {payload[:200]!r}")
+        net_rev1 = json_body(payload).get("revision", {}).get("revision_id", "")
+
+        # Approve storage first: network stays ungranted, so no external sources.
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/approve",
+                               {"permissions": ["storage"], "enable": True}, cookie)
+        check(status == 200, f"network install approval failed: {status}")
+        status, payload, headers = request("GET", f"/apps/{net_id}/1.0.0/{net_rev1}/")
+        check(status == 200, f"network install static failed: {status}")
+        csp = headers.get("Content-Security-Policy", "")
+        check("example.net" not in csp, f"ungranted network leaked into CSP: {csp}")
+
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/permissions",
+                               {"permissions": ["storage", "network"]}, cookie)
+        check(status == 200, "network grant failed")
+        status, _, headers = request("GET", f"/apps/{net_id}/1.0.0/{net_rev1}/")
+        csp = headers.get("Content-Security-Policy", "")
+        check("https://*.example.net" in csp and "https://example.net" in csp,
+              f"approved wildcard sources missing from CSP: {csp}")
+        for directive in ("script-src", "style-src", "img-src", "font-src", "connect-src", "media-src",
+                          "frame-src", "child-src", "form-action"):
+            segment = csp.split(directive, 1)[1].split(";", 1)[0]
+            check("example.net" in segment, f"{directive} did not receive the approved origin: {segment}")
+
+        status, payload, _ = request("POST", "/api/extensions/runtime/sessions",
+                                     {"app_id": net_id,
+                                      "instance_id": "22222222-3333-4444-5555-666666666666"}, cookie)
+        net_session = json_body(payload)
+        check(status == 201, f"network session failed: {status} {payload[:200]!r}")
+        check(net_session.get("origins") == ["https://*.example.net"],
+              f"session origins not limited to the approved set: {net_session.get('origins')}")
+
+        # Revoking network removes CSP sources and new sessions lose origins.
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/permissions",
+                               {"permissions": ["storage"]}, cookie)
+        check(status == 200, f"network revoke failed: {status}")
+        status, _, headers = request("GET", f"/apps/{net_id}/1.0.0/{net_rev1}/")
+        csp = headers.get("Content-Security-Policy", "")
+        check("example.net" not in csp, f"revoked network still in CSP: {csp}")
+        check("form-action 'self'" in csp, f"CSP form-action was not reset: {csp}")
+        status, payload, _ = request("POST", "/api/extensions/runtime/sessions",
+                                     {"app_id": net_id,
+                                      "instance_id": "33333333-4444-5555-6666-777777777777"}, cookie)
+        revoked_session = json_body(payload)
+        check(status == 201 and revoked_session.get("origins") == [],
+              f"revoked session kept origins: {revoked_session.get('origins')}")
+
+        # Re-grant, then disable/re-enable: approvals persist across sessions.
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/permissions",
+                               {"permissions": ["storage", "network"]}, cookie)
+        check(status == 200, f"network re-grant failed: {status}")
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/disable", {}, cookie)
+        check(status == 200, "network disable failed")
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/enable", {}, cookie)
+        check(status == 200, "network enable failed")
+        status, payload, _ = request("POST", "/api/extensions/runtime/sessions",
+                                     {"app_id": net_id,
+                                      "instance_id": "44444444-5555-6666-7777-888888888888"}, cookie)
+        reenabled = json_body(payload)
+        check(status == 201 and reenabled.get("origins") == ["https://*.example.net"],
+              f"re-enabled session lost approved origins: {reenabled.get('origins')}")
+
+        # Upgrading to an expanded origin set removes network and needs review.
+        net_v2 = os.path.join(temp, "net-v2.zip")
+        make_zip(net_v2, manifest_for(net_id, "1.1.0", ["storage", "network"],
+                                      ["https://*.example.net", "https://api.example.net"]),
+                 "<h1>network v2</h1>", "console.log('net2')")
+        status, payload, _ = install(cookie, net_v2, upgrade_app=net_id)
+        check(status == 201, f"network upgrade failed: {status} {payload[:200]!r}")
+        upgraded_net = json_body(payload).get("app", {})
+        net_rev2 = json_body(payload).get("revision", {}).get("revision_id", "")
+        check(upgraded_net.get("status") == "enabled", "network upgrade disabled the app unexpectedly")
+        check("network" in upgraded_net.get("requested_permissions", []),
+              "upgraded manifest did not request network")
+        check("network" not in upgraded_net.get("granted_permissions", []),
+              "expanded origins silently retained the network grant")
+        status, _, headers = request("GET", f"/apps/{net_id}/1.1.0/{net_rev2}/")
+        csp = headers.get("Content-Security-Policy", "")
+        check("example.net" not in csp, f"expanded origins leaked into CSP before review: {csp}")
+        status, payload, _ = request("POST", "/api/extensions/runtime/sessions",
+                                     {"app_id": net_id,
+                                      "instance_id": "55555555-6666-7777-8888-999999999999"}, cookie)
+        upgraded_session = json_body(payload)
+        check(status == 201 and upgraded_session.get("origins") == [],
+              f"unreviewed upgrade kept origins: {upgraded_session.get('origins')}")
+
+        # Explicit re-approval makes both origins effective.
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/approve",
+                               {"permissions": ["storage", "network"], "enable": True}, cookie)
+        check(status == 200, "network re-approval after upgrade failed")
+        status, _, headers = request("GET", f"/apps/{net_id}/1.1.0/{net_rev2}/")
+        csp = headers.get("Content-Security-Policy", "")
+        check("https://*.example.net" in csp and "https://api.example.net" in csp,
+              f"re-approved origins missing from CSP: {csp}")
+        status, payload, _ = request("POST", "/api/extensions/runtime/sessions",
+                                     {"app_id": net_id,
+                                      "instance_id": "66666666-7777-8888-9999-aaaaaaaaaaaa"}, cookie)
+        approved_session = json_body(payload)
+        check(status == 201 and sorted(approved_session.get("origins", [])) ==
+              sorted(["https://*.example.net", "https://api.example.net"]),
+              f"session origins do not match the approved set: {approved_session.get('origins')}")
+
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/uninstall", {"data_action": "keep"},
+                               cookie)
+        check(status == 200, f"network uninstall failed: {status}")
+        status, payload, _ = request("GET", f"/api/extensions/{net_id}", cookie=cookie)
+        check(status == 200 and json_body(payload).get("app", {}).get("status") == "uninstalled",
+              f"network app was not marked uninstalled: {status} {payload[:300]!r}")
+
     if args.state_dir:
         audit_path = os.path.join(args.state_dir, "audit.log")
         if os.path.isfile(audit_path):

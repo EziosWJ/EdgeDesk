@@ -60,10 +60,54 @@ void test_network_and_csp() {
     CHECK_STR_EQ(wildcard[1], "https://*.example.com");
     CHECK_STR_EQ(manifest.origins[1].to_string(), "http://192.168.1.10:8080");
     CHECK_STR_EQ(manifest.origins[2].to_string(), "https://[::1]:8443");
-    const std::string policy = manifest.csp_policy();
+    const std::string policy = manifest.csp_policy(origin_strings(manifest.origins));
     CHECK(policy.find("https://example.com") != std::string::npos);
     CHECK(policy.find("https://*.example.com") != std::string::npos);
     CHECK(policy.find("object-src 'none'") != std::string::npos);
+}
+
+void test_csp_requires_approved_origins() {
+    auto document = base_manifest();
+    document["permissions"].push_back("network");
+    document["network"] = {{"origins", nlohmann::json::array(
+                                          {"https://*.example.com", "http://192.168.1.10:8080"})}};
+    Manifest manifest;
+    std::string error;
+    CHECK(accepts(document, manifest, error));
+
+    const auto declared = origin_strings(manifest.origins);
+    CHECK_EQ(declared.size(), std::size_t{2});
+    CHECK_STR_EQ(declared[0], "https://*.example.com");
+    CHECK_STR_EQ(declared[1], "http://192.168.1.10:8080");
+
+    // No network grant/approval: no external source appears anywhere.
+    const std::string denied = manifest.csp_policy();
+    CHECK(denied.find("https://example.com") == std::string::npos);
+    CHECK(denied.find("http://192.168.1.10:8080") == std::string::npos);
+    CHECK(denied.find("default-src 'self'") != std::string::npos);
+
+    // Revoked: the same empty policy is used even if origins are declared.
+    const std::string revoked = manifest.csp_policy({});
+    CHECK(revoked.find("https://example.com") == std::string::npos);
+    CHECK(revoked.find("http://192.168.1.10:8080") == std::string::npos);
+
+    // Only approved origins may appear.
+    const std::vector<std::string> approved{"https://*.example.com"};
+    std::vector<std::string> effective = intersect_origins(declared, approved);
+    CHECK_EQ(effective.size(), std::size_t{1});
+    CHECK_STR_EQ(effective[0], "https://*.example.com");
+    CHECK(origins_subset(effective, approved));
+    CHECK(!origins_subset(declared, approved));
+    const std::string restricted = manifest.csp_policy(effective);
+    CHECK(restricted.find("https://example.com") != std::string::npos);
+    CHECK(restricted.find("https://*.example.com") != std::string::npos);
+    CHECK(restricted.find("http://192.168.1.10:8080") == std::string::npos);
+
+    // Both declared origins are allowed only when both are approved.
+    const std::vector<std::string> all_approved{declared[0], declared[1]};
+    CHECK(origins_subset(declared, all_approved));
+    const std::string expanded = manifest.csp_policy(intersect_origins(declared, all_approved));
+    CHECK(expanded.find("http://192.168.1.10:8080") != std::string::npos);
 }
 
 void test_origins_imply_network_request() {
@@ -163,6 +207,7 @@ void test_origin_matching_rules() {
 int main() {
     test_valid();
     test_network_and_csp();
+    test_csp_requires_approved_origins();
     test_origins_imply_network_request();
     test_invalid_manifests();
     test_host_incompatible();

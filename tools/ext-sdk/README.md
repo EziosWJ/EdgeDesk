@@ -66,7 +66,9 @@ await client.terminalInput(session.id, 'ls\r');
 - `openExternal()` only opens declared network origins and returns a callback
   validator that checks `event.source`, origin, random nonce and state, and
   message shape. OAuth-style callbacks must use this pattern; never execute
-  host API commands received through `window.opener`.
+  host API commands received through `window.opener`. This is a developer aid,
+  not a security boundary: direct `window.open`, `target="_blank"` and iframe
+  self-navigation are not restricted by the network grant (ADR-0014).
 - Browser `localStorage` and IndexedDB are not supported persistence
   contracts. Use the storage API.
 - The iframe never receives host cookies, bearer tokens or absolute paths.

@@ -3,6 +3,7 @@
 
 #include "extensions/package_manager.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -25,7 +26,8 @@ fs::path make_base() {
 }
 
 nlohmann::json manifest_json(const std::string& id, const std::string& version,
-                             const std::vector<std::string>& permissions = {}) {
+                             const std::vector<std::string>& permissions = {},
+                             const std::vector<std::string>& origins = {}) {
     nlohmann::json manifest = {
         {"id", id},
         {"name", "Test Application"},
@@ -37,6 +39,7 @@ nlohmann::json manifest_json(const std::string& id, const std::string& version,
         {"window", {{"defaultWidth", 800}, {"defaultHeight", 600}, {"minWidth", 320}, {"minHeight", 240},
                      {"instances", "single"}}},
     };
+    if (!origins.empty()) manifest["network"] = {{"origins", origins}};
     return manifest;
 }
 
@@ -291,6 +294,122 @@ void test_reject_bad_packages(const fs::path& base) {
                .ok());
 }
 
+void test_network_grant_controls_csp(const fs::path& base) {
+    const std::string apps_root = (base / "apps-network").string();
+    Error error;
+    auto manager = PackageManager::create(apps_root, error);
+    CHECK(manager != nullptr);
+    if (!manager) return;
+    const std::string id = "io.example.network";
+    const auto zip = make_zip(
+        base, "net-1.zip",
+        app_items(manifest_json(id, "1.0.0", {"storage", "network"}, {"https://api.example.com"}), "<h1>net</h1>"));
+    InstallResult installed;
+    CHECK(manager->install(zip, {}, installed).ok());
+    AppRecord app;
+    CHECK(manager->approve(id, {"storage", "network"}, true, app).ok());
+    CHECK_STR_EQ(app.status, app_status::enabled);
+
+    StaticAsset asset;
+    CHECK(manager->read_static(id, "1.0.0", installed.revision.revision_id, "", asset).ok());
+    CHECK(asset.csp.find("https://api.example.com") != std::string::npos);
+
+    // Revoking network removes every external source, including iframe/form.
+    CHECK(manager->update_permissions(id, {"storage"}, app).ok());
+    CHECK(manager->read_static(id, "1.0.0", installed.revision.revision_id, "", asset).ok());
+    CHECK(asset.csp.find("https://api.example.com") == std::string::npos);
+    CHECK(asset.csp.find("default-src 'self'") != std::string::npos);
+
+    // Granting again requires a new approval of the active revision origins.
+    CHECK(manager->update_permissions(id, {"storage", "network"}, app).ok());
+    CHECK(manager->read_static(id, "1.0.0", installed.revision.revision_id, "", asset).ok());
+    CHECK(asset.csp.find("https://api.example.com") != std::string::npos);
+
+    // Uninstall with retained data clears the approvals as well.
+    CHECK(manager->uninstall(id, true).ok());
+    std::vector<std::string> approved;
+    CHECK(manager->store().list_network_origins(id, approved).ok());
+    CHECK(approved.empty());
+}
+
+void test_upgrade_origin_expansion_requires_review(const fs::path& base) {
+    const std::string apps_root = (base / "apps-origin-upgrade").string();
+    Error error;
+    auto manager = PackageManager::create(apps_root, error);
+    CHECK(manager != nullptr);
+    if (!manager) return;
+    const std::string id = "io.example.originupgrade";
+    const auto v1 = make_zip(
+        base, "origin-1.zip",
+        app_items(manifest_json(id, "1.0.0", {"storage", "network"}, {"https://a.example.com"}), "<h1>v1</h1>"));
+    InstallResult first;
+    CHECK(manager->install(v1, {}, first).ok());
+    AppRecord app;
+    CHECK(manager->approve(id, {"storage", "network"}, true, app).ok());
+    StaticAsset asset;
+    CHECK(manager->read_static(id, "1.0.0", first.revision.revision_id, "", asset).ok());
+    CHECK(asset.csp.find("https://a.example.com") != std::string::npos);
+
+    // Expanded origin set: network is not retained, the app stays enabled.
+    const auto v2 = make_zip(
+        base, "origin-2.zip",
+        app_items(manifest_json(id, "1.1.0", {"storage", "network"},
+                                {"https://a.example.com", "https://b.example.com"}),
+                  "<h1>v2</h1>"));
+    InstallOptions upgrade;
+    upgrade.expected_app_id = id;
+    InstallResult second;
+    CHECK(manager->install(v2, upgrade, second).ok());
+    CHECK_STR_EQ(second.app.status, app_status::enabled);
+    CHECK(std::find(second.app.requested_permissions.begin(), second.app.requested_permissions.end(),
+                    "network") != second.app.requested_permissions.end());
+    CHECK(std::find(second.app.granted_permissions.begin(), second.app.granted_permissions.end(),
+                    "network") == second.app.granted_permissions.end());
+    CHECK(manager->read_static(id, "1.1.0", second.revision.revision_id, "", asset).ok());
+    CHECK(asset.csp.find("https://a.example.com") == std::string::npos);
+    CHECK(asset.csp.find("https://b.example.com") == std::string::npos);
+
+    // Explicit re-approval makes both origins effective.
+    CHECK(manager->approve(id, {"storage", "network"}, true, app).ok());
+    CHECK(manager->read_static(id, "1.1.0", second.revision.revision_id, "", asset).ok());
+    CHECK(asset.csp.find("https://a.example.com") != std::string::npos);
+    CHECK(asset.csp.find("https://b.example.com") != std::string::npos);
+
+    // A subset keeps the existing grant.
+    const auto v3 = make_zip(
+        base, "origin-3.zip",
+        app_items(manifest_json(id, "1.2.0", {"storage", "network"}, {"https://a.example.com"}),
+                  "<h1>v3</h1>"));
+    InstallOptions second_upgrade;
+    second_upgrade.expected_app_id = id;
+    InstallResult third;
+    CHECK(manager->install(v3, second_upgrade, third).ok());
+    CHECK(std::find(third.app.granted_permissions.begin(), third.app.granted_permissions.end(), "network") !=
+          third.app.granted_permissions.end());
+    CHECK(manager->read_static(id, "1.2.0", third.revision.revision_id, "", asset).ok());
+    CHECK(asset.csp.find("https://a.example.com") != std::string::npos);
+    CHECK(asset.csp.find("https://b.example.com") == std::string::npos);
+
+    // Re-approving v3 records only its declared origins; rolling back to v2
+    // then expands the set and must require review again.
+    CHECK(manager->approve(id, {"storage", "network"}, true, app).ok());
+    CHECK(manager->activate_revision(id, second.revision.revision_id, true, app).ok());
+    CHECK(std::find(app.granted_permissions.begin(), app.granted_permissions.end(), "network") ==
+          app.granted_permissions.end());
+    CHECK(manager->read_static(id, "1.1.0", second.revision.revision_id, "", asset).ok());
+    CHECK(asset.csp.find("https://a.example.com") == std::string::npos);
+    CHECK(asset.csp.find("https://b.example.com") == std::string::npos);
+
+    // Rolling back inside the approved set retains network.
+    CHECK(manager->approve(id, {"storage", "network"}, true, app).ok());
+    CHECK(manager->activate_revision(id, first.revision.revision_id, true, app).ok());
+    CHECK(std::find(app.granted_permissions.begin(), app.granted_permissions.end(), "network") !=
+          app.granted_permissions.end());
+    CHECK(manager->read_static(id, "1.0.0", first.revision.revision_id, "", asset).ok());
+    CHECK(asset.csp.find("https://a.example.com") != std::string::npos);
+    CHECK(asset.csp.find("https://b.example.com") == std::string::npos);
+}
+
 void test_uninstall_and_retention(const fs::path& base) {
     const std::string apps_root = (base / "apps-uninstall").string();
     Error error;
@@ -415,6 +534,8 @@ int main() {
     test_integrity_isolation(base);
     test_reject_bad_packages(base);
     test_uninstall_and_retention(base);
+    test_network_grant_controls_csp(base);
+    test_upgrade_origin_expansion_requires_review(base);
     test_recovery(base);
     std::filesystem::remove_all(base);
     return edgedesk::test::finish("extension_package_test");

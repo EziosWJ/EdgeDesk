@@ -340,6 +340,11 @@ export class EdgeDeskClient {
    * callback from that exact popup, with an allowed origin, matching random
    * nonce and state, and an object payload. Host API commands are never read
    * from opener messages.
+   *
+   * This declaration check is a developer aid, not a security boundary:
+   * extension code can bypass it with window.open, target="_blank" or its own
+   * navigation. The host does not rely on this method for network enforcement;
+   * see ADR-0014.
    */
   openExternal(url, options = {}) {
     let parsed;

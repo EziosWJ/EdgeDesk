@@ -176,9 +176,14 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 - 仅活动、完整、已启用修订可被服务；URL 必须同时匹配 appId/version/revisionId。
 - MIME 由扩展名确定；无扩展名路径回退 `index.html`；带扩展名的缺失资源返回 404。
 - 缓存：修订资源 `public, max-age=31536000, immutable`；动态管理 API 不缓存。
-- CSP：`default-src 'self'` + 声明的来源；脚本、样式、图片、字体、连接、框架和表单共用同一白名单；`object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'self'`。
+- CSP：`default-src 'self'` + **有效来源**；脚本、样式、图片、字体、连接、框架和表单共用同一白名单；`object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'self'`。
+- 有效来源 = 当前活动修订 manifest 声明来源 ∩ 管理员已批准来源，且必须同时存在 `network` 授权。缺少授权或批准记录时，所有指令均不产生外部 source。
+- 已批准来源保存在扩展 SQLite 的 `network_origins(app_id, origin)`（schema v2），与授权变更在同一事务内写入；`network` 被撤销、卸载、隔离或重装时清除。旧 schema（v1）原地迁移，`CREATE TABLE IF NOT EXISTS` 保留既有数据；旧库中已有 `network` 授权但没有批准来源记录时，视为未批准任何来源（CSP 无外部 source），需管理员重新保存权限后生效。
+- 管理员审批（`approve()`/`update_permissions()`）记录当前活动修订声明的来源。升级或切换修订时，若新修订的规范化来源集合不是已批准集合的子集，则移除保留的 `network` 授权（应用仍启用，但网络被拒绝），需管理员重新审批；集合未扩大则继续生效。回滚/降级遵循同一规则。
+- 静态资源响应与 `create_session` 都按上述有效来源计算；CSP header 与会话快照不会回退到 manifest 全部来源。
 - 由于 sandbox iframe 的源为 opaque，服务端在 CSP 中额外列出精确的 `http://Host` 与 `https://Host`。
 - `X-Frame-Options: SAMEORIGIN`；`Cross-Origin-Resource-Policy: cross-origin`。
+- CSP 只约束其覆盖的资源类型。`window.open`、`target="_blank"` 和 iframe 自身的顶层导航不受 CSP/网络来源授权限制；`allow-popups-to-escape-sandbox` 与 OAuth 流程保留。该边界见 [ADR-0014](adr/0014-extension-popup-navigation-boundary.md)（Proposed）与风险清单 R-04/R-05，不得宣称弹窗导航已被执行。
 
 ## 9. 威胁模型与残余风险
 
@@ -187,8 +192,8 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 | R-01 未签名代码 | 管理员上传、结构校验、默认拒绝权限、首次审批、UI 警告 | `manifest_test`、`extension_package_test`、集成测试 |
 | R-02/R-19 压缩/资源压力 | 流式解压、声明大小磁盘预检、临时目录、原子提交、失败清理 | `extension_package_test` |
 | R-03 无消息/速率上限 | 每消息结构校验、异常隔离、保留核心 HTTP 限流 | 代码审查 + 集成测试；残余风险接受 |
-| R-04 网络白名单/重定向 | 统一来源白名单、CSP、HTTP 风险提示 | `manifest_test`、浏览器 CSP 验证 |
-| R-05 opener | 允许弹窗但禁止宿主消息进入若未被沙箱隔离；SDK 只接受指定 source | 浏览器验证；残余风险接受 |
+| R-04 网络白名单/重定向 | 有效来源 = 声明 ∩ 批准且需 network 授权；升级扩大来源需重新审批；CSP 覆盖资源加载；HTTP/重定向风险仍接受 | `manifest_test`、`extension_store_test`、`extension_package_test`、集成测试、浏览器边界脚本 |
+| R-05 opener/顶层导航 | 允许弹窗（含 `allow-popups-to-escape-sandbox`）；宿主只接受已握手 iframe 的桥接消息；弹窗/`target=_blank`/iframe 自身导航不受 CSP 限制 | 浏览器边界脚本；残余风险接受（ADR-0014 Proposed） |
 | R-06 桥接执行 | 特权 API 仅通过 MessagePort；后端不开放 Origin:null 直连 | 运行时端点 + 会话令牌 |
 | R-07 延迟撤销 | 权限快照；禁用/升级/卸载立刻失效会话并关闭终端 | 集成测试 |
 | R-08 路径安全 | 复用 PathSandbox/openat；扩展层不实现自有文件系统边界 | 既有 + 扩展测试 |
