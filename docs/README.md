@@ -58,6 +58,7 @@
 | [ADR-0011](adr/0011-extension-runtime-and-packages.md) | 扩展应用包、静态 iframe 运行时、SQLite 局部存储与版本修订 | 已实现（V1.3） |
 | [ADR-0012](adr/0012-extension-security-and-communication.md) | 扩展权限快照、JSON-RPC/MessagePort、CSP 与网络安全边界 | 已实现（V1.3）；含已接受风险 |
 | [ADR-0013](adr/0013-extension-file-api-and-transfer.md) | 扩展文件 API、1 MiB 分块、原子上传与文件锁 | 已实现（V1.3） |
+| [ADR-0014](adr/0014-extension-popup-navigation-boundary.md) | 扩展弹窗与 iframe 顶层导航边界（待确认；风险未关闭） | Proposed |
 | [ADR-0015](adr/0015-process-supervisor-architecture.md) | 独立 Process Supervisor、Unix Socket、SQLite 与 init 适配 | 已确认（尚未实现） |
 | [ADR-0016](adr/0016-process-supervisor-security.md) | root 守护进程、运行身份隔离、IPC 与执行安全 | 已确认（尚未实现） |
 
