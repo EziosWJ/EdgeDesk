@@ -219,8 +219,13 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 
 - 公开路由（sandbox iframe 为 opaque origin，不能携带宿主 Cookie），但仅服务**已启用、活动、
   完整性正常**的修订；其他状态返回 `404`。
-- 无扩展名路径回退 `index.html`；带扩展名的缺失资源返回 `404`，不做 SPA 回退。
-- 响应 `Cache-Control: public, max-age=31536000, immutable`，带完整性 SHA-256 `ETag`。
+- 无扩展名路径回退 `index.html`；带扩展名的缺失资源返回 `404`，不做 SPA 回退；裸 `/apps`、
+  `/apps/` 前缀同样返回 `404`，不落入前端 SPA。
+- 响应 `Cache-Control: public, max-age=31536000, immutable`，带完整性 SHA-256 `ETag`；
+  `If-None-Match` 命中返回 `304` 且无 body。
+- `GET` 以 `Transfer-Encoding: chunked` 流式发送，按 128 KiB 从修订目录 FD 读取，并有
+  1 MiB 写队列高水位与 60 s 停滞保护；不把完整资源读入内存。`HEAD` 返回相同的
+  `Content-Type`/`ETag`/`Content-Length` 头但不发送 body。
 - 应用专属 CSP 只列出**有效来源**（声明 ∩ 已批准，且存在 `network` 授权）；无授权时
   不产生任何外部 source。CSP 不约束 `window.open`、`target="_blank"` 或 iframe 自身
   顶层导航；`object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'self'`；

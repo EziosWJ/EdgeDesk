@@ -1,7 +1,7 @@
 # EdgeDesk 测试与验证矩阵
 
 > 只记录**实际执行过**的验证。未运行的环境一律标注“未验证”，不得以文档目标代替结果。
-> 复现命令附在每节末尾。V1.3 扩展平台新增 5 个原生测试、扩展集成测试、SDK CLI 测试和真实浏览器验收。
+> 复现命令附在每节末尾。V1.3 扩展平台新增 6 个原生测试、扩展集成测试、SDK CLI 测试和真实浏览器验收。
 
 ## 2026-10-18 V1.3 扩展平台实际执行记录
 
@@ -29,6 +29,27 @@
 - 本次未运行前端测试/构建（`web/node_modules` 不在该工作树）；`--no-frontend` 复用了既有 `web/dist` 产物。
 - 新增回归：`path_sandbox_test` 与 `file_service_test` 覆盖受保护路径的直连/规范化变体/嵌套/符号链接（follow）/硬链接别名/延迟创建目标，以及 list、stat、read、write、mkdir、rename、remove、递归删除、上传和下载；失败后目标内容与元数据保持不变，管理员服务不受策略影响。
 - 未验证：L2 平台矩阵。不得将本表用于跨平台发布验收。
+
+## 2026-10-19 #21 包安装与静态资源内存边界实际执行记录
+
+- L0：`JOBS=8 CTEST_JOBS=4 scripts/test-fast.sh --no-frontend`，**17/17 原生测试通过**
+  （新增 `extension_memory_test`），SDK CLI 4/4 通过。本轮 `web/node_modules` 不存在，
+  未运行前端单测。
+- L1：`JOBS=8 CTEST_JOBS=4 scripts/test-pr.sh --no-frontend --port 19221`，**17/17 原生 +
+  全量集成通过**（auth/api/ws/限流/恢复/扩展/崩溃恢复）。仓库无 `web/node_modules` 与
+  `web/dist`，为执行 L1 临时创建了仅含 `EdgeDesk` 标记的最小 `web/dist/index.html`
+  （无哈希资源），运行后删除、未提交；本轮未运行前端测试与 `npm run build`。
+- `extension_memory_test` 在 `fork`+`exec` 的独立子进程中读取 `/proc/self/status`
+  的 `VmHWM`，避免父进程历史峰值污染基线。实测（64 MiB stored/deflate 资产，
+  另有 manifest 与 `index.html`，每次运行数值略有波动）：
+  - 安装：baseline 5724 KiB，peak 6192 KiB，**delta 468 KiB**；完整性清单精确覆盖
+    3 个文件，`total_bytes` 等于 64 MiB + manifest + index 的实际大小。
+  - 静态服务：baseline 5844 KiB，peak 6108 KiB，**delta 264 KiB**；完整读取
+    64 MiB 资产，分块 128 KiB。两次 delta 均远低于 24 MiB 断言上限，且不随资产大小线性增长。
+  - 失败清理：`RLIMIT_FSIZE` + 忽略 `SIGXFSZ` 注入 `EFBIG`（替代不可移植的真实 ENOSPC），
+    安装失败后临时目录与修订目录为空、无挂起操作、无应用记录；`recover()` 后仍为空。
+- 未执行/未验证：真实 ENOSPC（磁盘写满）注入、L2 平台矩阵、前端单测与构建。
+  不得将本记录视为跨平台或前端验收。
 
 
 ## 2026-10-18 SPEC-0008 复核：当前跨平台 CI 阻断
@@ -177,8 +198,9 @@ scripts/test-pr.sh
 | `manifest_test` | 核心字段、权限、来源通配符/CSP、声明∩批准来源（无授权/撤销不产生外部 source）、窗口边界、宿主不兼容、保留运行时不执行、非法 ID/版本/来源/图标 | GCC 13.3 host | 通过 |
 | `extension_store_test` | SQLite 0700/0600、应用/修订/权限/完整性、操作日志、KV 键限/5 MiB 配额/回滚事务/分页、重启持久化、`network_origins` 持久化/替换/级联、schema v1→v2 原地迁移、同一事务内删除 KV 后触发真实 SQLite 约束失败时行与配额全部回滚 | GCC 13.3 host | 通过 |
 | `extension_package_test` | ZIP 安装、审批/静态资源/SPA、同版本覆盖、升级/降级、网络授权驱动 CSP、升级来源扩大需重新审批/回滚复核、完整性清单与实际文件集合精确比对（缺失/改内容/改大小/新增未登记文件/清单条目缺失/符号链接/FIFO/大小写冲突）、活动修订隔离与修复、历史修订失败不误伤活动修订、未登记资源拒绝服务、路径穿越/符号链接/重复名/本地头不一致、卸载保留/恢复/删除、修订保留与固定、启动孤儿清理、重装恢复/不恢复与陈旧保留行的 KV 删除仅在最终事务提交、升级失败保留 KV 与原活动修订、崩溃恢复保持 KV 与已提交修订一致（SQLite 触发器注入提交前后失败） | GCC 13.3 host | 通过 |
+| `extension_memory_test` | 64 MiB 资产安装/静态服务峰值 `VmHWM` 增量（子进程隔离）、完整性精确集合、`RLIMIT_FSIZE`/`EFBIG` 中断清理、无挂起操作与应用记录 | GCC 13.3 host | 通过（安装 delta 468 KiB、静态 delta 264 KiB） |
 | `file_lock_test` | 共享/独占、硬链接别名、缺失目标父目录身份、多锁原子性、FileService 读写锁、Upload 移动锁转移 | GCC 13.3 host | 通过 |
-| `extension_test.py`（L1） | 安装/审批/静态 CSP（授权/撤销/升级复核）、运行会话、KV 配额/回滚、目录游标、锁冲突、1 MiB 分块上传/下载 SHA-256、终端创建/关闭、扩展错误上报脱敏（伪造 Bearer/Cookie/API Key/密码/query/fragment 不落盘、JSONL 逐行可解析）、禁用即时失效、升级/同版本覆盖/降级、未登记资源 404、活动修订完整性隔离、历史修订失败不误伤活动应用/会话/授权、完整性失败修订拒绝激活、修复、卸载保留/恢复/删除、审计事件 | dev-disk + 真实 PTY/文件系统 | 通过 |
+| `extension_test.py`（L1） | 安装/审批/静态 CSP（授权/撤销/升级复核）、运行会话、KV 配额/回滚、目录游标、锁冲突、1 MiB 分块上传/下载 SHA-256、2 MiB 静态资源流式 body/HEAD/ETag 304、裸 `/apps` 404、终端创建/关闭、扩展错误上报脱敏（伪造 Bearer/Cookie/API Key/密码/query/fragment 不落盘、JSONL 逐行可解析）、禁用即时失效、升级/同版本覆盖/降级、未登记资源 404、活动修订完整性隔离、历史修订失败不误伤活动应用/会话/授权、完整性失败修订拒绝激活、修复、卸载保留/恢复/删除、审计事件 | dev-disk + 真实 PTY/文件系统 | 通过 |
 | SDK CLI 测试 | manifest/资源/相对路径/符号链接/重复路径校验、ZIP 打包与检查 | Node 24.14 | 通过 |
 | `embed_generator_test` | `#embed` 生成器的确定性、路径校验、ETag | Python 3.12 | 通过 |
 | 前端单元/DOM 测试 | **V1.2 桌面**：AppRegistry（默认注册、未知 appId、重复注册、元数据/尺寸校验、单/多实例、启动器搜索）、桌面图标布局（网格命中、拖拽换位、边界、去重）、WindowManager（单/多实例、稳定实例 ID、z-index 有界、最小化保持挂载/恢复、最大化几何还原、移动/缩放/视口约束、中等视口完整可见、关闭守卫）、DesktopPersistence（序列化往返、损坏 JSON、版本不兼容、未知 appId、重复单实例、非法几何、敏感字段剥离、localStorage 不可用、恢复时会话失效标记、防抖自动保存）、DesktopShell（单击/双击、Dock 启动/聚焦/多窗口选择、最小化恢复、真全屏与桌面框架恢复、启动器搜索/空态/Esc/焦点返回、Alt 快捷键与输入焦点保护、窄屏强制最大化、退出登录）、终端恢复（session_not_found 不创建替代会话、无 session ID 时才 create、attached 状态）、编辑器生命周期（最小化保留缓冲、未保存关闭确认、外部修改保护、文件消失拒绝保存）、NAS 设备概览（CPU/内存/存储/网卡/系统/服务小组件、多挂载点、多网卡、loopback 排除、缺失值 vs 0、采集中断、加载空态）。**V1.3 扩展平台**：动态应用注册、禁用关闭窗口、待审批应用不可启动、扩展元数据更新。**V1.2.1 回归**：顶部退出登录注销服务端会话并由脏编辑器否决退出、最小化后重开保留最大化状态。**V1.1 回归**：会话持久化、metrics 窗口有界、格式化、FloatingWindow DOM 交互、Sidebar、图表工具、Dashboard 旧断言已迁移、文件管理、认证、设置、偏好。 | Node 24.14 / vitest 3.2 / happy-dom | 通过（144 项）；`npm run build`（tsc + vite）通过 |

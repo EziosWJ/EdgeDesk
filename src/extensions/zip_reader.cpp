@@ -406,11 +406,11 @@ Error ZipReader::load_entries(int fd) {
     return Error::none();
 }
 
-Error ZipReader::extract_all(int dir_fd, std::vector<ExtractedFile>& files,
-                             std::vector<IntegrityEntry>& integrity, std::uint64_t& total_bytes) const {
-    files.clear();
+Error ZipReader::extract_all(int dir_fd, std::vector<IntegrityEntry>& integrity,
+                             std::uint64_t& total_bytes) const {
     integrity.clear();
     total_bytes = 0;
+    integrity.reserve(entries_.size());
 
     struct statvfs stats {};
     if (::fstatvfs(dir_fd, &stats) == 0) {
@@ -606,19 +606,32 @@ Error ZipReader::extract_all(int dir_fd, std::vector<ExtractedFile>& files,
         if (::fsync(output_fd.get()) != 0) return io_error("flush package file " + entry.name);
         output_fd.reset();
 
-        ExtractedFile file;
-        file.path = entry.name;
-        file.size = produced_total;
-        file.sha256 = hasher.finish_hex();
-        file.mime = mime_for_file_name(entry.name);
-        file.text_editable = false;
-        integrity.push_back(IntegrityEntry{entry.name, produced_total, file.sha256});
-        files.push_back(std::move(file));
+        integrity.push_back(IntegrityEntry{entry.name, produced_total, hasher.finish_hex()});
         total_bytes += produced_total;
     }
 
     // Make directory entries durable before the SQLite commit activates them.
     if (::fsync(dir_fd) != 0) return io_error("flush package directory");
+    return Error::none();
+}
+
+Error ZipReader::extract_all(int dir_fd, std::vector<ExtractedFile>& files,
+                             std::vector<IntegrityEntry>& integrity, std::uint64_t& total_bytes) const {
+    Error error = extract_all(dir_fd, integrity, total_bytes);
+    if (!error.ok()) {
+        files.clear();
+        return error;
+    }
+    files.clear();
+    files.reserve(integrity.size());
+    for (const auto& entry : integrity) {
+        ExtractedFile file;
+        file.path = entry.path;
+        file.size = entry.size;
+        file.sha256 = entry.sha256;
+        file.mime = mime_for_file_name(entry.path);
+        files.push_back(std::move(file));
+    }
     return Error::none();
 }
 

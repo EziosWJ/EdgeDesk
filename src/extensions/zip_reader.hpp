@@ -29,6 +29,8 @@ struct ZipEntry {
     bool directory = false;
 };
 
+// Compatibility view of an extracted regular file. The install path uses the
+// integrity manifest directly to avoid keeping a second copy of every path.
 struct ExtractedFile {
     std::string path;
     std::uint64_t size = 0;
@@ -51,6 +53,14 @@ public:
     // Extracts every entry below `dir_fd` (an opened directory), creates
     // parent directories with 0700, files with 0600 and computes SHA-256.
     // On failure the caller owns cleanup of the temporary directory.
+    //
+    // The install path uses this overload: the integrity manifest is the only
+    // per-file metadata kept, so paths and digests are not duplicated.
+    Error extract_all(int dir_fd, std::vector<IntegrityEntry>& integrity,
+                      std::uint64_t& total_bytes) const;
+
+    // Compatibility overload for callers that need the older per-file view.
+    // It builds ExtractedFile records from the integrity manifest.
     Error extract_all(int dir_fd, std::vector<ExtractedFile>& files,
                       std::vector<IntegrityEntry>& integrity, std::uint64_t& total_bytes) const;
 

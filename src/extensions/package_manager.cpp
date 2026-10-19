@@ -98,6 +98,26 @@ Error read_small_file(const PathSandbox& sandbox, const std::string& path, std::
     return Error::none();
 }
 
+// Opens an already-normalized logical path as a regular file and returns its
+// size. Directories and other special files are rejected (the package writer
+// only ever creates regular files, but a tampered revision must not block).
+Error open_regular_file(const PathSandbox& sandbox, const std::string& path, UniqueFd& fd,
+                        std::uint64_t& size) {
+    Error error = sandbox.open_file(path, O_RDONLY, fd);
+    if (!error.ok()) return error;
+    struct stat info {};
+    if (::fstat(fd.get(), &info) != 0) {
+        fd.reset();
+        return Error::make(ErrorCode::io_error, "cannot stat " + path);
+    }
+    if (!S_ISREG(info.st_mode)) {
+        fd.reset();
+        return Error::make(ErrorCode::invalid_argument, path + " is not a regular file");
+    }
+    size = static_cast<std::uint64_t>(info.st_size);
+    return Error::none();
+}
+
 bool path_is_within(const std::string& candidate, const std::string& parent) {
     if (candidate.size() < parent.size()) return false;
     if (candidate.compare(0, parent.size(), parent) != 0) return false;
@@ -298,10 +318,9 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
         return Error::make(ErrorCode::permission_denied, open_error);
     }
 
-    std::vector<ExtractedFile> files;
     std::vector<IntegrityEntry> integrity;
     std::uint64_t total_bytes = 0;
-    error = zip->extract_all(temp_fd.get(), files, integrity, total_bytes);
+    error = zip->extract_all(temp_fd.get(), integrity, total_bytes);
     temp_fd.reset();
     if (!error.ok()) {
         std::string ignored;
@@ -324,6 +343,11 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
         fail_operation(operation_id, temp_path, "", manifest_error);
         return Error::make(ErrorCode::invalid_argument, manifest_error);
     }
+    // The validated manifest is kept in `manifest.raw`, so the separately
+    // parsed document is no longer needed. Dump once and release the DOM to
+    // avoid carrying several full copies of the manifest into the commit.
+    std::string manifest_json = manifest.raw.dump();
+    document = nlohmann::json();
     if (!options.expected_app_id.empty() && options.expected_app_id != manifest.id) {
         const std::string message = "package application id does not match the upgrade target";
         fail_operation(operation_id, temp_path, "", message);
@@ -338,7 +362,7 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
     }
     bool has_index = false;
     bool has_manifest = false;
-    for (const auto& file : files) {
+    for (const auto& file : integrity) {
         if (file.path == "index.html") has_index = true;
         if (file.path == "manifest.json") has_manifest = true;
     }
@@ -423,9 +447,9 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
     revision.revision_id = revision_id;
     revision.app_id = manifest.id;
     revision.version = manifest.version;
-    revision.manifest_json = document.dump();
+    revision.manifest_json = std::move(manifest_json);
     revision.created_at = now_unix_seconds();
-    revision.file_count = files.size();
+    revision.file_count = integrity.size();
     revision.total_bytes = total_bytes;
     revision.status = revision_status::active;
     revision.integrity = integrity_state::ok;
@@ -515,8 +539,8 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
 
     error = store_->get_app(manifest.id, result.app, found);
     if (!error.ok()) return error;
-    result.revision = revision;
-    result.manifest = manifest;
+    result.revision = std::move(revision);
+    result.manifest = std::move(manifest);
     result.operation_id = operation_id;
     result.publisher_verified = false;
     result.approval_required = result.app.status == app_status::pending_review;
@@ -935,9 +959,9 @@ std::shared_ptr<PathSandbox> PackageManager::static_sandbox(std::string_view app
     return shared;
 }
 
-Error PackageManager::read_static(std::string_view app_id, std::string_view version,
+Error PackageManager::open_static(std::string_view app_id, std::string_view version,
                                   std::string_view revision_id, std::string_view relative,
-                                  StaticAsset& asset) const {
+                                  StaticAssetHandle& asset) const {
     asset = {};
     AppRecord app;
     bool found = false;
@@ -992,11 +1016,14 @@ Error PackageManager::read_static(std::string_view app_id, std::string_view vers
         return Error::make(ErrorCode::not_found, "asset is not registered in the integrity manifest");
     }
 
-    std::string body;
-    error = read_small_file(*sandbox, effective, std::numeric_limits<std::size_t>::max(), body);
+    // Open the registered file read-only; the HTTP layer streams it in chunks.
+    UniqueFd fd;
+    std::uint64_t size = 0;
+    error = open_regular_file(*sandbox, effective, fd, size);
     if (!error.ok()) return error;
     const std::string digest = entry->sha256;
-    asset.body = std::move(body);
+    asset.fd = std::move(fd);
+    asset.size = size;
     asset.mime = mime_for_file_name(base_name(effective));
     asset.etag = "\"" + digest + "\"";
     asset.immutable = true;
@@ -1014,6 +1041,36 @@ Error PackageManager::read_static(std::string_view app_id, std::string_view vers
         }
         asset.csp = manifest.csp_policy(effective_origins);
     }
+    return Error::none();
+}
+
+Error PackageManager::read_static(std::string_view app_id, std::string_view version,
+                                  std::string_view revision_id, std::string_view relative,
+                                  StaticAsset& asset) const {
+    asset = {};
+    StaticAssetHandle handle;
+    Error error = open_static(app_id, version, revision_id, relative, handle);
+    if (!error.ok()) return error;
+    if (handle.size > std::numeric_limits<std::size_t>::max()) {
+        return Error::make(ErrorCode::too_large, "static asset is too large to buffer");
+    }
+    asset.body.resize(static_cast<std::size_t>(handle.size));
+    std::size_t offset = 0;
+    while (offset < asset.body.size()) {
+        const auto read = ::pread(handle.fd.get(), asset.body.data() + offset, asset.body.size() - offset,
+                                  static_cast<off_t>(offset));
+        if (read < 0) {
+            if (errno == EINTR) continue;
+            return Error::make(ErrorCode::io_error, "cannot read static asset");
+        }
+        if (read == 0) break;
+        offset += static_cast<std::size_t>(read);
+    }
+    asset.body.resize(offset);
+    asset.mime = std::move(handle.mime);
+    asset.etag = std::move(handle.etag);
+    asset.csp = std::move(handle.csp);
+    asset.immutable = handle.immutable;
     return Error::none();
 }
 
