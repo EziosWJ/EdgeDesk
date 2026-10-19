@@ -379,25 +379,13 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
         }
     }
 
-    bool restored = false;
+    // Retained KV is only deleted as part of the final metadata transaction.
+    // Until that transaction commits, the uninstalled app row, retained flag
+    // and previous KV must remain intact; stale retained rows (data_retained
+    // was cleared but rows survived) are not restorable either.
     const bool retained = found && existing.data_retained;
-    if (retained && reinstall) {
-        restored = options.restore_retained_data;
-        if (!restored) {
-            error = store_->kv_delete_all(manifest.id);
-            if (!error.ok()) {
-                fail_operation(operation_id, temp_path, "", error.message);
-                return error;
-            }
-        }
-    } else if (found && existing.status == app_status::uninstalled) {
-        // Stale retained rows without the flag are not restorable.
-        error = store_->kv_delete_all(manifest.id);
-        if (!error.ok()) {
-            fail_operation(operation_id, temp_path, "", error.message);
-            return error;
-        }
-    }
+    const bool restored = reinstall && retained && options.restore_retained_data;
+    const bool delete_retained_kv = reinstall && !restored;
 
     std::string revision_id;
     for (int attempt = 0; attempt < 8; ++attempt) {
@@ -497,8 +485,16 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
         }
         transaction_error = store_->replace_permission_grants(manifest.id, retained_grants);
         if (!transaction_error.ok()) return transaction_error;
-        if (contains(retained_grants, kNetworkPermission)) return Error::none();
-        return store_->clear_network_origins(manifest.id);
+        if (!contains(retained_grants, kNetworkPermission)) {
+            transaction_error = store_->clear_network_origins(manifest.id);
+            if (!transaction_error.ok()) return transaction_error;
+        }
+        if (delete_retained_kv) {
+            // Same transaction as the app/revision switch: a failure or crash
+            // before COMMIT leaves the old KV and the old app state untouched.
+            return store_->kv_delete_all(manifest.id);
+        }
+        return Error::none();
     });
     if (!error.ok()) {
         fail_operation(operation_id, temp_path, destination, error.message);

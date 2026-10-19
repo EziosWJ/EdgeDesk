@@ -283,6 +283,47 @@ void test_network_origins(const fs::path& root) {
     CHECK(origins.empty());
 }
 
+void test_transaction_rollback_preserves_kv(const fs::path& root) {
+    Error error;
+    auto store = ExtensionStore::open(root.string(), error);
+    CHECK(store != nullptr);
+    if (!store) return;
+    const std::string app = "io.example.txn.rollback";
+    CHECK(store->upsert_app(make_app(app)).ok());
+    std::uint64_t usage = 0;
+    CHECK(store->kv_set(app, "first", "one", usage).ok());
+    CHECK(store->kv_set(app, "second", "two", usage).ok());
+    const std::uint64_t before = usage;
+
+    auto revision = make_revision(app, "rev-rollback");
+    // The duplicate primary key is a real SQLite constraint failure. It is
+    // raised after the KV delete inside the same explicit transaction, so a
+    // rollback must restore both the rows and the usage accounting.
+    Error failure = store->run_transaction([&]() -> Error {
+        Error transaction_error = store->kv_delete_all(app);
+        if (!transaction_error.ok()) return transaction_error;
+        transaction_error = store->insert_revision(revision);
+        if (!transaction_error.ok()) return transaction_error;
+        return store->insert_revision(revision); // SQLITE_CONSTRAINT
+    });
+    CHECK(!failure.ok());
+
+    KvEntry entry;
+    bool found = false;
+    CHECK(store->kv_get(app, "first", entry, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(entry.value, "one");
+    CHECK(store->kv_get(app, "second", entry, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(entry.value, "two");
+    std::uint64_t after = 0;
+    CHECK(store->kv_usage(app, after).ok());
+    CHECK_EQ(after, before);
+    std::uint64_t revision_count = 0;
+    CHECK(store->count_revisions(app, revision_count).ok());
+    CHECK_EQ(revision_count, static_cast<std::uint64_t>(0));
+}
+
 bool raw_sqlite_exec(const std::string& path, const char* sql) {
     sqlite3* db = nullptr;
     if (sqlite3_open(path.c_str(), &db) != SQLITE_OK) {
@@ -389,6 +430,7 @@ int main() {
     test_kv(root);
     test_operations_and_persistence(root);
     test_network_origins(root);
+    test_transaction_rollback_preserves_kv(root);
     const auto migration_root = fs::path(root.string() + "-migration");
     test_v1_schema_migration(migration_root);
     test_schema_version_after_migration(migration_root);
