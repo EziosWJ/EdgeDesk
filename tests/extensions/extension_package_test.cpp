@@ -7,6 +7,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <sys/stat.h>
+#include <unistd.h>
 
 using namespace edgedesk;
 using namespace edgedesk::extensions;

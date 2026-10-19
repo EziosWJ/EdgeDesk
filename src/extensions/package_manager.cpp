@@ -126,7 +126,9 @@ bool remove_tree_at(const std::string& path, std::string& error) {
     }
     struct DirCloser {
         DIR* dir;
-        ~DirCloser() { ::closedir(dir); }
+        ~DirCloser() {
+            if (dir != nullptr) ::closedir(dir);
+        }
     } closer{raw};
     const int fd = ::dirfd(raw);
     for (;;) {

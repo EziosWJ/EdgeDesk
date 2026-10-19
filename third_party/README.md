@@ -21,15 +21,25 @@ and ARM cross builds do not require network access at configure time.
 - Used for small schema-versioned state files (`auth.json`, `settings.json`)
   and the extension platform's manifest/KV/integrity metadata.
 
-## zlib (system dependency, not vendored)
+## zlib
 
 - Upstream: https://zlib.net/
-- License: zlib
-- Used by `src/extensions/zip_reader.cpp` for raw DEFLATE extraction.
-- `CMakeLists.txt` uses `find_package(ZLIB REQUIRED)`; host builds use the
-  distribution package. Static musl/ARM cross builds must provide `libz.a` in
-  the selected toolchain/sysroot. This impact has not yet been verified on the
-  L2 matrix; see `docs/testing.md`.
+- Source release: https://zlib.net/fossils/zlib-1.3.1.tar.gz
+- Version: **1.3.1**
+- SHA-256 of `zlib-1.3.1.tar.gz`:
+  `9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23`
+- License: zlib (see `zlib/LICENSE`; upstream `zlib/README` retained)
+- Used by `src/extensions/zip_reader.cpp` (raw DEFLATE inflate and crc32) and
+  `tests/extensions/zip_builder.hpp` (deflate/crc32).
+- Vendored files are the unmodified upstream C sources and headers required by
+  the build. `CMakeLists.txt` compiles them into the static target
+  `edgedesk_zlib`, linked `PUBLIC` from `edgedesk_core` so `<zlib.h>` also
+  propagates to tests.
+- `find_package(ZLIB)` is intentionally not used: Bootlin musl stable-2026.08
+  toolchains ship only `lib/libz.so.1*` (no `zlib.h`, `libz.so` or `libz.a`),
+  and host lookup could otherwise leak glibc zlib into cross builds.
+- Update only by replacing the vendored files with a pinned upstream release
+  and updating the version/checksum above.
 
 ## sqlite
 
