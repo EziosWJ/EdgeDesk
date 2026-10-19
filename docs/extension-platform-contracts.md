@@ -59,7 +59,7 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 - 单项权限撤销延迟到下一运行实例；禁用立即关闭窗口、端口、事件和该实例创建的终端。
 - 完整性失败：修订标记 `isolated`，应用 `isolated`，清除有效授权，关闭运行访问，保留文件与审计。
 - 修复/重装后回到 `pending_review`，必须重新审批。
-- 服务重启：未完成 operation 的临时目录与未提交修订被幂等清理；活动指针指向的修订存在性会被校验。
+- 服务重启：未完成 operation 的临时目录与未提交修订被幂等清理；活动指针指向的修订存在性会被校验。KV 删除与 app/revision/权限/完整性状态在同一 SQLite 事务提交，恢复后不会出现“KV 已删除但重装未提交”的组合。
 - 传输日志：扩展上传在 `apps_root/tmp/transfers/*.journal` 记录临时文件位置；重启时删除孤儿临时文件再删除日志。
 
 ## 4. SQLite schema（`apps_root/extensions.db`，schema v1）
@@ -76,6 +76,7 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 
 - `PRAGMA journal_mode=WAL`、`foreign_keys=ON`、`synchronous=FULL`；数据库文件 `0600`，根目录 `0700`。
 - 所有跨表状态变更在 `BEGIN IMMEDIATE` 事务中提交；失败回滚。
+- 重装“保留但不恢复”或陈旧保留行的 KV 删除位于安装的最终事务内；ZIP/清单校验、修订目录移动、完整性写入或 SQLite 失败都会回滚并保留旧 KV 与原应用状态。
 - 扩展应用不能直接打开数据库，也不能用 localStorage/IndexedDB 作为持久化契约。
 
 ## 5. JSON-RPC 与 MessagePort

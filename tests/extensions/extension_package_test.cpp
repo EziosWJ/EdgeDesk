@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <sqlite3.h>
 #include <sys/stat.h>
 
 using namespace edgedesk;
@@ -15,6 +16,42 @@ using edgedesk::test::ZipItem;
 namespace {
 
 namespace fs = std::filesystem;
+
+// Fault injection uses the real database through a second connection: an
+// aborting trigger makes the install commit transaction fail exactly where the
+// test needs it, without adding production-only hooks.
+bool run_sql(const std::string& database, const std::string& sql) {
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(database.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK) {
+        if (db != nullptr) sqlite3_close(db);
+        return false;
+    }
+    char* message = nullptr;
+    const int result = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &message);
+    if (message != nullptr) sqlite3_free(message);
+    sqlite3_close(db);
+    return result == SQLITE_OK;
+}
+
+std::string fail_revision_insert_trigger(const std::string& app_id) {
+    return "CREATE TRIGGER injected_revision_failure BEFORE INSERT ON revisions WHEN NEW.app_id='" +
+           app_id + "' BEGIN SELECT RAISE(ABORT,'injected revision failure'); END;";
+}
+
+std::string fail_kv_delete_trigger(const std::string& app_id) {
+    return "CREATE TRIGGER injected_kv_delete_failure BEFORE DELETE ON app_kv WHEN OLD.app_id='" +
+           app_id + "' BEGIN SELECT RAISE(ABORT,'injected kv delete failure'); END;";
+}
+
+std::size_t directory_entries(const fs::path& path) {
+    if (!fs::exists(path)) return 0;
+    std::size_t count = 0;
+    for (const auto& entry : fs::directory_iterator(path)) {
+        (void)entry;
+        ++count;
+    }
+    return count;
+}
 
 fs::path make_base() {
     const auto base = fs::temp_directory_path() / ("edgedesk-package-test-" + std::to_string(::getpid()));
@@ -382,6 +419,296 @@ void test_uninstall_and_retention(const fs::path& base) {
     CHECK(pinned_found);
 }
 
+void test_retained_restore_survives_failed_install(const fs::path& base) {
+    const std::string apps_root = (base / "apps-retained-restore").string();
+    Error error;
+    auto manager = PackageManager::create(apps_root, error);
+    CHECK(manager != nullptr);
+    if (!manager) return;
+    const std::string id = "io.example.retained.restore";
+    const auto zip = make_zip(base, "retained-restore.zip",
+                              app_items(manifest_json(id, "1.0.0", {"storage"}), "v1"));
+    InstallResult installed;
+    CHECK(manager->install(zip, {}, installed).ok());
+    AppRecord app;
+    CHECK(manager->approve(id, {"storage"}, true, app).ok());
+    std::uint64_t usage = 0;
+    CHECK(manager->store().kv_set(id, "keep", R"({"v":1})", usage).ok());
+    CHECK(manager->uninstall(id, true).ok());
+
+    const std::string database = manager->store().database_path();
+    CHECK(run_sql(database, fail_revision_insert_trigger(id)));
+    InstallOptions restore;
+    restore.restore_retained_data = true;
+    InstallResult failed;
+    CHECK(!manager->install(zip, restore, failed).ok());
+    CHECK(run_sql(database, "DROP TRIGGER injected_revision_failure"));
+
+    // The uninstalled app row, retained flag, KV and revision state survived.
+    KvEntry entry;
+    bool found = false;
+    CHECK(manager->store().kv_get(id, "keep", entry, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(entry.value, R"({"v":1})");
+    AppRecord after_failure;
+    CHECK(manager->get_app(id, after_failure, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(after_failure.status, app_status::uninstalled);
+    CHECK(after_failure.data_retained);
+    std::vector<RevisionRecord> revisions;
+    CHECK(manager->list_revisions(id, revisions).ok());
+    CHECK(revisions.empty());
+    CHECK_EQ(directory_entries(fs::path(apps_root) / "revisions" / id), std::size_t{0});
+
+    InstallResult restored;
+    CHECK(manager->install(zip, restore, restored).ok());
+    CHECK(restored.retained_data_restored);
+    CHECK(manager->store().kv_get(id, "keep", entry, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(entry.value, R"({"v":1})");
+}
+
+void test_retained_delete_is_atomic_with_install(const fs::path& base) {
+    const std::string apps_root = (base / "apps-retained-delete").string();
+    Error error;
+    auto manager = PackageManager::create(apps_root, error);
+    CHECK(manager != nullptr);
+    if (!manager) return;
+    const std::string id = "io.example.retained.delete";
+    const auto zip = make_zip(base, "retained-delete.zip",
+                              app_items(manifest_json(id, "1.0.0", {"storage"}), "v1"));
+    InstallResult installed;
+    CHECK(manager->install(zip, {}, installed).ok());
+    AppRecord app;
+    CHECK(manager->approve(id, {"storage"}, true, app).ok());
+    std::uint64_t usage = 0;
+    CHECK(manager->store().kv_set(id, "keep", "before", usage).ok());
+    CHECK(manager->uninstall(id, true).ok());
+
+    const std::string database = manager->store().database_path();
+    // Fail inside the final commit transaction after the revision directory has
+    // already been moved into place: the KV delete must not have happened yet.
+    CHECK(run_sql(database, fail_revision_insert_trigger(id)));
+    InstallResult failed;
+    CHECK(!manager->install(zip, {}, failed).ok()); // explicitly no restore
+    CHECK(run_sql(database, "DROP TRIGGER injected_revision_failure"));
+
+    KvEntry entry;
+    bool found = false;
+    CHECK(manager->store().kv_get(id, "keep", entry, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(entry.value, "before");
+    AppRecord after_failure;
+    CHECK(manager->get_app(id, after_failure, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(after_failure.status, app_status::uninstalled);
+    CHECK(after_failure.data_retained);
+    std::vector<RevisionRecord> revisions;
+    CHECK(manager->list_revisions(id, revisions).ok());
+    CHECK(revisions.empty());
+    CHECK_EQ(directory_entries(fs::path(apps_root) / "revisions" / id), std::size_t{0});
+
+    // A real SQLite failure at the delete statement itself also rolls back the
+    // app/revision writes that preceded it in the same transaction.
+    CHECK(run_sql(database, fail_kv_delete_trigger(id)));
+    InstallResult failed_delete;
+    CHECK(!manager->install(zip, {}, failed_delete).ok());
+    CHECK(run_sql(database, "DROP TRIGGER injected_kv_delete_failure"));
+    CHECK(manager->store().kv_get(id, "keep", entry, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(entry.value, "before");
+    CHECK(manager->list_revisions(id, revisions).ok());
+    CHECK(revisions.empty());
+
+    // Only a committed install deletes the retained KV.
+    InstallResult reinstalled;
+    CHECK(manager->install(zip, {}, reinstalled).ok());
+    CHECK(manager->store().kv_get(id, "keep", entry, found).ok());
+    CHECK(!found);
+    AppRecord after_success;
+    CHECK(manager->get_app(id, after_success, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(after_success.status, app_status::pending_review);
+    CHECK(!after_success.data_retained);
+    CHECK(manager->list_revisions(id, revisions).ok());
+    CHECK_EQ(revisions.size(), std::size_t{1});
+    std::string revision_dir;
+    CHECK(manager->revision_directory(id, reinstalled.revision.revision_id, revision_dir).ok());
+    CHECK(fs::exists(revision_dir));
+}
+
+void test_stale_retained_rows_deleted_only_on_success(const fs::path& base) {
+    const std::string apps_root = (base / "apps-stale-retained").string();
+    Error error;
+    auto manager = PackageManager::create(apps_root, error);
+    CHECK(manager != nullptr);
+    if (!manager) return;
+    const std::string id = "io.example.stale";
+    const auto zip = make_zip(base, "stale.zip", app_items(manifest_json(id, "1.0.0", {"storage"}), "v1"));
+    InstallResult installed;
+    CHECK(manager->install(zip, {}, installed).ok());
+    AppRecord app;
+    CHECK(manager->approve(id, {"storage"}, true, app).ok());
+    std::uint64_t usage = 0;
+    CHECK(manager->store().kv_set(id, "keep", "stale", usage).ok());
+    CHECK(manager->uninstall(id, true).ok());
+    // Force the stale combination: rows exist but the retained flag is gone.
+    CHECK(manager->store().set_data_retained(id, false).ok());
+
+    const std::string database = manager->store().database_path();
+    CHECK(run_sql(database, fail_revision_insert_trigger(id)));
+    InstallResult failed;
+    CHECK(!manager->install(zip, {}, failed).ok());
+    CHECK(run_sql(database, "DROP TRIGGER injected_revision_failure"));
+
+    KvEntry entry;
+    bool found = false;
+    CHECK(manager->store().kv_get(id, "keep", entry, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(entry.value, "stale");
+
+    InstallResult reinstalled;
+    CHECK(manager->install(zip, {}, reinstalled).ok());
+    CHECK(manager->store().kv_get(id, "keep", entry, found).ok());
+    CHECK(!found);
+}
+
+void test_upgrade_failure_preserves_kv_and_active_revision(const fs::path& base) {
+    const std::string apps_root = (base / "apps-upgrade-failure").string();
+    Error error;
+    auto manager = PackageManager::create(apps_root, error);
+    CHECK(manager != nullptr);
+    if (!manager) return;
+    const std::string id = "io.example.upgrade.failure";
+    const auto v1 = make_zip(base, "upgrade-fail-1.zip",
+                             app_items(manifest_json(id, "1.0.0", {"storage"}), "v1"));
+    InstallResult installed;
+    CHECK(manager->install(v1, {}, installed).ok());
+    AppRecord app;
+    CHECK(manager->approve(id, {"storage"}, true, app).ok());
+    std::uint64_t usage = 0;
+    CHECK(manager->store().kv_set(id, "keep", "upgrade-state", usage).ok());
+    const std::string old_revision = installed.revision.revision_id;
+    CHECK_STR_EQ(app.active_revision_id, old_revision);
+
+    const auto v2 = make_zip(base, "upgrade-fail-2.zip",
+                             app_items(manifest_json(id, "1.1.0", {"storage"}), "v2"));
+    InstallOptions upgrade;
+    upgrade.expected_app_id = id;
+    const std::string database = manager->store().database_path();
+    CHECK(run_sql(database, fail_revision_insert_trigger(id)));
+    InstallResult failed;
+    CHECK(!manager->install(v2, upgrade, failed).ok());
+    CHECK(run_sql(database, "DROP TRIGGER injected_revision_failure"));
+
+    KvEntry entry;
+    bool found = false;
+    CHECK(manager->store().kv_get(id, "keep", entry, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(entry.value, "upgrade-state");
+    AppRecord after_failure;
+    CHECK(manager->get_app(id, after_failure, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(after_failure.status, app_status::enabled);
+    CHECK_STR_EQ(after_failure.active_revision_id, old_revision);
+    CHECK_STR_EQ(after_failure.active_version, "1.0.0");
+    CHECK_EQ(after_failure.granted_permissions.size(), std::size_t{1});
+    CHECK_STR_EQ(after_failure.granted_permissions[0], "storage");
+    std::vector<RevisionRecord> revisions;
+    CHECK(manager->list_revisions(id, revisions).ok());
+    CHECK_EQ(revisions.size(), std::size_t{1});
+    CHECK_EQ(directory_entries(fs::path(apps_root) / "revisions" / id), std::size_t{1});
+    std::string old_dir;
+    CHECK(manager->revision_directory(id, old_revision, old_dir).ok());
+    CHECK(fs::exists(old_dir));
+
+    // A successful upgrade keeps the KV untouched.
+    InstallResult upgraded;
+    CHECK(manager->install(v2, upgrade, upgraded).ok());
+    CHECK(manager->store().kv_get(id, "keep", entry, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(entry.value, "upgrade-state");
+    AppRecord after_upgrade;
+    CHECK(manager->get_app(id, after_upgrade, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(after_upgrade.active_revision_id, upgraded.revision.revision_id);
+}
+
+void test_recovery_preserves_kv_and_committed_install(const fs::path& base) {
+    const std::string apps_root = (base / "apps-recovery-kv").string();
+    Error error;
+    auto manager = PackageManager::create(apps_root, error);
+    CHECK(manager != nullptr);
+    if (!manager) return;
+    const std::string id = "io.example.recovery.kv";
+    const auto zip = make_zip(base, "recovery-kv.zip",
+                              app_items(manifest_json(id, "1.0.0", {"storage"}), "v1"));
+    InstallResult installed;
+    CHECK(manager->install(zip, {}, installed).ok());
+    AppRecord app;
+    CHECK(manager->approve(id, {"storage"}, true, app).ok());
+    std::uint64_t usage = 0;
+    CHECK(manager->store().kv_set(id, "keep", "crash-state", usage).ok());
+    const std::string active_revision = installed.revision.revision_id;
+
+    // Crash after the revision directory was moved into place but before the
+    // metadata transaction committed: the journal points at an uncommitted
+    // revision that recovery must clean up without touching the KV.
+    OperationRecord inflight;
+    inflight.type = "install";
+    inflight.phase = "committed";
+    inflight.temp_path = manager->temporary_directory() + "/op-inflight";
+    CHECK(manager->store().create_operation(inflight).ok());
+    CHECK(manager->store().set_operation_app(inflight.operation_id, id).ok());
+    const std::string orphan_revision(32, 'a');
+    CHECK(manager->store()
+              .update_operation(inflight.operation_id, "committed", orphan_revision, "")
+              .ok());
+    const fs::path orphan_dir = fs::path(apps_root) / "revisions" / id / orphan_revision;
+    fs::create_directories(orphan_dir);
+    {
+        std::ofstream file(orphan_dir / "index.html");
+        file << "partial";
+    }
+
+    // Crash after the transaction committed but before the operation row was
+    // marked done: recovery must keep the committed revision and KV.
+    OperationRecord committed;
+    committed.type = "upgrade";
+    committed.phase = "committed";
+    CHECK(manager->store().create_operation(committed).ok());
+    CHECK(manager->store().set_operation_app(committed.operation_id, id).ok());
+    CHECK(manager->store()
+              .update_operation(committed.operation_id, "committed", active_revision, "")
+              .ok());
+
+    manager.reset();
+    auto reopened = PackageManager::create(apps_root, error);
+    CHECK(reopened != nullptr);
+    if (!reopened) {
+        std::fprintf(stderr, "reopen error: %s\n", error.message.c_str());
+        return;
+    }
+
+    CHECK(!fs::exists(orphan_dir));
+    KvEntry entry;
+    bool found = false;
+    CHECK(reopened->store().kv_get(id, "keep", entry, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(entry.value, "crash-state");
+    AppRecord after_recovery;
+    CHECK(reopened->get_app(id, after_recovery, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(after_recovery.status, app_status::enabled);
+    CHECK_STR_EQ(after_recovery.active_revision_id, active_revision);
+    std::string active_dir;
+    CHECK(reopened->revision_directory(id, active_revision, active_dir).ok());
+    CHECK(fs::exists(active_dir));
+    std::vector<OperationRecord> pending;
+    CHECK(reopened->store().list_pending_operations(pending).ok());
+    CHECK(pending.empty());
+}
+
 void test_recovery(const fs::path& base) {
     const std::string apps_root = (base / "apps-recovery").string();
     Error error;
@@ -414,6 +741,11 @@ int main() {
     test_integrity_isolation(base);
     test_reject_bad_packages(base);
     test_uninstall_and_retention(base);
+    test_retained_restore_survives_failed_install(base);
+    test_retained_delete_is_atomic_with_install(base);
+    test_stale_retained_rows_deleted_only_on_success(base);
+    test_upgrade_failure_preserves_kv_and_active_revision(base);
+    test_recovery_preserves_kv_and_committed_install(base);
     test_recovery(base);
     std::filesystem::remove_all(base);
     return edgedesk::test::finish("extension_package_test");
