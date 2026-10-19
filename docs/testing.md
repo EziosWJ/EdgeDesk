@@ -51,6 +51,33 @@
 - 未执行/未验证：真实 ENOSPC（磁盘写满）注入、L2 平台矩阵、前端单测与构建。
   不得将本记录视为跨平台或前端验收。
 
+## 2026-10-19 SPEC-0008 集成验收记录（#17–#24 合并树）
+
+本机 Linux/WSL2（x86_64 host），集成分支 `worktree-v13-hardening` 合并全部八个 Ticket 后执行。
+命令与结果均为合并树上的实际运行记录：
+
+| 验证 | 实际命令 | 结果 |
+| --- | --- | --- |
+| L0 原生 + SDK | `JOBS=8 CTEST_JOBS=4 scripts/test-fast.sh --no-frontend` | **19/19 原生通过**（含 `audit_test`、`extension_runtime_test`、`extension_memory_test`）；SDK/CLI **4/4 通过**，11 s |
+| L1 前端 | `JOBS=8 CTEST_JOBS=4 scripts/test-pr.sh --port 19181`（内部 `npm test` + `npm run build`） | 前端 **144/144 通过**，`tsc --noEmit` + Vite 构建通过 |
+| L1 原生 + 集成 | 同上 | dev-disk `ctest` **19/19 通过**；auth/api/ws/限流/恢复/扩展/崩溃恢复/审计 **ALL TESTS PASSED**，137 s |
+| 浏览器边界 | `node web/scripts/extension-network-boundary.mjs` | **PASS**：CSP 阻止未批准/未声明资源；弹窗、`target=_blank`、iframe 自身导航逃逸稳定复现（残余风险，ADR-0014 Proposed） |
+| embed x86_64 | `EDGEDESK_TOOLCHAIN_ROOT=.../x86-64--musl--stable-2026.08-1 cmake --preset release-embed && cmake --build --preset release-embed -j 8` | 构建通过；`file` 报告 `static-pie linked, stripped` |
+| embed x86_64 单测/集成 | `ctest --test-dir out/build/release-embed -j 4`；`scripts/integration_test.sh out/build/release-embed/bin/edgedesk 19151 web/dist` | **19/19 通过**；集成 **ALL TESTS PASSED** |
+| embed aarch64 | `EDGEDESK_TOOLCHAIN_ROOT=.../aarch64--musl--stable-2026.08-1 cmake --preset release-embed-arm64 && cmake --build --preset release-embed-arm64 -j 8` | 构建通过；`static-pie linked`；qemu 下 `--version` 输出 `EdgeDesk 1.3.0` |
+| embed aarch64 集成 | `scripts/integration_test.sh out/build/release-embed-arm64/bin/edgedesk 19161 "" "<qemu-aarch64-static> -L <root>"` | **ALL TESTS PASSED** |
+| disk musl x86_64 | disk 模式重新配置/构建 + `ctest` + 集成（端口 19131） | **19/19 通过**；集成 **ALL TESTS PASSED**；`static-pie linked` |
+| disk musl aarch64 | disk 模式重新配置/构建 + `ctest` + 集成（端口 19141） | **19/19 通过**（qemu-user）；集成 **ALL TESTS PASSED**；`static-pie linked` |
+
+- 交叉验收中发现并修复：`extension_memory_test` 的子进程直接 `execv("/proc/self/exe")`，在 qemu-user 下
+  `/proc/self/exe` 指向宿主 emulator，导致子进程退出 127。现从 `argv[0]` 取真实被测二进制路径，并由
+  CMake 通过 `EDGEDESK_TEST_EXEC_PREFIX`（来自 `CMAKE_CROSSCOMPILING_EMULATOR`）把 emulator 前缀传给子进程。
+  修复后两个 musl 目标的该测试均通过；原生行为不变。
+- 合并树测试计数为 19：原 V1.3 的 16 个测试 + `extension_runtime_test`（#22）+ `audit_test`（#23）+
+  `extension_memory_test`（#21）。
+- 未验证：**GitHub Actions 全矩阵尚未在对应提交上运行**；真实 ARM64 硬件、ARM32、非 Linux 宿主未验证。
+  本地 L2 证据不能替代 CI 发布验收。
+
 
 ## 2026-10-18 SPEC-0008 复核：当前跨平台 CI 阻断
 
@@ -289,7 +316,7 @@ bash scripts/integration_test.sh out/build/release-embed-arm64/bin/edgedesk 1959
 | GCC 15 + musl + `#embed` 组合 | Bootlin stable-2026.08（GCC 15.3） | 通过（x86_64 与 aarch64，见上） |
 | OpenHarmony ARM64 | 需要对应 SDK | **未验证** |
 | 真实设备（工控板/网关） | 目标硬件 | **未验证**（当前仅有 QEMU 运行证据） |
-| GitHub Actions CI | 本仓库 workflow：frontend + host-build / gcc15-embed / arm64-cross / x86_64-musl-static；npm/ccache/交叉工具链缓存，`web/dist` 通过 artifact 复用 | PR #14 曾 5/5 通过；当前复核 run #39132868799 为 3/5（两个 musl job 在 ZLIB 配置阶段失败）。Issue #24 修复后的提交**尚未在 CI 运行**，不能声明通过 |
+| GitHub Actions CI | 本仓库 workflow：frontend + host-build / gcc15-embed / arm64-cross / x86_64-musl-static；npm/ccache/交叉工具链缓存，`web/dist` 通过 artifact 复用 | PR #14 曾 5/5 通过；复核 run #39132868799 为 3/5（两个 musl job 在 ZLIB 配置阶段失败）。#24 已改为 vendored zlib，#17–#24 合并树在本地 embed/musl/ARM64 四条 lane 均通过；**对应提交尚未在 CI 运行**，不能声明 CI 通过 |
 
 > 2026-10-17 之后 CI 配置增加了 `frontend` 前置 job、npm/ccache/交叉工具链缓存和
 > `web/dist` artifact 复用；`x86_64-musl-static` 已改为 musl + `#embed` 静态发布

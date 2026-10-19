@@ -1,6 +1,6 @@
 # SPEC-0008 实施计划：扩展应用平台安全与可靠性加固
 
-- 状态：**Planned（GitHub Issues 已创建；实现尚未开始）**
+- 状态：**Implemented locally（#17–#24 已实现并通过本地 L0/L1/L2；GitHub Actions 待运行，未发布验收）**
 - 需求基线：[SPEC-0008](../spec/0008-extension-platform-hardening.md)
 - 前置基线：[SPEC-0007](../spec/0007-extension-applications.md)
 - 架构决策：[ADR-0011](../adr/0011-extension-runtime-and-packages.md)、[ADR-0012](../adr/0012-extension-security-and-communication.md)、[ADR-0013](../adr/0013-extension-file-api-and-transfer.md)
