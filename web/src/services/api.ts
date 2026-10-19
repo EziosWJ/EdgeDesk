@@ -4,6 +4,10 @@ import type {
   FileListing,
   MetricsSample,
   SessionInfo,
+  ServicePayload,
+  SupervisorHealth,
+  SupervisorLogPage,
+  SupervisedService,
   SetupStatus,
   SystemInfo,
   TerminalSessionInfo,
@@ -173,6 +177,67 @@ export const api = {
     apiRequest<{ ok: boolean; interval_ms: number; sample: MetricsSample; history?: MetricsSample[] }>(
       `/api/system/summary?history=${history}`,
     ),
+
+  supervisorHealth: () => apiRequest<SupervisorHealth>('/api/supervisor/health'),
+  supervisorServices: (options: { offset?: number; limit?: number; status?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (options.offset !== undefined) params.set('offset', String(options.offset));
+    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    if (options.status) params.set('status', options.status);
+    const query = params.toString();
+    return apiRequest<{
+      ok: boolean;
+      services: SupervisedService[];
+      total: number;
+      count: number;
+      offset: number;
+      limit: number;
+    }>(`/api/supervisor/services${query ? `?${query}` : ''}`);
+  },
+  supervisorService: (id: string) =>
+    apiRequest<SupervisedService & { ok: boolean }>(
+      `/api/supervisor/services/${encodeURIComponent(id)}`,
+    ),
+  createSupervisorService: (payload: ServicePayload) =>
+    apiRequest<SupervisedService & { ok: boolean }>('/api/supervisor/services', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateSupervisorService: (id: string, payload: ServicePayload) =>
+    apiRequest<SupervisedService & { ok: boolean }>(
+      `/api/supervisor/services/${encodeURIComponent(id)}`,
+      { method: 'PUT', body: JSON.stringify(payload) },
+    ),
+  deleteSupervisorService: (id: string) =>
+    apiRequest<{ ok: boolean; deleted: boolean; id: string }>(
+      `/api/supervisor/services/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    ),
+  startSupervisorService: (id: string) =>
+    apiRequest<SupervisedService & { ok: boolean }>(
+      `/api/supervisor/services/${encodeURIComponent(id)}/start`,
+      { method: 'POST' },
+    ),
+  stopSupervisorService: (id: string) =>
+    apiRequest<SupervisedService & { ok: boolean }>(
+      `/api/supervisor/services/${encodeURIComponent(id)}/stop`,
+      { method: 'POST' },
+    ),
+  restartSupervisorService: (id: string) =>
+    apiRequest<SupervisedService & { ok: boolean }>(
+      `/api/supervisor/services/${encodeURIComponent(id)}/restart`,
+      { method: 'POST' },
+    ),
+  supervisorLogs: (id: string, options: { tailBytes?: number; cursor?: number; maxBytes?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (options.tailBytes !== undefined) params.set('tail_bytes', String(options.tailBytes));
+    if (options.cursor !== undefined) params.set('cursor', String(options.cursor));
+    if (options.maxBytes !== undefined) params.set('max_bytes', String(options.maxBytes));
+    const query = params.toString();
+    return apiRequest<SupervisorLogPage>(
+      `/api/supervisor/services/${encodeURIComponent(id)}/logs${query ? `?${query}` : ''}`,
+    );
+  },
 };
 
 export function formatBytes(value: number, digits = 1): string {

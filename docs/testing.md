@@ -2,6 +2,8 @@
 
 > 只记录**实际执行过**的验证。未运行的环境一律标注“未验证”，不得以文档目标代替结果。
 > 复现命令附在每节末尾。V1.3 扩展平台新增 6 个原生测试、扩展集成测试、SDK CLI 测试和真实浏览器验收。
+> Process Supervisor V1.0 的宿主 L0/L1、musl/static-pie 与 ARM64/QEMU 记录见文末
+> “Process Supervisor V1.0 实际执行记录”。
 
 ## 2026-10-18 V1.3 扩展平台实际执行记录
 
@@ -412,25 +414,61 @@ LD_LIBRARY_PATH=~/opt/arm64/hostlibs cmake --build out/build/arm64-disk -j 6
 file out/build/arm64-disk/bin/edgedesk   # ELF 64-bit ... ARM aarch64
 ```
 
-## Process Supervisor 验收矩阵（规划中，尚未执行）
+## Process Supervisor V1.0 实际执行记录（2026-10-19）
 
-以下是 SPEC-0009 的计划测试，不是已经执行的结果。当前仓库尚未实现 `edgedesk-supervisor`，因此不得将任何条目标记为通过。
+执行环境：WSL2 Linux 6.18.54.1-microsoft-standard-WSL2，x86_64；集成测试以普通用户
+`uid=1000` 运行（非 root）。以下结果均在当前工作树实际执行，不是计划项。
 
-| 类别 | 验收场景 | 通过条件 |
-|---|---|---|
-| 配置与存储 | 创建/更新/删除服务；重启 Supervisor；迁移失败与数据库损坏 | 配置持久化；迁移幂等；损坏时不静默清空数据库 |
-| argv | 参数含空格、引号、空字符串、Unicode | 目标进程收到的 argv 与配置一致；不经过 Shell |
-| 身份隔离 | 普通 UID/GID、无效用户/组、root 显式确认 | 进程身份正确；身份切换失败时无残留进程 |
-| 生命周期 | start/stop/restart、SIGTERM、超时 SIGKILL | 状态转换正确；进程组按契约清理 |
-| 自动恢复 | always/on-failure/never、退避、重启上限、稳定运行计数 | 行为与 SPEC-0009 一致；达到限制后进入 FAILED |
-| Supervisor 崩溃 | 杀死 Supervisor，保留托管服务后重新启动 | 识别现有进程组，不盲目创建重复实例；无法验证时进入 UNKNOWN |
-| 人工停止 | 停止服务后仅重启 Supervisor；再执行系统 reboot 场景 | 当前 boot ID 下保持停止；新 boot ID 下按 autostart 决策 |
-| IPC 安全 | 非授权 UID/GID、错误帧、超长消息、慢客户端、Socket 路径异常 | 拒绝未授权请求；消息和等待有界；无 TCP listener |
-| 日志 | 高频输出、慢速读取、超过大小上限、UI 断开 | 内存和文件大小受控；日志持续采集 |
-| 指标 | 主进程退出、PID 变化、/proc 信息缺失 | 不混淆 PID 复用；缺失值明确标记不可用 |
-| Web 安全 | 未认证、CSRF 失败、扩展 iframe 直接请求 | 任何失败请求都不能执行特权操作 |
-| init 适配 | systemd、OpenRC、BusyBox init | 分别实测 Supervisor 自身的启动、停止与 respawn |
-| 平台 | musl/static-pie、ARM64/QEMU、Buildroot 目标环境 | 记录实际环境、命令和结果；未验证平台保持明确标注 |
-| 回归 | 文件、终端、指标、认证、设置、桌面、扩展应用 | 现有功能测试无回归 |
+| 验证 | 命令 | 实际结果 |
+| --- | --- | --- |
+| L0 原生 | `scripts/test-fast.sh` | **24/24 通过**（新增 `supervisor_types_test`、`supervisor_store_test`、`supervisor_log_store_test`、`supervisor_engine_test`、`supervisor_ipc_test`），13 s |
+| L0 前端 | 同上（`cd web && npm test`） | **27 个文件 / 153 个测试通过** |
+| SDK/CLI | 同上 | **4/4 通过** |
+| L1 全量 | `scripts/test-pr.sh` | 前端测试 + 构建、`dev-disk` 构建、24/24 ctest、完整集成套件通过，**155 s** |
+| L2 host-embed | `scripts/with-gcc15.sh all host-embed` | GCC 15 构建通过，**24/24 ctest**，12.05 s |
+| L2 x86_64 musl | `EDGEDESK_TOOLCHAIN_ROOT=~/opt/musl/x86-64--musl--stable-2026.08-1 cmake --preset release-embed && cmake --build --preset release-embed && ctest --preset release-embed` | GCC 15.3、static-pie 构建通过，**24/24 ctest**；`readelf` 无 `INTERP`/`NEEDED` |
+| L2 x86_64 运行冒烟 | 以 `release-embed/bin/edgedesk-supervisor` 启动并执行 Python IPC 客户端 | `health`、create/start/stop/delete 全部成功；PID/PGID 正确，停止后进程消失 |
+| L2 x86_64 Web 冒烟 | `release-embed/bin/edgedesk --no-supervisor` + curl | `/api/health` 200（`status=ok`、`phase=1`），`/` 返回 200（embed 资源） |
+| L2 ARM64 构建 | `EDGEDESK_TOOLCHAIN_ROOT=~/opt/musl/aarch64--musl--stable-2026.08-1 cmake --preset release-embed-arm64 && cmake --build --preset release-embed-arm64` | GCC 15.3、static-pie 构建通过；`file` 显示 ARM aarch64，无 `INTERP` |
+| L2 ARM64 QEMU | `qemu-aarch64-static` 运行 `edgedesk-supervisor` + Python IPC 客户端 | `health`、create/start/stop/delete 全部成功；PID/PGID 正确，停止后进程消失 |
+| L2 ARM64 Web 冒烟 | `qemu-aarch64-static edgedesk --no-supervisor` + curl | `/api/health` 200，`/` 返回 200（embed 资源） |
+| 前端目视 | Playwright headless Chromium，`processes-1440.png` / `processes-390.png` | 1440×900 与 390×844 均已打开检查：进程列表、状态、PID、指标、配置与日志无溢出；窄屏 ID/时间行已修复为单行 |
+| init 静态检查 | `sh -n deploy/openrc/...`、`sh -n deploy/busybox/...`、`systemd-analyze verify ...` | 两个 shell 脚本语法通过；systemd 单元仅报告“二进制尚未安装”，未发现语法错误 |
+
+Supervisor 集成测试（`scripts/supervisor_test.py`）实际覆盖：
+
+| 场景 | 实际断言与结果 |
+| --- | --- |
+| Web 认证/CSRF | 未认证 `GET /api/supervisor/*` → 401；Cookie 写请求缺少同源 Origin → 403 `csrf_rejected` |
+| 配置校验 | 缺少 `run_user`/`run_group` → 400 `invalid_service_config`；root 身份未确认 → 403 `root_confirmation_required` |
+| CRUD | 创建、重名 409、列表、详情、部分更新保留未提供字段、删除运行中服务 409、缺失服务 404 |
+| 生命周期 | start → RUNNING，PID 存活且 `pgid == pid`；restart 生成新 PID；stop 后 `/proc/<pid>` 消失；再次 start 成功 |
+| 无 Shell 执行 | `/bin/echo` 参数包含字面量 `$(touch <marker>)`、`semi;colon`、`space value`；日志原样保留，marker 文件不存在 |
+| 日志 | 尾部读取返回上述字面量，`truncated=false`；删除后再次删除 404 |
+| 后端重启 | 停止并重启 EdgeDesk 后端后，服务 PID 不变且继续存活 |
+| Supervisor 崩溃恢复 | `SIGKILL` Supervisor 后重启，接管原 PID（不重复拉起）；显式 stop 能结束该进程 |
+| 人工停止持久化 | 服务已 STOPPED 时再次重启 Supervisor，服务仍 STOPPED，随后可删除 |
+| 不可用隔离 | Supervisor 不可达时 `/api/supervisor/*` → 503 `supervisor_unavailable`；`/api/health`、认证会话、文件 API 仍 200，托管进程继续存活 |
+| 审计 | 集成脚本检查 `supervisor.create/update/start/restart/stop/logs/delete` 与 `root_confirmation_required` 事件已写入审计 |
+
+`supervisor_engine_test` 额外覆盖：`always` 对退出码 0 也重启、`on-failure` 重启上限与
+`FAILED` 锁定、`never` 不重启、指数退避（约 200 ms → 400 ms）、稳定运行后重置重启窗口、
+忽略 SIGTERM 时超时升级为 SIGKILL、Supervisor 重启后人工停止保持、崩溃接管、
+运行中更新不重启。`supervisor_ipc_test` 覆盖授权/未授权 `SO_PEERCRED`、错误 JSON、
+未知方法、异步 stop。静态 musl 运行暴露了测试中“socket 文件出现即已 listen”的时序假设，
+已改为重试连接至监听就绪；产品行为未修改。
+
+### 明确未验证项
+
+- **root 身份切换**：集成测试以 `uid=1000` 运行，未实际以 root 启动 Supervisor，也未验证
+  跨 UID/GID 的 `setgroups`/`setgid`/`setuid` 失败清理。相关配置校验与拒绝路径有原生测试，
+  但运行时身份切换没有证据。
+- **init 真机**：systemd、OpenRC、BusyBox 仅提供文件并做语法检查；未在真实 init 环境执行
+  启动、停止、Supervisor 崩溃后的 respawn。不得视为平台验收通过。
+- **真实 reboot**：未执行系统重启；boot ID 变化后的 `autostart` 行为只有代码路径和单元级
+  构造测试，没有真实断电/重启证据。
+- **Buildroot/真实硬件、ARM32**：未构建、未运行。
+- **压力/高频日志/慢客户端/消息洪流**：只有单元级边界测试，没有长时间压力测试或基准数据。
+- **systemd/OpenRC/BusyBox 之外的发行版与容器环境**：未验证。
 
 实施期间仍按本文件前述 L0/L1/L2 规则执行。发布前须实际运行适用的完整矩阵；静态编译成功不能代替进程生命周期、权限和 init 行为的运行验证。

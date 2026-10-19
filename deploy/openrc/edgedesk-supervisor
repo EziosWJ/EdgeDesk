@@ -1,0 +1,46 @@
+#!/sbin/openrc-run
+# EdgeDesk process supervisor for OpenRC.
+#
+# Install to /etc/init.d/edgedesk-supervisor, then:
+#   rc-update add edgedesk-supervisor default
+#   rc-service edgedesk-supervisor start
+#
+# Requires OpenRC with supervise-daemon (OpenRC >= 0.21). The Supervisor runs
+# in the foreground and supervise-daemon restarts it if it exits. Managed
+# services form their own process groups and are stopped by the Supervisor on
+# SIGTERM; do not add them to OpenRC.
+
+name="edgedesk-supervisor"
+description="EdgeDesk process supervisor"
+
+: "${EDGEDESK_SUPERVISOR_BIN:=/usr/sbin/edgedesk-supervisor}"
+: "${EDGEDESK_SUPERVISOR_SOCKET:=/run/edgedesk-supervisor.sock}"
+: "${EDGEDESK_SUPERVISOR_DB:=/var/lib/edgedesk-supervisor/supervisor.db}"
+: "${EDGEDESK_SUPERVISOR_LOG_DIR:=/var/lib/edgedesk-supervisor/logs}"
+# Group that may connect to the Unix socket. The web backend must run with a
+# matching primary/supplementary GID; SO_PEERCRED is checked independently.
+: "${EDGEDESK_SUPERVISOR_GROUP:=edgedesk}"
+
+command="${EDGEDESK_SUPERVISOR_BIN}"
+command_args="--socket ${EDGEDESK_SUPERVISOR_SOCKET} \
+  --database ${EDGEDESK_SUPERVISOR_DB} \
+  --log-dir ${EDGEDESK_SUPERVISOR_LOG_DIR} \
+  --socket-group ${EDGEDESK_SUPERVISOR_GROUP} \
+  --allow-gid ${EDGEDESK_SUPERVISOR_GROUP}"
+command_user="root:root"
+supervisor="supervise-daemon"
+respawn_delay=2
+respawn_max=0
+pidfile="/run/edgedesk-supervisor.pid"
+
+depend() {
+  need localmount
+  after bootmisc
+  use net
+}
+
+start_pre() {
+  checkpath --directory --mode 0700 /var/lib/edgedesk-supervisor
+  checkpath --directory --mode 0700 "${EDGEDESK_SUPERVISOR_LOG_DIR}"
+  checkpath --directory --mode 0755 /run
+}

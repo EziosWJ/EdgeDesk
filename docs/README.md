@@ -3,7 +3,7 @@
 > 所有文档用于记录已确认的决策、需求、实现状态与待确认问题。文档完成 != 功能完成。
 > 功能完成情况以代码、自动化测试与 [验证矩阵](testing.md) 的实际结果为准。
 
-## 当前实现（V1.3）
+## 当前实现（V1.3 + Process Supervisor V1.0）
 
 - [架构、线程模型与资源边界](architecture.md)
 - [API 与 WebSocket 协议](api.md)
@@ -13,14 +13,18 @@
 - [Coding Agent 开发规范](../AGENTS.md)
 - [Phase 1 工程骨架（历史记录）](phase1.md)
 
-## Process Supervisor（规划中，尚未实现）
+## Process Supervisor（V1.0 已实现）
 
-- [SPEC-0009：本机进程托管](spec/0009-process-supervisor.md)：8 轮 Grill 已确认，定义独立守护进程、自动拉起、日志、IPC、权限和跨 init 适配。
+- [SPEC-0009：本机进程托管](spec/0009-process-supervisor.md)：独立守护进程、自动拉起、日志、IPC 权限与跨 init 适配（宿主 Linux 已验证）。
 - [ADR-0015：独立 Supervisor 架构](adr/0015-process-supervisor-architecture.md)
 - [ADR-0016：权限与进程执行安全](adr/0016-process-supervisor-security.md)
-- [SPEC-0009 实施计划与 Issue 拆分](tasks/0009-process-supervisor.md)：PS-01～PS-10 为建议拆分，尚未创建 GitHub Issues。
+- [SPEC-0009 实施计划与执行记录](tasks/0009-process-supervisor.md)：PS-01～PS-09 已实现；PS-10 平台矩阵部分未验证。
+- [部署与 init 适配](../deploy/README.md)：systemd、OpenRC、BusyBox 文件与安装说明。
 
-> 以上文档只定义规划与验收要求，不表示相关代码已实现。进程管理仍需完成实现、回归测试和真实 init/Buildroot 平台验证。
+> 代码位于 `src/supervisor/`、`src/app/supervisor_service.*`、`src/http/routes/supervisor_route.*`
+> 与 `web/src/features/processes/`。宿主 Linux 的 L0/L1 与 x86_64 musl/static-pie 构建已执行；
+> systemd/OpenRC/BusyBox 真机、root 身份切换与 ARM64 运行验证仍未完成，详见
+> [测试与验证矩阵](testing.md)。
 
 ## V1.2 桌面工作区
 
@@ -59,8 +63,8 @@
 | [ADR-0012](adr/0012-extension-security-and-communication.md) | 扩展权限快照、JSON-RPC/MessagePort、CSP 与网络安全边界 | 已实现（V1.3）；含已接受风险 |
 | [ADR-0013](adr/0013-extension-file-api-and-transfer.md) | 扩展文件 API、1 MiB 分块、原子上传与文件锁 | 已实现（V1.3） |
 | [ADR-0014](adr/0014-extension-popup-navigation-boundary.md) | 扩展弹窗与 iframe 顶层导航边界（待确认；风险未关闭） | Proposed |
-| [ADR-0015](adr/0015-process-supervisor-architecture.md) | 独立 Process Supervisor、Unix Socket、SQLite 与 init 适配 | 已确认（尚未实现） |
-| [ADR-0016](adr/0016-process-supervisor-security.md) | root 守护进程、运行身份隔离、IPC 与执行安全 | 已确认（尚未实现） |
+| [ADR-0015](adr/0015-process-supervisor-architecture.md) | 独立 Process Supervisor、Unix Socket、SQLite 与 init 适配 | 已实现（V1.0；平台矩阵部分未验证） |
+| [ADR-0016](adr/0016-process-supervisor-security.md) | root 守护进程、运行身份隔离、IPC 与执行安全 | 已实现（V1.0；root/init 真机验证待补） |
 
 ## Spec（要做什么）
 
@@ -74,7 +78,7 @@
 | [SPEC-0006](spec/0006-desktop-workspace.md) | V1.2 桌面图标、Dock、启动器、窗口管理、持久化与恢复 |
 | [SPEC-0007](spec/0007-extension-applications.md) | 扩展应用 ZIP 包、安装/审批/升级/卸载、iframe 沙箱、宿主 API、KV 与文件传输；含第 1～98 轮决策台账 |
 | [SPEC-0008](spec/0008-extension-platform-hardening.md) | 扩展应用平台安全与可靠性加固：内部路径保护、网络授权、完整性、数据事务、资源清理、审计脱敏与跨平台构建 |
-| [SPEC-0009](spec/0009-process-supervisor.md) | 独立进程托管、自动拉起、进程组停止、日志、IPC 权限与 init 适配（规划中） |
+| [SPEC-0009](spec/0009-process-supervisor.md) | 独立进程托管、自动拉起、进程组停止、日志、IPC 权限与 init 适配（V1.0 已实现，平台验证部分待补） |
 
 ## 实施计划
 
@@ -121,4 +125,4 @@
 1. 产品决策有变化：更新相关 Spec 与 ADR 的状态和日期。
 2. 编程 Agent 实现时应提供可验证的验收证据，未验证的平台不得声明通过。
 3. 将建议项改为已确认之前必须取得明确的产品决策。
-4. 最初 V1.0 核心基线不引入数据库/ORM；后续仅 SPEC-0007 扩展平台和规划中的 SPEC-0009 Process Supervisor 使用各自独立的 SQLite 数据库，不迁移认证、设置、终端或指标。EdgeDesk 不建设云端设备管理控制平面，也不提供完整 SSH/SFTP 兼容。
+4. 最初 V1.0 核心基线不引入数据库/ORM；后续仅 SPEC-0007 扩展平台与 SPEC-0009 Process Supervisor 使用各自独立的 SQLite 数据库，不迁移认证、设置、终端或指标。EdgeDesk 不建设云端设备管理控制平面，也不提供完整 SSH/SFTP 兼容。

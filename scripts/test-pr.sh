@@ -48,7 +48,7 @@ usage() {
 Usage: scripts/test-pr.sh [--no-frontend] [--no-integration] [--port N]
 
 L1: frontend test/build, dev-disk build, native unit tests, integration suite.
-The integration suite uses N..N+5, so pick a free base port.
+The integration suite uses N..N+7, so pick a free base port.
 
 Options:
   --no-frontend      reuse an existing web/dist and skip npm test/build

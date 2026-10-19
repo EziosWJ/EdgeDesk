@@ -1,12 +1,15 @@
 # SPEC-0009 实施计划：EdgeDesk Process Supervisor
 
-- 状态：**Planned（仅文档已确认；尚未实现）**
+- 状态：**V1.0 implemented（Phase 0–4 完成；Phase 5 平台矩阵部分未验证）**
 - 需求基线：[SPEC-0009](../spec/0009-process-supervisor.md)
 - 架构决策：[ADR-0015](../adr/0015-process-supervisor-architecture.md)、[ADR-0016](../adr/0016-process-supervisor-security.md)
 - 工程规范：[AGENTS.md](../../AGENTS.md)
 - 测试基线：[测试与验证矩阵](../testing.md)
 
-> 本文是实施计划。下表的 PS-01～PS-10 是建议的 GitHub Issue 拆分，不表示 Issue 已创建。
+> 本文保留最初的分阶段计划。PS-01～PS-09 的功能代码、宿主原生测试、集成测试和前端
+> 单元测试已落地；PS-10 的 systemd/OpenRC/BusyBox 真机、musl/static-pie 与
+> ARM64/QEMU 验收尚未在当前环境执行，必须按 `docs/testing.md` 标记为未验证。
+> 建议的 GitHub Issue 拆分没有实际创建，工作直接在分支 `feat/process-supervisor-v1.0` 完成。
 
 ## 1. 实施原则
 

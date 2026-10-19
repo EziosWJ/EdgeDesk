@@ -10,6 +10,7 @@
 #include <fstream>
 #include <limits>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 namespace edgedesk {
@@ -54,6 +55,8 @@ const OptionSpec kOptions[] = {
     {"audit-max-files", true, false},
     {"audit-retention-days", true, false},
     {"apps-root", true, false},
+    {"supervisor-socket", true, false},
+    {"no-supervisor", false, false},
     {"state-dir", true, false},
     {"data-dir", true, false},
     {"reset-admin-password", false, false},
@@ -234,6 +237,15 @@ bool apply_option(Config& config, const std::string& name, const std::string& va
             return false;
         }
         config.apps_root = value;
+    } else if (name == "supervisor-socket") {
+        if (value.empty() || value.front() != '/' ||
+            value.size() >= sizeof(sockaddr_un::sun_path)) {
+            error = "--supervisor-socket must be an absolute Unix socket path shorter than 108 bytes";
+            return false;
+        }
+        config.supervisor_socket = value;
+    } else if (name == "no-supervisor") {
+        config.supervisor_enabled = false;
     } else if (name == "state-dir") {
         config.state_dir = value;
     } else if (name == "data-dir") {
@@ -540,6 +552,11 @@ std::string help_text() {
         "Extensions:\n"
         "  --apps-root PATH            Application packages/data root\n"
         "                              (default /var/lib/edgedesk/apps)\n"
+        "\n"
+        "Process supervisor:\n"
+        "  --supervisor-socket PATH    Supervisor Unix socket\n"
+        "                              (default /run/edgedesk-supervisor.sock)\n"
+        "  --no-supervisor             Disable process management integration\n"
         "\n"
         "Other:\n"
         "  --config PATH               Load options from a key=value file\n"

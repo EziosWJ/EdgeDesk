@@ -1,0 +1,21 @@
+#!/bin/sh
+# BusyBox init wrapper: prepare persistent Supervisor directories, then exec
+# the foreground daemon. Deploy to /usr/sbin/edgedesk-supervisor-boot.
+set -eu
+
+STATE_DIR=/var/lib/edgedesk-supervisor
+LOG_DIR="${STATE_DIR}/logs"
+SOCKET=/run/edgedesk-supervisor.sock
+SUPERVISOR_GROUP=edgedesk
+
+umask 0077
+mkdir -p "${STATE_DIR}" "${LOG_DIR}"
+chmod 0700 "${STATE_DIR}" "${LOG_DIR}"
+chown root:root "${STATE_DIR}" "${LOG_DIR}"
+
+exec /usr/sbin/edgedesk-supervisor \
+    --socket "${SOCKET}" \
+    --database "${STATE_DIR}/supervisor.db" \
+    --log-dir "${LOG_DIR}" \
+    --socket-group "${SUPERVISOR_GROUP}" \
+    --allow-gid "${SUPERVISOR_GROUP}"

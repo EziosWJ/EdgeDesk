@@ -52,14 +52,15 @@ describe('DesktopShell', () => {
     });
   };
 
-  it('shows dashboard, files, terminal and session manager icons; settings comes from the launcher', () => {
+  it('shows desktop shortcuts for the default applications and keeps settings in the launcher', () => {
     render();
     const labels = [...container.querySelectorAll('.ed-desktop-icon')].map((item) => item.getAttribute('aria-label'));
-    expect(labels).toHaveLength(4);
+    expect(labels).toHaveLength(5);
     expect(labels[0]).toContain('设备概览');
     expect(labels[1]).toContain('文件管理');
     expect(labels[2]).toContain('终端');
     expect(labels[3]).toContain('会话管理');
+    expect(labels[4]).toContain('进程管理');
     expect(container.querySelector('.ed-desktop')).not.toBeNull();
     expect(container.querySelector('.ed-status-pill')).toBeNull();
   });

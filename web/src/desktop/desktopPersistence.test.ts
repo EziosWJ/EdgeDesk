@@ -34,7 +34,7 @@ function layout(overrides: Partial<DesktopLayoutV1> = {}): DesktopLayoutV1 {
       { appId: 'dashboard', col: 0, row: 0 },
       { appId: 'files', col: 1, row: 0 },
     ],
-    dock: ['dashboard', 'files', 'terminal', 'sessions', 'settings'],
+    dock: ['dashboard', 'files', 'terminal', 'sessions', 'processes', 'settings'],
     windows: [
       {
         id: 'dashboard:solo',
@@ -80,7 +80,7 @@ describe('DesktopPersistence', () => {
       { appId: 'terminal', col: 2, row: 1 },
       { appId: 'files', col: 0, row: 3 },
     ]);
-    expect(loaded.layout?.dock).toEqual(['dashboard', 'files', 'terminal', 'sessions', 'settings']);
+    expect(loaded.layout?.dock).toEqual(['dashboard', 'files', 'terminal', 'sessions', 'processes', 'settings']);
     expect(loaded.layout?.windows[0]).toMatchObject({
       appId: 'files',
       state: 'maximized',
@@ -180,7 +180,7 @@ describe('DesktopPersistence', () => {
     const warning = restoreDesktop({ storage, sessions: [], viewport: { width: 1200, height: 800 } });
     expect(warning).toBeNull();
     expect(desktopStore.getSnapshot().icons).toHaveLength(2);
-    expect(desktopStore.getSnapshot().dock).toEqual(['dashboard', 'files', 'terminal', 'sessions', 'settings']);
+    expect(desktopStore.getSnapshot().dock).toEqual(['dashboard', 'files', 'terminal', 'sessions', 'processes', 'settings']);
     const windows = windowStore.getSnapshot();
     expect(windows).toHaveLength(2);
     expect(windows[1].restoreError).toBe('session_ended');
@@ -219,7 +219,7 @@ describe('DesktopPersistence', () => {
   it('starts from defaults when no layout exists', () => {
     const storage = new MemoryStorage();
     expect(restoreDesktop({ storage, sessions: [] })).toBeNull();
-    expect(desktopStore.getSnapshot().icons.map((icon) => icon.appId)).toEqual(['dashboard', 'files', 'terminal', 'sessions']);
+    expect(desktopStore.getSnapshot().icons.map((icon) => icon.appId)).toEqual(['dashboard', 'files', 'terminal', 'sessions', 'processes']);
     expect(windowStore.getSnapshot()).toHaveLength(0);
     expect(desktopStore.isRestored()).toBe(true);
   });

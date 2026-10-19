@@ -1,4 +1,5 @@
 #include "app/application.hpp"
+#include "app/supervisor_service.hpp"
 
 #include "core/util.hpp"
 #include "extensions/extension_runtime.hpp"
@@ -116,6 +117,20 @@ void Application::initialize() {
     transfer_gate_ = std::make_unique<ConcurrencyGate>(config_.max_transfers);
     web_root_ = std::make_unique<WebRoot>(config_.web_root);
 
+    if (config_.supervisor_enabled) {
+        supervisor::SupervisorClientOptions client_options;
+        client_options.socket_path = config_.supervisor_socket;
+        Error client_error;
+        auto client = supervisor::SupervisorClient::create(client_options, client_error);
+        if (!client) {
+            throw std::runtime_error("cannot configure process supervisor client: " +
+                                     client_error.message);
+        }
+        // Two workers keep the libhv loop responsive while preserving a strict
+        // upper bound on concurrent privileged requests.
+        supervisor_service_ = std::make_unique<SupervisorService>(std::move(client), 2, 32);
+    }
+
     Error extension_error;
     packages_ = extensions::PackageManager::create(config_.apps_root, extension_error);
     if (!packages_) {
@@ -180,6 +195,9 @@ void Application::print_banner() const {
               << (terminals_->shell_available() ? "" : " (NOT FOUND - terminal creation will fail)") << "\n"
               << "  metrics: every " << config_.metrics_interval_ms << " ms, "
               << config_.metrics_history << " samples in memory\n"
+              << "  supervisor: "
+              << (config_.supervisor_enabled ? config_.supervisor_socket : std::string("disabled"))
+              << "\n"
               << std::flush;
 }
 
@@ -256,6 +274,7 @@ int Application::run() {
     context.transfer_gate = transfer_gate_.get();
     context.packages = packages_.get();
     context.extension_runtime = extension_runtime_.get();
+    context.supervisor = supervisor_service_.get();
 
     Server server(context, config_);
     std::thread signal_thread([&signal_set, &server] {

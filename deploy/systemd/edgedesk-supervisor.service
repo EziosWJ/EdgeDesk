@@ -1,0 +1,43 @@
+[Unit]
+Description=EdgeDesk process supervisor
+Documentation=file:///usr/share/doc/edgedesk/spec/0009-process-supervisor.md
+After=network.target
+# The Supervisor is a standalone daemon. EdgeDesk web service ordering is not
+# required: both sides reconnect after a restart.
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/edgedesk-supervisor \
+  --socket /run/edgedesk-supervisor.sock \
+  --database /var/lib/edgedesk-supervisor/supervisor.db \
+  --log-dir /var/lib/edgedesk-supervisor/logs \
+  --socket-group edgedesk \
+  --allow-gid edgedesk
+
+# Managed services form their own process groups. Signal only the Supervisor
+# first so it can forward SIGTERM to those groups, wait for stop_timeout_ms and
+# escalate to SIGKILL before init tears down the cgroup.
+KillMode=process
+TimeoutStopSec=90
+
+# Independent databases and logs live under its own state directory. The
+# Supervisor must keep running when the web backend is stopped or upgraded.
+StateDirectory=edgedesk-supervisor
+UMask=0077
+
+Restart=always
+RestartSec=2
+
+NoNewPrivileges=no
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ReadWritePaths=/var/lib/edgedesk-supervisor
+# Service executables and working directories live outside the Supervisor's
+# state directory. Administrators deploying ProtectSystem=strict must add the
+# service paths to ReadWritePaths/ReadOnlyPaths explicitly.
+
+[Install]
+WantedBy=multi-user.target

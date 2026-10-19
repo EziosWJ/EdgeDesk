@@ -269,29 +269,110 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 - 每 IP 限流 30/s（突发 60），登录/初始化/改密 5/分钟；超限 `429`，上传路径在头阶段拒绝。
 - 默认使用 TCP 对端 IP；只有 `--trusted-proxy` 列出的代理才解析 `X-Forwarded-For`。
 
-## Process Supervisor API（规划中，尚未实现）
+## Process Supervisor API（已实现）
 
-以下是 SPEC-0009 的拟新增接口，不属于当前 V1.3 API；在代码实现并通过测试前不得将其视为可调用端点。
+所有 `/api/supervisor/*` 端点沿用现有管理员认证、CSRF、限流、安全响应头和统一错误格式。
+它们只通过本机 Unix Domain Socket 访问 `edgedesk-supervisor`；浏览器和扩展 iframe
+不能直接连接该 Socket。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/supervisor/health` | Supervisor 连接状态 |
-| GET | `/api/supervisor/services` | 服务列表 |
+| GET | `/api/supervisor/health` | Supervisor 连接与健康状态 |
+| GET | `/api/supervisor/services` | 服务列表；支持 `offset`、`limit`（1–1000）、`status` |
 | POST | `/api/supervisor/services` | 创建服务 |
 | GET | `/api/supervisor/services/{id}` | 服务详情 |
-| PUT | `/api/supervisor/services/{id}` | 更新配置，不自动重启 |
-| DELETE | `/api/supervisor/services/{id}` | 删除已停止服务 |
+| PUT | `/api/supervisor/services/{id}` | 更新提供的字段，不自动重启 |
+| DELETE | `/api/supervisor/services/{id}` | 删除已停止服务；运行中返回 409 |
 | POST | `/api/supervisor/services/{id}/start` | 启动服务 |
-| POST | `/api/supervisor/services/{id}/stop` | 停止服务 |
-| POST | `/api/supervisor/services/{id}/restart` | 重启服务 |
-| GET | `/api/supervisor/services/{id}/logs` | 读取尾部/游标后的增量日志 |
+| POST | `/api/supervisor/services/{id}/stop` | 停止服务并等待完成 |
+| POST | `/api/supervisor/services/{id}/restart` | 停止后重新启动并等待完成 |
+| GET | `/api/supervisor/services/{id}/logs` | 读取日志；支持 `tail_bytes`、`cursor`、`max_bytes` |
 
-实现要求：
+成功响应带 `"ok": true`。服务对象包含配置和运行时字段：
 
-- 所有端点沿用现有管理员认证、CSRF、限流和统一 JSON 错误响应。
-- Supervisor 不可用时返回明确的 503 错误；不得拖垮其他 EdgeDesk 功能。
-- EdgeDesk 后端通过本机 Unix Domain Socket 调用 Supervisor；不得新增 TCP 管理 listener。
-- IPC 建议采用 JSON-RPC 2.0 语义和 NDJSON 分帧，具备消息大小、并发和超时上限。
-- 不开放任意 PID 信号、任意文件访问或 Shell 命令执行端点。
+```json
+{
+  "id": "…",
+  "name": "mihomo",
+  "executable": "/usr/local/bin/mihomo",
+  "args": ["-c", "/etc/mihomo/config.yaml"],
+  "cwd": "/var/lib/mihomo",
+  "env": {"LOG_LEVEL": "info"},
+  "run_user": "edgedesk-service",
+  "run_group": "edgedesk-service",
+  "allow_root": false,
+  "autostart": true,
+  "restart_policy": "on-failure",
+  "max_restarts": 5,
+  "restart_window_sec": 60,
+  "restart_delay_ms": 1000,
+  "max_restart_delay_ms": 60000,
+  "stable_after_sec": 300,
+  "stop_timeout_ms": 10000,
+  "log_max_bytes": 10485760,
+  "created_at": 1792421340,
+  "updated_at": 1792421340,
+  "state": "RUNNING",
+  "desired_state": "running",
+  "pid": 1234,
+  "pgid": 1234,
+  "boot_id": "…",
+  "started_at": 1792421400000,
+  "last_exit_code": null,
+  "last_signal": null,
+  "last_exit_at": null,
+  "last_error": "",
+  "restart_count": 0,
+  "failed_locked": false,
+  "uptime_seconds": 42,
+  "cpu_percent": 1.5,
+  "rss_bytes": 10485760,
+  "metrics_available": true,
+  "ok": true
+}
+```
 
-完整契约见 [SPEC-0009](spec/0009-process-supervisor.md)。
+`state` 为 `STOPPED`、`STARTING`、`RUNNING`、`STOPPING`、`BACKOFF`、`FAILED` 或
+`UNKNOWN`。`pid`/`pgid`/`started_at`/`last_exit_*`/`uptime_seconds` 在不可用时为
+`null`；`cpu_percent`/`rss_bytes` 不可用时同样为 `null`，不得当作 0。
+
+日志游标响应：
+
+```json
+{
+  "ok": true,
+  "service_id": "…",
+  "content": "…",
+  "cursor": 334,
+  "next_cursor": 334,
+  "size": 334,
+  "reset": false,
+  "truncated": false
+}
+```
+
+`tail_bytes` 与 `max_bytes` 上限均为 256 KiB；不传 `cursor`/`tail_bytes` 时默认读取
+16 KiB 尾部。`reset=true` 表示游标因日志轮转/截断失效，应重新读取尾部。
+
+错误响应：
+
+```json
+{"ok": false, "error": "service_running", "message": "…"}
+```
+
+| 状态 | 错误 slug | 场景 |
+|---|---|---|
+| 400 | `invalid_service_config` / `invalid_request` / `invalid_params` | 配置、路径、身份或参数无效 |
+| 403 | `root_confirmation_required` | 运行身份为 root 但没有 `allow_root=true` |
+| 403 | `permission_denied` | 非 root Supervisor 无法切换身份等 |
+| 404 | `service_not_found` | 服务 ID 不存在 |
+| 409 | `service_running` / `service_stopping` / `service_state` / `service_name_conflict` | 生命周期或唯一名称冲突 |
+| 502 | `supervisor_error` | IPC 返回无法映射的内部错误 |
+| 503 | `supervisor_unavailable` / `supervisor_busy` / `operation_timeout` | Socket 不可达、worker 队列满或操作超时 |
+
+CSRF 校验失败仍由通用中间件返回 403 `csrf_rejected`；未认证返回 401。
+`supervisor_unavailable` 只影响进程管理端点，文件、终端、仪表盘、认证、设置和扩展
+平台继续工作。
+
+完整行为契约见 [SPEC-0009](spec/0009-process-supervisor.md)，部署见
+[`deploy/README.md`](../deploy/README.md)。

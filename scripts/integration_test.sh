@@ -8,6 +8,7 @@
 #   - REST API suite (files, transfers, metrics, sandbox, CSRF)
 #   - WebSocket suite (terminal lifecycle, reconnect, metrics stream)
 #   - Rate limiting (separate strict-limit instance, including XFF spoofing)
+#   - Process supervisor IPC/HTTP lifecycle, restart and recovery
 #   - Audit log sanity
 #
 # Usage: scripts/integration_test.sh [binary] [port] [web-root] [runner]
@@ -42,6 +43,17 @@ NEW_PASSWORD="integration password two"
 RECOVERY_PASSWORD="integration password recovery"
 CORRUPT_PASSWORD="integration password corrupt"
 RESTART_PORT=$((PORT + 5))
+SUPERVISOR_BIN=${EDGEDESK_SUPERVISOR_BIN:-$(dirname "$BIN")/edgedesk-supervisor}
+SUP_ROOT="$ROOT/supervisor"
+SUP_SOCK="$SUP_ROOT/run/supervisor.sock"
+SUP_DB="$SUP_ROOT/data/supervisor.db"
+SUP_LOGS="$SUP_ROOT/logs"
+SUP_FILES="$SUP_ROOT/files"
+SUP_AUTH_DATA="$SUP_ROOT/auth-data"
+SUP_STATE="$SUP_ROOT/state"
+SUP_STATE_FILE="$SUP_ROOT/state.json"
+SUP_PORT=$((PORT + 7))
+SUP_PID=""
 PIDS=()
 
 log() { printf '\n[integration] %s\n' "$*"; }
@@ -75,6 +87,17 @@ stop_pid() {
 stop_servers() {
   for pid in "${PIDS[@]:-}"; do stop_pid "$pid"; done
 }
+
+# Simulate a supervisor crash or power loss. SIGKILL deliberately bypasses the
+# daemon's graceful shutdown, leaving managed processes running so the next
+# supervisor instance has to adopt them from persisted identity.
+kill_pid_hard() {
+  local pid="$1"
+  [ -n "$pid" ] || return 0
+  kill -9 "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 cleanup() {
   stop_servers
   if [ "${KEEP_TMP:-0}" != "1" ]; then rm -rf "$ROOT"; fi
@@ -98,7 +121,45 @@ wait_health() {
   return 1
 }
 
+start_supervisor() {
+  local -a runner=()
+  if [ -n "$RUNNER" ]; then read -r -a runner <<< "$RUNNER"; fi
+  rm -f "$SUP_SOCK"
+  "${runner[@]}" "$SUPERVISOR_BIN" --socket "$SUP_SOCK" --database "$SUP_DB" \
+    --log-dir "$SUP_LOGS" --allow-uid "$(id -u)" --allow-gid "$(id -g)" \
+    > "$ROOT/supervisor.log" 2>&1 &
+  SUP_PID=$!
+  PIDS+=("$SUP_PID")
+  for _ in $(seq 1 200); do
+    if ! kill -0 "$SUP_PID" 2>/dev/null; then
+      echo "supervisor exited during startup" >&2
+      cat "$ROOT/supervisor.log" >&2 || true
+      return 1
+    fi
+    if [ -S "$SUP_SOCK" ]; then return 0; fi
+    sleep 0.05
+  done
+  echo "supervisor socket did not appear" >&2
+  cat "$ROOT/supervisor.log" >&2 || true
+  return 1
+}
+
+start_supervisor_backend() {
+  start_server "$SUP_PORT" --file-root "$SUP_FILES" --auth-token "$TOKEN" \
+    --data-dir "$SUP_AUTH_DATA" --state-dir "$SUP_STATE" --supervisor-socket "$SUP_SOCK" \
+    --login-rate-limit 200 --rate-limit 500 --rate-limit-burst 500
+  SUP_SERVER_PID=$SERVER_PID
+  wait_health "$SUP_PORT"
+}
+
+run_supervisor_phase() {
+  python3 scripts/supervisor_test.py --host 127.0.0.1 --port "$SUP_PORT" \
+    --password "$NEW_PASSWORD" --state "$SUP_STATE_FILE" --phase "$1"
+}
+
 mkdir -p "$DATA/docs" "$STATE" "$AUTH_DATA" "$CORRUPT_DATA" "$APPS" "$EXT_DATA" "$EXT_STATE" "$EXT_APPS" "$EXT_FILES"
+mkdir -p "$SUP_ROOT/run" "$SUP_ROOT/data" "$SUP_LOGS" "$SUP_FILES" "$SUP_AUTH_DATA" "$SUP_STATE"
+printf 'supervisor fixture\n' > "$SUP_FILES/fixture.txt"
 printf 'hello\n' > "$DATA/a.txt"
 printf '# note\n' > "$DATA/docs/n.md"
 
@@ -135,6 +196,44 @@ python3 scripts/api_test.py 127.0.0.1 "$RESTART_PORT" "$TOKEN" "$DATA" "$NEW_PAS
 python3 scripts/ws_test.py 127.0.0.1 "$RESTART_PORT" "$NEW_PASSWORD"
 python3 scripts/extension_test.py --host 127.0.0.1 --port "$RESTART_PORT" \
   --password "$NEW_PASSWORD" --apps-root "$APPS" --file-root "$DATA" --state-dir "$STATE"
+
+log "process supervisor integration on port $SUP_PORT"
+if [ ! -x "$SUPERVISOR_BIN" ]; then
+  echo "supervisor binary not found: $SUPERVISOR_BIN" >&2
+  exit 1
+fi
+start_supervisor
+start_supervisor_backend
+python3 scripts/auth_test.py --host 127.0.0.1 --port "$SUP_PORT" \
+  --password "$NEW_PASSWORD" --setup-only
+run_supervisor_phase crud
+
+log "managed process survives an EdgeDesk backend restart"
+stop_pid "$SUP_SERVER_PID"
+start_supervisor_backend
+run_supervisor_phase after-backend-restart
+
+log "supervisor unavailable fails closed without breaking EdgeDesk"
+kill_pid_hard "$SUP_PID"
+run_supervisor_phase unavailable
+
+log "supervisor crash recovery adopts a running process, explicit stop persists"
+start_supervisor
+run_supervisor_phase after-supervisor-restart
+kill_pid_hard "$SUP_PID"
+start_supervisor
+run_supervisor_phase after-manual-stop-restart
+test -f "$SUP_STATE/audit.log"
+grep -q '"event":"supervisor.create"' "$SUP_STATE/audit.log"
+grep -q '"event":"supervisor.update"' "$SUP_STATE/audit.log"
+grep -q '"event":"supervisor.start"' "$SUP_STATE/audit.log"
+grep -q '"event":"supervisor.restart"' "$SUP_STATE/audit.log"
+grep -q '"event":"supervisor.stop"' "$SUP_STATE/audit.log"
+grep -q '"event":"supervisor.logs"' "$SUP_STATE/audit.log"
+grep -q '"event":"supervisor.delete"' "$SUP_STATE/audit.log"
+grep -q 'root_confirmation_required' "$SUP_STATE/audit.log"
+stop_pid "$SUP_SERVER_PID"
+stop_pid "$SUP_PID"
 
 # The rate-limit instance needs exclusive access to the same auth data dir.
 stop_pid "$FUNCTIONAL_PID"

@@ -65,6 +65,10 @@ struct Config {
     // extension application platform (SQLite metadata + immutable revisions)
     std::string apps_root = "/var/lib/edgedesk/apps";
 
+    // process supervisor (separate privileged daemon; no TCP management API)
+    bool supervisor_enabled = true;
+    std::string supervisor_socket = "/run/edgedesk-supervisor.sock";
+
     // persistent application data (auth.json, settings.json)
     std::string data_dir;
 

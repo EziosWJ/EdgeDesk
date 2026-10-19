@@ -1,13 +1,16 @@
 # SPEC-0009：EdgeDesk Process Supervisor
 
-- 状态：**Confirmed design / Not implemented**（Grill 8 轮决策已确认；实现尚未开始）
+- 状态：**Implemented V1.0（宿主 Linux 已验证；init/musl/ARM64 平台验证待补）**
 - 日期：2026-10-19
 - 目标版本：EdgeDesk 后续版本（建议 V1.4）
+- 实现位置：`src/supervisor/`、`src/app/supervisor_service.*`、`src/http/routes/supervisor_route.*`、`web/src/features/processes/`、`deploy/`
 - 前置基线：[产品范围 SPEC-0001](0001-product-scope.md)、[桌面工作区 SPEC-0006](0006-desktop-workspace.md)、[扩展平台 SPEC-0007](0007-extension-applications.md)
 - 技术决策：[ADR-0015：独立 Supervisor 架构](../adr/0015-process-supervisor-architecture.md)、[ADR-0016：权限与执行安全](../adr/0016-process-supervisor-security.md)
 - 实施计划：[Process Supervisor 实施计划](../tasks/0009-process-supervisor.md)
 
-> 本文定义已确认的产品行为与实现边界，不表示相关代码已经存在。完成情况以代码、测试和实际平台验证为准。
+> 本文定义已确认的产品行为与实现边界。V1.0 代码、宿主原生测试、集成测试和前端构建已完成；
+> systemd、OpenRC、BusyBox init、musl 与 ARM64 尚未在本仓库的当前验证环境中实际运行，
+> 具体证据与未验证项见 [测试与验证矩阵](../testing.md)。
 
 ## 1. 目标与定位
 
@@ -245,9 +248,9 @@ Supervisor 可能在服务仍运行时崩溃或升级重启。恢复时必须先
 
 ## 11. EdgeDesk API 与 UI
 
-### 11.1 HTTP API（规划契约）
+### 11.1 HTTP API（已实现）
 
-所有接口继续使用现有 EdgeDesk 认证、CSRF 与统一错误响应。建议端点：
+所有接口继续使用现有 EdgeDesk 认证、CSRF 与统一错误响应。已实现端点：
 
 | 方法 | 路径 | 行为 |
 |---|---|---|
@@ -262,7 +265,13 @@ Supervisor 可能在服务仍运行时崩溃或升级重启。恢复时必须先
 | POST | `/api/supervisor/services/{id}/restart` | 重启服务 |
 | GET | `/api/supervisor/services/{id}/logs` | 获取日志尾部或游标后的增量内容 |
 
-错误遵循当前 API 格式；建议增加 `supervisor_unavailable`（503）、`service_not_found`（404）、`service_running`（409）、`service_failed`（409）、`invalid_service_config`（400）。这些是拟新增错误码，正式实现前须与当前 `src/core/error.*` 核对。
+错误遵循当前 API 格式。已实现错误码包括 `supervisor_unavailable`（503）、
+`supervisor_busy`（503）、`service_not_found`（404）、`service_running`（409）、
+`service_stopping`（409）、`service_state`（409）、`service_name_conflict`（409）、
+`root_confirmation_required`（403）、`permission_denied`（403）、
+`invalid_service_config`（400）、`invalid_request`（400）与 `operation_timeout`（503）。
+`supervisor_unavailable` 表示 Socket/守护进程不可达；不影响文件、终端、仪表盘、
+认证、设置和扩展平台端点。
 
 IPC 调用必须使用有界等待与独立执行上下文，不能无限阻塞 libhv 事件循环。Supervisor 不可用时，EdgeDesk 其他功能必须继续工作。
 
@@ -310,3 +319,28 @@ IPC 调用必须使用有界等待与独立执行上下文，不能无限阻塞 
 - Buildroot 至少在实际目标环境或明确标注的模拟环境验证启动、停止与 respawn。
 - 保留既有文件管理、终端会话、设备仪表盘、认证、设置、桌面布局和扩展平台行为。
 - 测试结果必须记录实际执行命令；未执行的平台标记为“未验证”。
+
+## 13. V1.0 实现记录
+
+- `edgedesk-supervisor` 以前台单线程 `poll()` 事件循环运行；进程等待、日志读取和
+  IPC 均有界，不依赖 libhv，也不阻塞 EdgeDesk 的 libhv 事件循环。
+- 服务通过 `fork` + `setsid` + `fchdir` + `setgroups`/`setgid`/`setuid` +
+  `fexecve` 启动；可执行文件以 `O_PATH` 固定 inode，argv 保持数组边界，全程无 Shell。
+  非 root 启动 Supervisor 时只能运行与 Supervisor 相同 UID/GID 的服务。
+- 进程身份由 boot ID、`/proc/<pid>/stat` starttime、PID 与 PGID 共同校验；
+  Supervisor 崩溃后重新启动时只接管身份可验证的进程，验证不了时进入 `UNKNOWN`，
+  不盲目拉起第二份实例。
+- 持久化使用独立 SQLite schema v1（`PRAGMA user_version` + `quick_check`），
+  数据目录 `0700`、数据库 `0600`；损坏或更高版本 schema 时启动失败并保留原文件。
+- IPC 使用 Unix `AF_UNIX`/`SOCK_STREAM` NDJSON JSON-RPC 2.0；创建时校验 Socket
+  目录归属和写权限，连接时检查 `SO_PEERCRED` 的 UID/GID 允许列表，没有 TCP listener。
+  stop/restart 以 ticket + pending operation 异步完成，客户端断开会清理等待项。
+- 日志按服务单文件轮转（保留一个 `.1`），读取支持 `tail_bytes`、`cursor`、
+  `max_bytes`，输出按 UTF-8 清洗；CPU/RSS 来自 `/proc`，不可用时返回 `null`，
+  不伪装成 0。
+- EdgeDesk 通过有界 worker 队列（2 worker、队列 32）访问 IPC；路由只做协议适配、
+  认证/CSRF/审计与错误映射。前端“进程管理”是内置桌面应用，轮询真实 API，
+  不包含模拟数据；Supervisor 不可用时只显示明确错误，不影响其他窗口。
+- init 适配文件位于 `deploy/systemd`、`deploy/openrc`、`deploy/busybox`。
+  它们尚未在本仓库当前环境中的真实 systemd/OpenRC/BusyBox 目标上执行，
+  因此平台验收仍为**未验证**。

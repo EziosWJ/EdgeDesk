@@ -5,6 +5,7 @@
 #include "http/routes/file_route.hpp"
 #include "http/routes/health_route.hpp"
 #include "http/routes/settings_route.hpp"
+#include "http/routes/supervisor_route.hpp"
 #include "http/routes/system_route.hpp"
 #include "http/routes/terminal_route.hpp"
 #include "http/ws_state.hpp"
@@ -46,6 +47,7 @@ int Server::run() {
     register_terminal_routes(router, context_);
     register_system_routes(router, context_);
     register_settings_routes(router, context_);
+    register_supervisor_routes(router, context_);
     register_extension_routes(router, context_);
 
     // Extension application assets are served from immutable revision

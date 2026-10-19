@@ -1,6 +1,6 @@
 # ADR-0016：Process Supervisor 权限与进程执行安全
 
-- 状态：**Accepted**
+- 状态：**Accepted（V1.0 已实现；root 身份切换与 init 真机验证待补）**
 - 日期：2026-10-19
 - 关联规格：[SPEC-0009：Process Supervisor](../spec/0009-process-supervisor.md)
 

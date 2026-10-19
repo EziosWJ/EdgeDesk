@@ -3,6 +3,7 @@ import { DashboardView } from '../features/dashboard/DashboardView';
 import { FilesView } from '../features/files/FilesView';
 import { TerminalView } from '../features/terminal/TerminalView';
 import { TerminalSessionsView } from '../features/terminal/TerminalSessionsView';
+import { ProcessesView } from '../features/processes/ProcessesView';
 import { SettingsView } from '../features/settings/SettingsView';
 import { EditorPane } from '../features/files/EditorPane';
 import { PreviewPane } from '../features/files/PreviewPane';
@@ -35,6 +36,8 @@ export function AppSurface({ window, onLogout, onExtensionsChanged }: Props) {
       );
     case 'sessions':
       return <TerminalSessionsView />;
+    case 'processes':
+      return <ProcessesView />;
     case 'settings':
       return <SettingsView onLogout={onLogout} />;
     case 'editor':

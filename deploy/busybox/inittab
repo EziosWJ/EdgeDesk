@@ -1,0 +1,12 @@
+# EdgeDesk process supervisor for BusyBox init.
+#
+# Install as an /etc/inittab entry (or append to an existing inittab) and run
+# `kill -HUP 1` after changing it. BusyBox respawns the Supervisor if it exits;
+# the Supervisor itself remains responsible for the managed services.
+#
+# /usr/sbin/edgedesk-supervisor-boot creates its private state and log
+# directories with the required modes before exec'ing the daemon.
+#
+# The console is the Supervisor's stdout/stderr. On a device without a serial
+# console attach the output to syslog or a file with a small wrapper.
+::respawn:/usr/sbin/edgedesk-supervisor-boot

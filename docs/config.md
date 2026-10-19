@@ -208,19 +208,55 @@ ReadWritePaths=/srv /var/lib/edgedesk /var/lib/edgedesk/apps /run/edgedesk
 WantedBy=multi-user.target
 ```
 
-## Process Supervisor 部署配置（规划中，尚未实现）
+## Process Supervisor 部署配置（已实现）
 
-本节记录 SPEC-0009 的目标部署约定，不代表当前发行包已经包含 Supervisor 二进制或这些选项。
+`edgedesk-supervisor` 是独立前台守护进程；EdgeDesk Web 后端通过 Unix Socket 调用它。
+Web 后端仍只监听管理员配置的 HTTP 地址（Phase 1 仅回环），Supervisor 不监听 TCP。
 
-| 配置项 | 规划默认值 | 说明 |
+### EdgeDesk Web 后端
+
+| 选项 | 默认值 | 说明 |
 |---|---|---|
-| Supervisor 二进制 | `edgedesk-supervisor` | 独立进程，不嵌入 Web 后端生命周期 |
-| Socket | `/run/edgedesk-supervisor.sock` | Unix Domain Socket；可显式覆盖 |
-| 数据库 | `/var/lib/edgedesk-supervisor/supervisor.db` | 独立 SQLite，需位于可写持久化分区 |
-| 数据目录权限 | `0700` | Supervisor 专属目录 |
-| 数据库权限 | `0600` | 不与扩展平台数据库共用 |
-| Socket 权限 | `root:edgedesk 0660` | 通过专用组与 peer credentials 限制访问，组名/UID 必须按实际部署配置 |
+| `--supervisor-socket PATH` | `/run/edgedesk-supervisor.sock` | 必须是绝对路径且短于 108 字节 |
+| `--no-supervisor` | 关闭 | 不配置 Supervisor 客户端；进程管理 API 返回 503 |
 
-部署适配计划覆盖 systemd、OpenRC 与 BusyBox init。systemd/OpenRC/BusyBox 的具体脚本、respawn 语义和运行目录创建必须在目标系统验证；只提供示例配置不代表已完成平台支持。
+未安装 Supervisor 或 Socket 不可达时，EdgeDesk 仍正常启动；只有
+`/api/supervisor/*` 返回 `503 supervisor_unavailable`，其他功能不受影响。
 
-只读根文件系统部署必须为数据库和日志配置可写持久化位置。详细安全、恢复与服务配置约定见 [SPEC-0009](spec/0009-process-supervisor.md)。
+### Supervisor 守护进程
+
+| 选项 | 默认值 | 说明 |
+|---|---|---|
+| `--socket PATH` | `/run/edgedesk-supervisor.sock` | Unix Domain Socket；目录必须由 Supervisor 用户拥有且不可被组/其他用户写 |
+| `--database PATH` | `/var/lib/edgedesk-supervisor/supervisor.db` | 独立 SQLite schema v1 |
+| `--log-dir PATH` | `/var/lib/edgedesk-supervisor/logs` | 每服务一个有界轮转日志 |
+| `--allow-uid USER\|UID` | root 时 `0`；非 root 时自身 UID | 允许连接 IPC 的对端 UID，可重复 |
+| `--allow-gid GROUP\|GID` | 无 | 允许连接 IPC 的对端主 GID，可重复 |
+| `--socket-group GROUP` | 不改变 | Socket 的组所有者，配合 0660 权限 |
+| `--version` / `--help` | — | 版本/用法 |
+
+数据目录以 `0700` 创建，数据库和日志以 `0600` 创建；Socket 默认 `0660`。
+数据库损坏、`PRAGMA quick_check` 失败或 `user_version` 高于当前 schema 时，
+Supervisor 启动失败并保留原始文件，不会静默重建或清空。
+
+非 root 启动只用于开发和测试：Supervisor 只能运行与自身相同 UID/GID 的服务，
+配置其他身份会在启动服务时返回 `permission_denied`。生产部署应使用 root
+Supervisor + 显式 `run_user`/`run_group`；root 服务需要配置 `allow_root=true`，
+Web UI 会要求单独确认。
+
+### init 适配与目录
+
+仓库提供：
+
+- `deploy/systemd/edgedesk-supervisor.service`：前台 `Type=simple`，
+  `KillMode=process`、`Restart=always`、`StateDirectory`、`UMask=0077`。
+- `deploy/openrc/edgedesk-supervisor`：使用 `supervise-daemon` 的 OpenRC 脚本。
+- `deploy/busybox/inittab` + `deploy/busybox/edgedesk-supervisor-boot`：
+  `::respawn:` 启动，wrapper 创建 0700 状态/日志目录。
+
+安装、权限和验证命令见 [`deploy/README.md`](../deploy/README.md)。
+只读根文件系统必须把 `--database` 与 `--log-dir` 指向可写持久化分区。
+三种 init 适配均已提供文件，但尚未在本仓库当前环境中的真实
+systemd/OpenRC/BusyBox 目标上执行；平台状态见 [`docs/testing.md`](testing.md)。
+
+完整安全与服务配置约定见 [SPEC-0009](spec/0009-process-supervisor.md)。

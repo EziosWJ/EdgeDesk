@@ -139,6 +139,7 @@ export type NativeAppId =
   | 'files'
   | 'terminal'
   | 'sessions'
+  | 'processes'
   | 'settings'
   | 'editor'
   | 'preview'
@@ -177,3 +178,92 @@ export type WindowState = {
 };
 
 export type ViewportSize = { width: number; height: number };
+
+export type ServiceLifecycle = 'STOPPED' | 'STARTING' | 'RUNNING' | 'STOPPING' | 'BACKOFF' | 'FAILED' | 'UNKNOWN';
+export type RestartPolicy = 'always' | 'on-failure' | 'never';
+
+/** One managed service. Fields come from Supervisor service_record_json. */
+export type SupervisedService = {
+  id: string;
+  name: string;
+  executable: string;
+  args: string[];
+  cwd: string;
+  env: Record<string, string>;
+  run_user: string;
+  run_group: string;
+  allow_root: boolean;
+  autostart: boolean;
+  restart_policy: RestartPolicy;
+  max_restarts: number;
+  restart_window_sec: number;
+  restart_delay_ms: number;
+  max_restart_delay_ms: number;
+  stable_after_sec: number;
+  stop_timeout_ms: number;
+  log_max_bytes: number;
+  created_at: number;
+  updated_at: number;
+  state: ServiceLifecycle;
+  desired_state: 'running' | 'stopped' | string;
+  pid: number | null;
+  pgid: number | null;
+  boot_id: string;
+  started_at: number | null;
+  last_exit_code: number | null;
+  last_signal: number | null;
+  last_exit_at: number | null;
+  last_error: string;
+  restart_count: number;
+  failed_locked: boolean;
+  uptime_seconds: number | null;
+  cpu_percent: number | null;
+  rss_bytes: number | null;
+  metrics_available: boolean;
+};
+
+export type SupervisorHealth = {
+  ok: boolean;
+  status: string;
+  service: string;
+  version: string;
+  boot_id: string;
+  uptime_seconds: number;
+  services: number;
+  running: number;
+  persistence_errors: number;
+  log_errors: number;
+  degraded: boolean;
+};
+
+export type SupervisorLogPage = {
+  ok: boolean;
+  service_id: string;
+  content: string;
+  cursor: number;
+  next_cursor: number;
+  size: number;
+  reset: boolean;
+  truncated: boolean;
+};
+
+export type ServicePayload = Pick<
+  SupervisedService,
+  | 'name'
+  | 'executable'
+  | 'args'
+  | 'cwd'
+  | 'env'
+  | 'run_user'
+  | 'run_group'
+  | 'allow_root'
+  | 'autostart'
+  | 'restart_policy'
+  | 'max_restarts'
+  | 'restart_window_sec'
+  | 'restart_delay_ms'
+  | 'max_restart_delay_ms'
+  | 'stable_after_sec'
+  | 'stop_timeout_ms'
+  | 'log_max_bytes'
+>;

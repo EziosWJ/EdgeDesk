@@ -1,6 +1,6 @@
 # ADR-0015：独立 Process Supervisor 架构
 
-- 状态：**Accepted**
+- 状态：**Accepted（V1.0 已实现；init/musl/ARM64 平台矩阵部分未验证）**
 - 日期：2026-10-19
 - 关联规格：[SPEC-0009：Process Supervisor](../spec/0009-process-supervisor.md)
 

@@ -26,6 +26,8 @@ class ExtensionRuntime;
 class PackageManager;
 } // namespace extensions
 
+class SupervisorService;
+
 struct RouteContext {
     const Config* config = nullptr;
     WebRoot* web_root = nullptr;
@@ -41,6 +43,9 @@ struct RouteContext {
     ConcurrencyGate* transfer_gate = nullptr;
     extensions::PackageManager* packages = nullptr;
     extensions::ExtensionRuntime* extension_runtime = nullptr;
+    // Null when process management is disabled; routes must report
+    // supervisor_unavailable instead of assuming a daemon exists.
+    SupervisorService* supervisor = nullptr;
 };
 
 // Public endpoints depend on the authentication state: health/static/session

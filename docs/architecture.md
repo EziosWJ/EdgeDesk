@@ -1,8 +1,9 @@
 # EdgeDesk V1.3 架构
 
-> 状态：**已实现**（V1.3.0 扩展平台首期；V1.2 桌面能力保持不变）。描述当前代码的真实结构；
-> 行为契约见 `docs/spec`，扩展内部契约见 `docs/extension-platform-contracts.md`，
-> 技术决策见 `docs/adr`，接口见 `docs/api.md`，配置见 `docs/config.md`。
+> 状态：**已实现**（V1.3.0 扩展平台首期 + Process Supervisor V1.0；V1.2 桌面能力保持不变）。
+> 描述当前代码的真实结构；行为契约见 `docs/spec`，扩展内部契约见
+> `docs/extension-platform-contracts.md`，技术决策见 `docs/adr`，接口见 `docs/api.md`，
+> 配置见 `docs/config.md`。init/musl/ARM64 平台验证状态见 `docs/testing.md`。
 
 ## 目录与职责
 
@@ -11,6 +12,7 @@ src/
 ├── app/
 │   ├── main.cpp               入口、参数解析、帮助/版本、恢复命令分派
 │   ├── recovery.*             --reset-admin-password 的本机恢复流程
+│   ├── supervisor_service.*   有界 worker 队列 + Supervisor IPC 客户端适配
 │   └── application.{hpp,cpp}  进程级装配：创建服务、信号处理、维护线程、优雅退出
 ├── core/
 │   ├── config.*               CLI / 配置文件 / 环境变量解析（无 libhv 类型）
@@ -56,12 +58,27 @@ src/
 │   ├── settings_store.*      settings.json 白名单偏好
 │   ├── rate_limiter.*        per-IP 令牌桶 + 并发闸门
 │   └── audit.*               JSON Lines 审计日志与轮转
+├── supervisor/               独立进程，不链接 libhv
+│   ├── main.cpp              前台 CLI、信号、Socket/数据库/日志目录装配
+│   ├── supervisor_types.*    配置/状态模型、身份解析、路径与范围校验
+│   ├── supervisor_store.*    SQLite schema v1、事务、恢复元数据（局部例外）
+│   ├── supervisor_engine.*   状态机、重启策略、退避、进程组停止、崩溃接管
+│   ├── process_control.*     fork/setsid/fexecve、/proc 身份、信号与指标采样
+│   ├── log_store.*           有界轮转日志、游标/尾部读取
+│   ├── ipc_server.*          Unix Socket、SO_PEERCRED、JSON-RPC/NDJSON、限流
+│   └── supervisor_client.*   EdgeDesk 侧同步 IPC 客户端
 └── web/
     ├── web_root.*            磁盘 / #embed 统一静态资源抽象
     └── embedded_assets.hpp   由 tools/gen_embed.py 生成的索引接口
 
+deploy/
+├── systemd/                  edgedesk-supervisor.service
+├── openrc/                   OpenRC supervise-daemon 脚本
+└── busybox/                  inittab 示例与 boot wrapper
+
 tools/ext-sdk/                独立 SDK、CLI、vanilla/React/Vue/Svelte 模板
 scripts/extension_test.py     扩展平台集成测试（含崩溃恢复）
+scripts/supervisor_test.py    Supervisor HTTP/生命周期/恢复集成测试
 ```
 
 分层规则：`Route → Service → Platform(POSIX)`。路由只做协议适配与错误映射，
@@ -80,7 +97,7 @@ web/src/
 │   ├── DesktopIcons.tsx     单击选中、双击启动、拖拽换位
 │   ├── Dock.tsx             固定应用、运行指示、最小化恢复、多窗口选择器
 │   ├── Launcher.tsx         AppRegistry 搜索、应用说明、空结果、焦点返回
-│   ├── AppSurface.tsx       appId → 业务组件（dashboard/files/terminal/sessions/settings/editor/preview）
+│   ├── AppSurface.tsx       appId → 业务组件（dashboard/files/terminal/sessions/processes/settings/editor/preview）
 │   └── desktop.css          桌面/窗口/Dock/启动器/NAS 小组件样式与浅色主题覆盖
 ├── stores/windowStore.ts    统一窗口生命周期、实例规则、z-index、几何约束、关闭守卫
 ├── stores/sessionStore.ts   服务端会话列表与指标窗口镜像
@@ -94,7 +111,7 @@ web/src/
 │   ├── ExtensionAppView.tsx 沙箱 iframe、实例 UUID、错误/重载
 │   ├── ExtensionManagerView.tsx 安装/审批/升级/回滚/卸载/完整性 UI
 │   └── extensions.css       管理界面与运行时样式
-└── features/                 既有 dashboard/files/terminal/sessions/settings 业务组件
+└── features/                 业务组件：dashboard/files/terminal/sessions/processes/settings
 ```
 
 关键不变量：
@@ -251,27 +268,42 @@ UI，不调用会话关闭接口；显式 close 或空闲超时才回收；回�
 两种模式共用 SPA 回退（未知非 `/api`、`/ws` 路径返回 `index.html`），
 哈希资源 `Cache-Control: immutable`，`index.html` 使用 `no-cache`。
 
-## 规划中的 Process Supervisor（尚未实现）
+## Process Supervisor V1.0（已实现）
 
-本节是 SPEC-0009 的目标架构，不属于当前 V1.3 已实现代码清单。
+本节描述当前代码；行为契约见 [SPEC-0009](spec/0009-process-supervisor.md)。
 
 ```text
-EdgeDesk Web API -> Supervisor IPC Client -> Unix Domain Socket
+EdgeDesk Web API -> SupervisorService（有界 worker 队列）
+                  -> SupervisorClient -> Unix Domain Socket
                                              |
                                              v
-                              edgedesk-supervisor（独立 root 守护进程）
-                                  | SQLite（独立数据库）
-                                  | 进程生命周期/自动重启
-                                  | 进程组、日志与主进程指标
+                              edgedesk-supervisor（独立守护进程）
+                                  | SQLite（独立数据库，schema v1）
+                                  | 单线程 poll() 生命周期/自动重启
+                                  | 进程组、运行身份、日志与主进程指标
 
 systemd / OpenRC / BusyBox init -> 负责 Supervisor 自身的启动与 respawn
 ```
 
-规划约束：
+实现约束：
 
-- 新模块独立于现有 EdgeDesk Web 进程；Web 后端重启不得直接终止托管服务。
-- 业务服务由 Supervisor 管理，不为每个服务生成发行版特定的 init 配置。
-- IPC 只使用 Unix Domain Socket；浏览器和扩展 iframe 不直接访问该 Socket。
-- Supervisor 使用专属 SQLite 数据库；不与扩展平台数据库共用。
-- 当前没有 Supervisor 代码、API 路由、服务表或 init 适配文件；实现状态以未来代码与 `docs/testing.md` 的实际记录为准。
-- 完整设计和行为契约见 [SPEC-0009](spec/0009-process-supervisor.md)，技术决策见 [ADR-0015](adr/0015-process-supervisor-architecture.md) 与 [ADR-0016](adr/0016-process-supervisor-security.md)。
+- `edgedesk-supervisor` 不链接 libhv，拥有独立 `main()` 与单线程 `poll()` 事件循环；
+  EdgeDesk Web 后端重启不会终止托管进程。
+- 路由位于 `src/http/routes/supervisor_route.*`，只做 HTTP 协议适配、认证/CSRF
+  （现有中间件）、审计与错误映射。实际 IPC 调用在 `src/app/supervisor_service.*`
+  的固定大小 worker 池中执行，不阻塞 libhv 事件循环。
+- Supervisor 只在 Unix Socket 上监听，创建时校验目录所有权/权限，连接时检查
+  `SO_PEERCRED`；不存在 TCP 管理 listener。
+- 业务服务由 Supervisor 直接启动：绝对可执行路径 + argv 数组，`fork`/`setsid`/
+  `fexecve`，不经过 Shell。运行身份必须在配置中显式给出，root 需要
+  `allow_root=true`。
+- Supervisor 使用专属 SQLite 数据库保存定义、期望状态与恢复元数据；
+  不与扩展平台数据库共用，也不迁移认证、设置、终端或指标存储。
+- 日志、IPC 消息、队列和连接数均有上限；CPU/RSS 不可用时返回 `null`。
+- 前端 `web/src/features/processes/` 注册为内置应用 `processes`，通过现有桌面
+  Store 管理窗口，仅调用认证后的 `/api/supervisor/*`。
+- init 适配文件位于 `deploy/`；systemd、OpenRC、BusyBox 真机验证尚未在当前环境
+  执行，不能把“脚本存在”当作平台验收通过。
+- 完整设计和行为契约见 [SPEC-0009](spec/0009-process-supervisor.md)，技术决策见
+  [ADR-0015](adr/0015-process-supervisor-architecture.md) 与
+  [ADR-0016](adr/0016-process-supervisor-security.md)。

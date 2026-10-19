@@ -167,6 +167,30 @@ if(UNIX AND NOT APPLE)
   endif()
 endif()
 
+# Process Supervisor (SPEC-0009). Its core is a separate, libhv-free library so
+# the daemon and deterministic lifecycle tests share exactly the same code. The
+# daemon owns its own SQLite database; edgedesk_core only supplies generic
+# helpers and the already-vendored SQLite build.
+add_library(edgedesk_supervisor_core STATIC
+  src/supervisor/ipc_server.cpp
+  src/supervisor/log_store.cpp
+  src/supervisor/process_control.cpp
+  src/supervisor/supervisor_client.cpp
+  src/supervisor/supervisor_engine.cpp
+  src/supervisor/supervisor_store.cpp
+  src/supervisor/supervisor_types.cpp
+)
+target_link_libraries(edgedesk_supervisor_core PUBLIC edgedesk_core)
+target_compile_features(edgedesk_supervisor_core PUBLIC cxx_std_17)
+target_compile_options(edgedesk_supervisor_core PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(edgedesk-supervisor src/supervisor/main.cpp)
+target_link_libraries(edgedesk-supervisor PRIVATE edgedesk_supervisor_core)
+target_compile_features(edgedesk-supervisor PRIVATE cxx_std_17)
+target_compile_options(edgedesk-supervisor PRIVATE -Wall -Wextra -Wpedantic)
+set_target_properties(edgedesk-supervisor PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
 if(EDGEDESK_WEB_MODE STREQUAL "embed")
   set(GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
   set(GENERATED_EMBED_CPP "${GENERATED_DIR}/embedded_assets.cpp")
@@ -195,6 +219,7 @@ if(EDGEDESK_BUILD_SERVER)
     src/app/main.cpp
     src/app/application.cpp
     src/app/recovery.cpp
+    src/app/supervisor_service.cpp
     src/http/http_util.cpp
     src/http/middleware.cpp
     src/http/server.cpp
@@ -203,10 +228,11 @@ if(EDGEDESK_BUILD_SERVER)
     src/http/routes/file_route.cpp
     src/http/routes/health_route.cpp
     src/http/routes/settings_route.cpp
+    src/http/routes/supervisor_route.cpp
     src/http/routes/system_route.cpp
     src/http/routes/terminal_route.cpp
   )
-  target_link_libraries(edgedesk PRIVATE edgedesk_core hv_static)
+  target_link_libraries(edgedesk PRIVATE edgedesk_core edgedesk_supervisor_core hv_static)
   # libhv v1.3.4 exports the static target but keeps several C API headers
   # in source subdirectories rather than an installed include tree.
   target_include_directories(edgedesk SYSTEM PRIVATE
@@ -279,6 +305,26 @@ if(EDGEDESK_BUILD_TESTS)
       set_tests_properties(${test_name} PROPERTIES
         ENVIRONMENT "EDGEDESK_TEST_EXEC_PREFIX=${edgedesk_test_exec_prefix}")
     endif()
+  endforeach()
+
+  # Supervisor tests exercise the libhv-free daemon library directly.
+  set(EDGEDESK_SUPERVISOR_TEST_TARGETS
+    supervisor_types_test:supervisor/supervisor_types_test.cpp
+    supervisor_store_test:supervisor/supervisor_store_test.cpp
+    supervisor_log_store_test:supervisor/log_store_test.cpp
+    supervisor_engine_test:supervisor/supervisor_engine_test.cpp
+    supervisor_ipc_test:supervisor/ipc_server_test.cpp
+  )
+  foreach(entry IN LISTS EDGEDESK_SUPERVISOR_TEST_TARGETS)
+    string(REPLACE ":" ";" pair "${entry}")
+    list(GET pair 0 test_name)
+    list(GET pair 1 test_source)
+    add_executable(${test_name} "tests/${test_source}")
+    target_include_directories(${test_name} PRIVATE "${CMAKE_SOURCE_DIR}/tests")
+    target_link_libraries(${test_name} PRIVATE edgedesk_supervisor_core)
+    target_compile_features(${test_name} PRIVATE cxx_std_17)
+    target_compile_options(${test_name} PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME ${test_name} COMMAND ${test_name})
   endforeach()
   add_test(NAME embed_generator_test
     COMMAND ${Python3_EXECUTABLE} -m unittest discover -s "${CMAKE_SOURCE_DIR}/tools/tests" -p "test_*.py")

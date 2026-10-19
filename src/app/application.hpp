@@ -19,6 +19,7 @@ class SystemMetrics;
 class TerminalManager;
 class WebRoot;
 class FileLockManager;
+class SupervisorService;
 
 namespace extensions {
 class ExtensionRuntime;
@@ -65,6 +66,7 @@ private:
     std::unique_ptr<FileLockManager> file_locks_;
     std::unique_ptr<extensions::PackageManager> packages_;
     std::unique_ptr<extensions::ExtensionRuntime> extension_runtime_;
+    std::unique_ptr<SupervisorService> supervisor_service_;
 
     std::thread maintenance_;
     std::atomic<bool> stopping_{false};
