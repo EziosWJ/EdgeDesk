@@ -50,6 +50,11 @@ private:
     std::unique_ptr<AuditLog> audit_;
     std::unique_ptr<PathSandbox> sandbox_;
     std::unique_ptr<FileService> files_;
+    // Separate sandbox/service for extension files.* calls. It shares the
+    // file root and symlink policy but adds the platform-internal protected
+    // paths, so the administrator file manager keeps its existing semantics.
+    std::unique_ptr<PathSandbox> extension_sandbox_;
+    std::unique_ptr<FileService> extension_files_;
     std::unique_ptr<TerminalManager> terminals_;
     std::unique_ptr<SystemMetrics> metrics_;
     std::unique_ptr<RateLimiter> api_limiter_;

@@ -450,11 +450,15 @@ Error ExtensionRuntime::list_directory(const RuntimeSession& session, std::strin
             return Error::make(ErrorCode::unsupported,
                                "directory contains a file name that is not valid UTF-8");
         }
+        const std::string entry_path = normalized == "/" ? "/" + name : normalized + "/" + name;
+        // Ask the sandbox policy, which is maintained in src/file/; never
+        // expose platform-internal entries or their hard-link aliases.
+        if (!files_.sandbox().check_entry(::dirfd(raw), name, entry_path).ok()) continue;
         struct stat info {};
         if (::fstatat(::dirfd(raw), name.c_str(), &info, AT_SYMLINK_NOFOLLOW) != 0) continue;
         FileEntry entry;
         entry.name = name;
-        entry.path = normalized == "/" ? "/" + name : normalized + "/" + name;
+        entry.path = entry_path;
         entry.is_dir = S_ISDIR(info.st_mode);
         entry.is_file = S_ISREG(info.st_mode);
         entry.is_symlink = S_ISLNK(info.st_mode);

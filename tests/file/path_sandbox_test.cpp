@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <unistd.h>
@@ -52,6 +53,15 @@ fs::path make_root() {
 std::unique_ptr<PathSandbox> make_sandbox(const fs::path& root, bool follow, bool& ok) {
     Error error;
     auto sandbox = PathSandbox::create(root.string(), follow, error);
+    ok = sandbox != nullptr;
+    if (!ok) std::fprintf(stderr, "sandbox error: %s\n", error.message.c_str());
+    return sandbox;
+}
+
+std::unique_ptr<PathSandbox> make_sandbox_with(const fs::path& root, bool follow,
+                                               const PathSandbox::Options& options, bool& ok) {
+    Error error;
+    auto sandbox = PathSandbox::create(root.string(), follow, options, error);
     ok = sandbox != nullptr;
     if (!ok) std::fprintf(stderr, "sandbox error: %s\n", error.message.c_str());
     return sandbox;
@@ -218,6 +228,98 @@ void test_prefix_collision(const fs::path& root) {
     CHECK(error.ok());
 }
 
+void test_protected_paths(const fs::path& root) {
+    fs::create_directories(root / "guard" / "nested");
+    fs::create_directories(root / "guard-open");
+    {
+        std::ofstream file(root / "guard" / "secret.txt");
+        file << "top-secret";
+    }
+    {
+        std::ofstream file(root / "guard" / "nested" / "deep.txt");
+        file << "deep-secret";
+    }
+    {
+        std::ofstream file(root / "guard-open" / "visible.txt");
+        file << "visible";
+    }
+    fs::create_hard_link(root / "guard" / "secret.txt", root / "guard-open" / "alias.txt");
+    fs::create_symlink("../guard/secret.txt", root / "guard-open" / "file-link");
+    fs::create_symlink("../guard", root / "guard-open" / "dir-link");
+    fs::create_symlink("visible.txt", root / "guard-open" / "visible-link");
+
+    // The token file does not exist yet at sandbox construction. The canonical
+    // guard must still block creating and later reading it.
+    const fs::path lazy_token = root / "guard-open" / "lazy-token";
+    PathSandbox::Options options;
+    options.protected_paths = {(root / "guard").string(), lazy_token.string()};
+
+    auto denied = [](const Error& error) {
+        CHECK(!error.ok());
+        CHECK_EQ(static_cast<int>(error.code), static_cast<int>(ErrorCode::permission_denied));
+    };
+
+    bool ok = false;
+    auto sandbox = make_sandbox_with(root, false, options, ok);
+    CHECK(ok);
+    if (!sandbox) return;
+
+    UniqueFd fd;
+    denied(sandbox->open_dir("/guard", fd));
+    denied(sandbox->open_file("/guard/secret.txt", O_RDONLY, fd));
+    denied(sandbox->open_file("/guard/nested/deep.txt", O_RDONLY, fd));
+    denied(sandbox->open_file("//guard//secret.txt", O_RDONLY, fd));
+    denied(sandbox->open_file("/./guard/secret.txt", O_RDONLY, fd));
+    denied(sandbox->open_file("/guard-open/../guard/secret.txt", O_RDONLY, fd));
+    denied(sandbox->open_file("/guard-open/alias.txt", O_RDONLY, fd)); // hard link
+
+    struct stat info {};
+    denied(sandbox->stat("/guard", info));
+    denied(sandbox->stat("/guard/secret.txt", info));
+    denied(sandbox->stat("/guard/nested/deep.txt", info));
+    denied(sandbox->stat("/guard-open/alias.txt", info));
+
+    // On-disk content must be untouched by all refused attempts.
+    {
+        std::ifstream file(root / "guard" / "secret.txt");
+        const std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        CHECK_STR_EQ(content, "top-secret");
+    }
+
+    denied(sandbox->open_file("/guard-open/lazy-token", O_WRONLY | O_CREAT | O_EXCL, fd, 0600));
+    CHECK(!fs::exists(lazy_token));
+    {
+        std::ofstream file(lazy_token);
+        file << "lazy-secret";
+    }
+    denied(sandbox->open_file("/guard-open/lazy-token", O_RDONLY, fd));
+    denied(sandbox->stat("/guard-open/lazy-token", info));
+
+    // Ordinary paths remain accessible.
+    Error error = sandbox->open_file("/guard-open/visible.txt", O_RDONLY, fd);
+    CHECK(error.ok());
+    if (error.ok()) {
+        char buffer[16] = {0};
+        const auto count = ::read(fd.get(), buffer, sizeof(buffer));
+        CHECK_EQ(count, 7L);
+        CHECK_STR_EQ(std::string(buffer, 7), "visible");
+    }
+    error = sandbox->open_dir("/guard-open", fd);
+    CHECK(error.ok());
+
+    // With symlink following enabled, both final and intermediate symlinks to
+    // protected entries are rejected; unrelated links still resolve.
+    auto followed = make_sandbox_with(root, true, options, ok);
+    CHECK(ok);
+    if (followed) {
+        denied(followed->open_file("/guard-open/file-link", O_RDONLY, fd));
+        denied(followed->open_dir("/guard-open/dir-link", fd));
+        denied(followed->open_file("/guard-open/dir-link/secret.txt", O_RDONLY, fd));
+        error = followed->open_file("/guard-open/visible-link", O_RDONLY, fd);
+        CHECK(error.ok());
+    }
+}
+
 } // namespace
 
 int main() {
@@ -227,6 +329,7 @@ int main() {
     test_escape_attempts(root);
     test_follow_symlinks(root);
     test_prefix_collision(root);
+    test_protected_paths(root);
     fs::remove_all(root);
     return edgedesk::test::finish("path_sandbox_test");
 }

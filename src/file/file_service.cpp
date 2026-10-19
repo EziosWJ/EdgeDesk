@@ -178,6 +178,12 @@ Error FileService::list(const ListOptions& options, ListResult& result) const {
             break;
         }
         const std::string logical = join_path(normalized, name);
+        // Never expose platform-internal entries, including hard-link aliases
+        // that live in an otherwise accessible directory.
+        if (sandbox_.has_protected_paths() &&
+            !sandbox_.check_entry(::dirfd(dir.dir), name, logical).ok()) {
+            continue;
+        }
         struct stat info {};
         if (::fstatat(dirfd(dir.dir), name.c_str(), &info, AT_SYMLINK_NOFOLLOW) != 0) {
             continue; // Entry vanished or is unreadable: skip instead of failing the page.
@@ -346,6 +352,10 @@ Error FileService::remove_tree(int dir_fd, const std::string& name, const std::s
             return Error::make(ErrorCode::limit_exceeded, "delete entry budget exhausted at " + logical_path);
         }
         const std::string entry_path = join_path(logical_path, entry_name);
+        // A recursive delete must not remove hard-link aliases of a protected
+        // file nested inside an otherwise ordinary directory.
+        Error guard = sandbox_.check_entry(child.get(), entry_name, entry_path);
+        if (!guard.ok()) return guard;
         struct stat info {};
         if (::fstatat(child.get(), entry_name.c_str(), &info, AT_SYMLINK_NOFOLLOW) != 0) {
             return errno_error("cannot stat " + entry_path);

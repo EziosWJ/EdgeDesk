@@ -170,6 +170,8 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 - 读锁共享；写/覆盖/删除/重命名独占；冲突立即 `FILE_LOCKED`（HTTP 423）。
 - 上传先写同目录 `.edgedesk-upload-*.tmp`，长度/落盘/fsync 成功后 `renameat` 原子替换；失败保留原文件。
 - 上传开始时记录目标 `(dev,ino,size,mtime)`；提交前复查，外部进程造成的变化返回 `conflict` 并保留原文件。检查与 rename 之间的最终竞态无法由内部锁消除。
+- 平台内部受保护路径集中定义在 `src/file/protected_paths.{hpp,cpp}`：生效配置的 `data_dir`、`state_dir`、`apps_root`、审计日志及其轮转/清理临时文件、`config_file`，以及设置时的 `auth_token_file`。扩展运行时使用独立于管理员文件管理器的 `FileService`/`PathSandbox`，管理员 `/api/files` 语义不变。
+- 受保护路径在目录 FD/openat 解析边界执行，覆盖读、写/创建/覆盖、stat、列目录、mkdir、rename 源与目标、remove、上传 begin/append/finish 和下载打开。判定同时使用规范化绝对路径（阻止尚不存在的受保护目标被创建）和 `(st_dev,st_ino)` 身份（阻止硬链接别名及 follow 模式下的符号链接目标）；受保护目录的现有后代在构造时登记身份。拒绝返回 `permission_denied`，且不修改目标、不暴露受保护内容。
 
 ## 8. 静态资源与 CSP
 
@@ -191,7 +193,7 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 | R-05 opener | 允许弹窗但禁止宿主消息进入若未被沙箱隔离；SDK 只接受指定 source | 浏览器验证；残余风险接受 |
 | R-06 桥接执行 | 特权 API 仅通过 MessagePort；后端不开放 Origin:null 直连 | 运行时端点 + 会话令牌 |
 | R-07 延迟撤销 | 权限快照；禁用/升级/卸载立刻失效会话并关闭终端 | 集成测试 |
-| R-08 路径安全 | 复用 PathSandbox/openat；扩展层不实现自有文件系统边界 | 既有 + 扩展测试 |
+| R-08 路径安全 | 复用 PathSandbox/openat；受保护路径在解析边界按规范化路径与 `(dev,ino)` 身份拒绝；扩展层不实现自有文件系统边界 | `path_sandbox_test`、`file_service_test`、既有 + 扩展测试 |
 | R-09 内容完整性 | 长度校验、逐块确认、临时文件、原子替换 | 集成测试（2.5 MiB 往返） |
 | R-10 哈希检测 | 安装清单、完整性检查、隔离 | `extension_package_test`、集成测试 |
 | R-11 无秘密存储 | KV 文档明确非秘密；不返回宿主凭据 | 文档 + `auth.getStatus` 最小字段 |

@@ -100,6 +100,7 @@ add_library(edgedesk_core STATIC
   src/file/file_service.cpp
   src/file/file_types.cpp
   src/file/path_sandbox.cpp
+  src/file/protected_paths.cpp
   src/security/audit.cpp
   src/security/auth.cpp
   src/security/auth_store.cpp

@@ -750,7 +750,7 @@ int handle_files_stat(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     const std::string path = body.value("path", "");
     if (path.empty()) return http::write_error(resp, 400, "invalid_argument", "path is required");
     FileEntry entry;
-    Error error = ctx.files->stat(path, entry);
+    Error error = ctx.extension_runtime->files().stat(path, entry);
     if (!error.ok()) return write_runtime_error(resp, error);
     hv::Json out;
     out["ok"] = true;
@@ -769,11 +769,11 @@ int handle_files_read(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     if (path.empty()) return http::write_error(resp, 400, "invalid_argument", "path is required");
     std::string content;
     FileEntry entry;
-    Error error = ctx.files->read_text(path, content, entry);
+    Error error = ctx.extension_runtime->files().read_text(path, content, entry);
     std::string encoding = "utf-8";
     if (!error.ok() && error.code == ErrorCode::unsupported) {
         FileService::ReadHandle handle;
-        error = ctx.files->open_for_read(path, handle);
+        error = ctx.extension_runtime->files().open_for_read(path, handle);
         if (error.ok()) {
             if (handle.size > 1024 * 1024) {
                 return http::write_error(resp, 413, "too_large",
@@ -827,7 +827,7 @@ int handle_files_mkdir(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) 
     if (!json_object(req, body, resp)) return 400;
     const std::string path = body.value("path", "");
     if (path.empty()) return http::write_error(resp, 400, "invalid_argument", "path is required");
-    Error error = ctx.files->mkdir(path);
+    Error error = ctx.extension_runtime->files().mkdir(path);
     if (!error.ok()) {
         ctx.audit->record("extension.file", "denied", runtime_detail(session, "mkdir"),
                           http::client_ip(*ctx.config, req), normalized_audit_path(ctx, path));
@@ -852,7 +852,7 @@ int handle_files_rename(RouteContext& ctx, HttpRequest* req, HttpResponse* resp)
     if (from.empty() || to.empty()) {
         return http::write_error(resp, 400, "invalid_argument", "from and to are required");
     }
-    Error error = ctx.files->rename(from, to, body.value("overwrite", false));
+    Error error = ctx.extension_runtime->files().rename(from, to, body.value("overwrite", false));
     if (!error.ok()) {
         ctx.audit->record("extension.file", "denied", runtime_detail(session, "rename"),
                           http::client_ip(*ctx.config, req), normalized_audit_path(ctx, from));
@@ -881,7 +881,8 @@ int handle_files_delete(RouteContext& ctx, HttpRequest* req, HttpResponse* resp)
         paths.push_back(item.get<std::string>());
     }
     RemoveResult result;
-    Error error = ctx.files->remove(paths, result);    if (!error.ok()) {
+    Error error = ctx.extension_runtime->files().remove(paths, result);
+    if (!error.ok()) {
         ctx.audit->record("extension.file", "denied", runtime_detail(session, "delete"),
                           http::client_ip(*ctx.config, req), paths.empty() ? "" : normalized_audit_path(ctx, paths.front()));
         return write_runtime_error(resp, error);

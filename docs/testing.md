@@ -19,6 +19,17 @@
 未执行/未验证：L2 平台矩阵（`release-embed`、musl、ARM64/qemu、真实硬件）本轮未重新运行；
 该本地执行记录不包含 L2；本轮跨平台 CI 的实际结果见下方 SPEC-0008 复核记录。不得把上表当作跨平台发布验收。
 
+## 2026-10-19 SPEC-0008 T-01（Issue #17）实际执行记录
+
+| 验证 | 命令 | 结果 |
+| --- | --- | --- |
+| L0 原生 + SDK | `JOBS=10 CTEST_JOBS=6 scripts/test-fast.sh --no-frontend` | **16/16 原生通过**；SDK/CLI **4/4 通过**（5 s） |
+| L1 原生 + 集成 | `JOBS=10 CTEST_JOBS=6 scripts/test-pr.sh --no-frontend --port 19101` | **16/16 原生通过**；auth/api/ws/限流/扩展/崩溃恢复集成全部通过（125 s） |
+
+- 本次未运行前端测试/构建（`web/node_modules` 不在该工作树）；`--no-frontend` 复用了既有 `web/dist` 产物。
+- 新增回归：`path_sandbox_test` 与 `file_service_test` 覆盖受保护路径的直连/规范化变体/嵌套/符号链接（follow）/硬链接别名/延迟创建目标，以及 list、stat、read、write、mkdir、rename、remove、递归删除、上传和下载；失败后目标内容与元数据保持不变，管理员服务不受策略影响。
+- 未验证：L2 平台矩阵。不得将本表用于跨平台发布验收。
+
 
 ## 2026-10-18 SPEC-0008 复核：当前跨平台 CI 阻断
 
@@ -73,8 +84,8 @@ scripts/test-pr.sh
 | `auth_store_test` | 未初始化/已初始化/损坏状态、原子写入、0600/0700、flock、恢复重置 | GCC 13.3 host | 通过 |
 | `password_hash_test` | 密码策略、Argon2id hash/verify、盐独立、参数升级、有界 worker 队列 | GCC 13.3 host | 通过 |
 | `settings_store_test` | 默认值、白名单保存、非法枚举/越界拒绝、损坏文件回退、持久化 | GCC 13.3 host | 通过 |
-| `path_sandbox_test` | `..` 穿越、URL 编码、绝对路径、前缀欺骗目录、符号链接逃逸/循环（含 follow 模式）、嵌套相对目标（`dir`、`../..`、逃逸拒绝）、lstat 语义 | GCC 13.3 host | 通过 |
-| `file_service_test` | 列表/排序/分页/隐藏文件、`dirs_only` 直接子目录（符号链接不跟随）、文本读写与原子保存保留权限、二进制拒绝、上传/中止/超限、递归删除计数、Range 解析、MIME 判定 | GCC 13.3 host | 通过 |
+| `path_sandbox_test` | `..` 穿越、URL 编码、绝对路径、前缀欺骗目录、符号链接逃逸/循环（含 follow 模式）、嵌套相对目标（`dir`、`../..`、逃逸拒绝）、lstat 语义、受保护路径（直连/`//`/`.`/合法 `..` 变体、嵌套、符号链接目标、硬链接别名、构造后创建的受保护目标） | GCC 13.3 host | 通过 |
+| `file_service_test` | 列表/排序/分页/隐藏文件、`dirs_only` 直接子目录（符号链接不跟随）、文本读写与原子保存保留权限、二进制拒绝、上传/中止/超限、递归删除计数、Range 解析、MIME 判定、受保护路径上的 list/stat/read/write/mkdir/rename/remove/递归删除/上传/下载拒绝且不修改目标、管理员服务不受策略影响 | GCC 13.3 host | 通过 |
 | `command_guard_test` | 危险命令命中（rm -rf 根、块设备写入、fork 炸弹、关机…）与安全命令不误报 | GCC 13.3 host | 通过 |
 | `terminal_session_test` | 真实 Bash 登录 Shell、`~/.profile` 加载、UTF-8/ANSI、TIOCSWINSZ resize、CommandGuard 拦截不执行、回放缓冲有界、订阅断开不杀会话、订阅回调（回放/退出）可重入会话 API 且不死锁、会话上限/空闲回收、缺 Bash 报错而非回退 sh | GCC 13.3 host + /bin/bash 5.2 | 通过 |
 | `system_metrics_test` | /proc/stat、loadavg、meminfo（含旧内核回退）、net/dev 速率差分、IPv4/IPv6 地址格式化与 `getifaddrs` 枚举（排除 lo）、mounts 过滤、采样线程与环形缓冲 | GCC 13.3 host | 通过 |
