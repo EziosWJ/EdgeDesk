@@ -62,7 +62,7 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 - 服务重启：未完成 operation 的临时目录与未提交修订被幂等清理；活动指针指向的修订存在性会被校验。KV 删除与 app/revision/权限/完整性状态在同一 SQLite 事务提交，恢复后不会出现“KV 已删除但重装未提交”的组合。
 - 传输日志：扩展上传在 `apps_root/tmp/transfers/*.journal` 记录临时文件位置；重启时删除孤儿临时文件再删除日志。
 
-## 4. SQLite schema（`apps_root/extensions.db`，schema v1）
+## 4. SQLite schema（`apps_root/extensions.db`，schema v2；v1 原地迁移）
 
 | 表 | 关键列 | 约束 |
 | --- | --- | --- |
@@ -70,6 +70,7 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 | `revisions` | `revision_id` PK、`app_id` FK、`version`、`manifest_json`、`status`、`pinned`、`integrity` | 同 app 多修订；删除 app 级联 |
 | `permission_requests` | `(app_id, module)` PK | manifest 申请集合 |
 | `permission_grants` | `(app_id, module)` PK、`granted_at` | 管理员有效授权 |
+| `network_origins` | `(app_id, origin)` PK、app FK | 管理员批准的来源；与授权在同一事务内更新，删除应用级联 |
 | `integrity_entries` | `(revision_id, path)` PK、`size`、`sha256` | 逐文件 SHA-256 清单 |
 | `operations` | `operation_id` PK、`type`、`phase`、`temp_path`、`revision_id` | 启动恢复依据 |
 | `app_kv` | `(app_id, key)` PK、`value` JSON 文本、`size_bytes` | 无 FK：卸载保留数据 |
