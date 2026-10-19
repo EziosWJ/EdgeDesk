@@ -211,52 +211,98 @@ bool ExtensionRuntime::find_session_locked(std::string_view token, RuntimeSessio
 }
 
 Error ExtensionRuntime::validate(std::string_view token, RuntimeSession& out) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!find_session_locked(token, out)) {
-        return Error::make(ErrorCode::permission_denied, "runtime session is invalid");
+    RuntimeSession session;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!find_session_locked(token, session)) {
+            return Error::make(ErrorCode::permission_denied, "runtime session is invalid");
+        }
     }
-    if (now_unix_seconds() - out.created_at > kRuntimeSessionTtlSeconds) {
-        sessions_.erase(out.token);
+    out = session;
+    if (now_unix_seconds() - session.created_at > kRuntimeSessionTtlSeconds) {
+        teardown_session(session.token);
         return Error::make(ErrorCode::permission_denied, "runtime session expired");
     }
+    // Store lookups run without runtime mutex_: invalidation may reclaim this
+    // session concurrently, and teardown by token is idempotent.
     AppRecord app;
     bool found = false;
-    Error error = store_.get_app(out.app_id, app, found);
+    Error error = store_.get_app(session.app_id, app, found);
     if (!error.ok() || !found || app.status != app_status::enabled ||
-        app.active_revision_id != out.revision_id) {
-        sessions_.erase(out.token);
+        app.active_revision_id != session.revision_id) {
+        teardown_session(session.token);
         return Error::make(ErrorCode::permission_denied,
                            "application was disabled, upgraded or uninstalled");
     }
     RevisionRecord revision;
     bool revision_found = false;
-    error = store_.get_revision(out.revision_id, revision, revision_found);
+    error = store_.get_revision(session.revision_id, revision, revision_found);
     if (!error.ok() || !revision_found || revision.status != revision_status::active ||
         revision.integrity != integrity_state::ok) {
-        sessions_.erase(out.token);
+        teardown_session(session.token);
         return Error::make(ErrorCode::permission_denied, "application revision is no longer runnable");
     }
     return Error::none();
 }
 
-std::vector<std::string> ExtensionRuntime::erase_session_locked(std::string_view token) {
-    std::vector<std::string> closing;
-    const auto it = sessions_.find(std::string(token));
-    if (it != sessions_.end()) sessions_.erase(it);
-    const auto terminals = terminal_sessions_.find(std::string(token));
+void ExtensionRuntime::SessionResources::append(SessionResources&& other) {
+    terminal_ids.insert(terminal_ids.end(), other.terminal_ids.begin(), other.terminal_ids.end());
+    for (auto& upload : other.uploads) {
+        uploads.push_back(std::move(upload));
+        // The moved-from value must not unlink the journal a second time.
+        upload.journal_path.clear();
+    }
+    for (auto& download : other.downloads) downloads.push_back(std::move(download));
+    other.terminal_ids.clear();
+    other.uploads.clear();
+    other.downloads.clear();
+}
+
+ExtensionRuntime::SessionResources ExtensionRuntime::take_session_locked(std::string_view token) {
+    SessionResources resources;
+    const std::string key(token);
+    sessions_.erase(key);
+    const auto terminals = terminal_sessions_.find(key);
     if (terminals != terminal_sessions_.end()) {
-        closing.assign(terminals->second.begin(), terminals->second.end());
+        resources.terminal_ids.assign(terminals->second.begin(), terminals->second.end());
         terminal_sessions_.erase(terminals);
     }
     for (auto upload = uploads_.begin(); upload != uploads_.end();) {
-        if (upload->second.token == token) upload = uploads_.erase(upload);
-        else ++upload;
+        if (upload->second.token == token) {
+            resources.uploads.push_back(std::move(upload->second));
+            // The moved-from value must not unlink the journal a second time.
+            upload->second.journal_path.clear();
+            upload = uploads_.erase(upload);
+        } else {
+            ++upload;
+        }
     }
     for (auto download = downloads_.begin(); download != downloads_.end();) {
-        if (download->second.token == token) download = downloads_.erase(download);
-        else ++download;
+        if (download->second.token == token) {
+            resources.downloads.push_back(std::move(download->second));
+            download = downloads_.erase(download);
+        } else {
+            ++download;
+        }
     }
-    return closing;
+    return resources;
+}
+
+void ExtensionRuntime::finish_teardown(SessionResources resources) {
+    // Destroying the tasks outside mutex_ performs the file I/O (abort,
+    // journal unlink, lock release) without blocking other runtime callers.
+    resources.uploads.clear();
+    resources.downloads.clear();
+    close_terminals(resources.terminal_ids);
+}
+
+void ExtensionRuntime::teardown_session(std::string_view token) {
+    SessionResources resources;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        resources = take_session_locked(token);
+    }
+    finish_teardown(std::move(resources));
 }
 
 void ExtensionRuntime::close_terminals(const std::vector<std::string>& session_ids) {
@@ -279,79 +325,85 @@ void ExtensionRuntime::untrack_terminal(std::string_view token, std::string_view
 }
 
 void ExtensionRuntime::remove_session(std::string_view token) {
-    std::vector<std::string> closing;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        closing = erase_session_locked(token);
-    }
-    close_terminals(closing);
+    teardown_session(token);
 }
 
 void ExtensionRuntime::invalidate_app(std::string_view app_id) {
-    std::vector<std::string> closing;
+    SessionResources resources;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         std::vector<std::string> tokens;
         for (const auto& session : sessions_) {
             if (session.second.app_id == app_id) tokens.push_back(session.first);
         }
-        for (const auto& token : tokens) {
-            const auto ids = erase_session_locked(token);
-            closing.insert(closing.end(), ids.begin(), ids.end());
-        }
+        for (const auto& token : tokens) resources.append(take_session_locked(token));
+        // Also reclaim transfers whose session was already gone.
         for (auto it = uploads_.begin(); it != uploads_.end();) {
-            if (it->second.app_id == app_id) it = uploads_.erase(it);
-            else ++it;
+            if (it->second.app_id == app_id) {
+                resources.uploads.push_back(std::move(it->second));
+                it->second.journal_path.clear();
+                it = uploads_.erase(it);
+            } else {
+                ++it;
+            }
         }
         for (auto it = downloads_.begin(); it != downloads_.end();) {
-            if (it->second.app_id == app_id) it = downloads_.erase(it);
-            else ++it;
+            if (it->second.app_id == app_id) {
+                resources.downloads.push_back(std::move(it->second));
+                it = downloads_.erase(it);
+            } else {
+                ++it;
+            }
         }
     }
-    close_terminals(closing);
+    finish_teardown(std::move(resources));
 }
 
 void ExtensionRuntime::invalidate_revision(std::string_view revision_id) {
-    std::vector<std::string> closing;
+    SessionResources resources;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         std::vector<std::string> tokens;
         for (const auto& session : sessions_) {
             if (session.second.revision_id == revision_id) tokens.push_back(session.first);
         }
-        for (const auto& token : tokens) {
-            const auto ids = erase_session_locked(token);
-            closing.insert(closing.end(), ids.begin(), ids.end());
-        }
+        for (const auto& token : tokens) resources.append(take_session_locked(token));
     }
-    close_terminals(closing);
+    finish_teardown(std::move(resources));
 }
 
 void ExtensionRuntime::sweep(std::int64_t now_ms) {
-    std::vector<std::string> closing;
+    SessionResources resources;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        const std::int64_t now_seconds = now_unix_seconds();
+        // One clock for both session TTL and transfer idle timeouts.
+        const std::int64_t now_seconds = now_ms / 1000;
         std::vector<std::string> expired;
         for (const auto& session : sessions_) {
             if (now_seconds - session.second.created_at > kRuntimeSessionTtlSeconds) {
                 expired.push_back(session.first);
             }
         }
-        for (const auto& token : expired) {
-            const auto ids = erase_session_locked(token);
-            closing.insert(closing.end(), ids.begin(), ids.end());
-        }
+        for (const auto& token : expired) resources.append(take_session_locked(token));
         for (auto it = uploads_.begin(); it != uploads_.end();) {
-            if (now_ms - it->second.last_activity_ms > kTransferIdleTimeoutMs) it = uploads_.erase(it);
-            else ++it;
+            if (now_ms - it->second.last_activity_ms > kTransferIdleTimeoutMs) {
+                resources.uploads.push_back(std::move(it->second));
+                it->second.journal_path.clear();
+                it = uploads_.erase(it);
+            } else {
+                ++it;
+            }
         }
         for (auto it = downloads_.begin(); it != downloads_.end();) {
-            if (now_ms - it->second.last_activity_ms > kTransferIdleTimeoutMs) it = downloads_.erase(it);
-            else ++it;
+            if (now_ms - it->second.last_activity_ms > kTransferIdleTimeoutMs) {
+                resources.downloads.push_back(std::move(it->second));
+                it = downloads_.erase(it);
+            } else {
+                ++it;
+            }
         }
     }
-    close_terminals(closing);
+    finish_teardown(std::move(resources));
 }
 
 std::string ExtensionRuntime::encode_cursor(std::string_view app_id, std::string_view kind,
