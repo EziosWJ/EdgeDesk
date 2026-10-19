@@ -64,6 +64,12 @@ public:
     ExtensionRuntime(const ExtensionRuntime&) = delete;
     ExtensionRuntime& operator=(const ExtensionRuntime&) = delete;
 
+    // Backing file service for every extension files.* operation. It carries
+    // the platform-internal protected-path policy; routes must not use the
+    // administrator file service for extension calls.
+    FileService& files() { return files_; }
+    const FileService& files() const { return files_; }
+
     Error create_session(std::string_view app_id, std::string_view instance_id, RuntimeSession& out);
     Error validate(std::string_view token, RuntimeSession& out);
     void remove_session(std::string_view token);

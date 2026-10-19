@@ -5,9 +5,11 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <unistd.h>
+#include <vector>
 
 using namespace edgedesk;
 
@@ -357,6 +359,186 @@ void test_mime_helpers() {
     CHECK(!looks_like_utf8_text("\xff\xfe"));
 }
 
+void test_protected_paths(const fs::path& root, FileService& admin) {
+    fs::create_directories(root / "guard" / "nested");
+    fs::create_directories(root / "guard-open");
+    fs::create_directories(root / "guard-tree");
+    {
+        std::ofstream file(root / "guard" / "secret.txt");
+        file << "top-secret";
+    }
+    {
+        std::ofstream file(root / "guard" / "nested" / "extensions.db");
+        file << "sqlite-data";
+    }
+    {
+        std::ofstream file(root / "guard-open" / "visible.txt");
+        file << "visible";
+    }
+    fs::create_hard_link(root / "guard" / "secret.txt", root / "guard-open" / "alias.txt");
+    fs::create_hard_link(root / "guard" / "secret.txt", root / "guard-tree" / "deep-alias.txt");
+    fs::create_symlink("../guard/secret.txt", root / "guard-open" / "file-link");
+
+    const fs::path lazy_token = root / "guard-open" / "lazy-token";
+    PathSandbox::Options sandbox_options;
+    sandbox_options.protected_paths = {(root / "guard").string(), lazy_token.string()};
+
+    Error error;
+    auto sandbox = PathSandbox::create(root.string(), false, sandbox_options, error);
+    CHECK(sandbox != nullptr);
+    if (!sandbox) return;
+    FileServiceOptions options;
+    options.max_upload_size = 1024;
+    options.max_text_edit_size = 1024;
+    FileService service(*sandbox, options);
+
+    auto denied = [](const Error& result) {
+        CHECK(!result.ok());
+        CHECK_EQ(static_cast<int>(result.code), static_cast<int>(ErrorCode::permission_denied));
+    };
+
+    const auto snapshot_path = root / "guard" / "secret.txt";
+    const auto mtime_before = fs::last_write_time(snapshot_path);
+    const auto perms_before = fs::status(snapshot_path).permissions();
+    auto content_unchanged = [&]() {
+        std::ifstream file(snapshot_path);
+        const std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        CHECK_STR_EQ(content, "top-secret");
+        CHECK_EQ(fs::file_size(snapshot_path), std::uintmax_t{10});
+        CHECK(fs::last_write_time(snapshot_path) == mtime_before);
+        CHECK(fs::status(snapshot_path).permissions() == perms_before);
+    };
+
+    // Listing a protected directory, including path variants and nesting.
+    ListOptions list;
+    list.path = "/guard";
+    ListResult listed;
+    denied(service.list(list, listed));
+    list.path = "/guard/nested";
+    denied(service.list(list, listed));
+    list.path = "/guard-open/../guard";
+    denied(service.list(list, listed));
+    list.path = "/guard-open";
+    CHECK(service.list(list, listed).ok());
+    for (const auto& item : listed.entries) CHECK(item.name != "alias.txt");
+    ListOptions root_list;
+    root_list.path = "/";
+    ListResult root_entries;
+    CHECK(service.list(root_list, root_entries).ok());
+    for (const auto& item : root_entries.entries) CHECK(item.name != "guard");
+
+    // stat: direct, nested, hard link, symlink target with follow enabled.
+    FileEntry entry;
+    denied(service.stat("/guard/secret.txt", entry));
+    denied(service.stat("/guard/nested/extensions.db", entry));
+    denied(service.stat("/guard-open/alias.txt", entry));
+    denied(service.stat("//guard//secret.txt", entry));
+
+    // Read: direct, variants, nested, hard link.
+    std::string content;
+    denied(service.read_text("/guard/secret.txt", content, entry));
+    denied(service.read_text("/guard//secret.txt", content, entry));
+    denied(service.read_text("/./guard/secret.txt", content, entry));
+    denied(service.read_text("/guard-open/../guard/secret.txt", content, entry));
+    denied(service.read_text("/guard/nested/extensions.db", content, entry));
+    denied(service.read_text("/guard-open/alias.txt", content, entry));
+
+    // Write/create/overwrite must fail before any mutation.
+    denied(service.write_text("/guard/secret.txt", "tampered", true, entry));
+    content_unchanged();
+    denied(service.write_text("/guard/new.txt", "new", true, entry));
+    CHECK(!fs::exists(root / "guard" / "new.txt"));
+    denied(service.write_text("/guard-open/alias.txt", "tampered", true, entry));
+    content_unchanged();
+
+    // mkdir.
+    denied(service.mkdir("/guard/newdir"));
+    CHECK(!fs::exists(root / "guard" / "newdir"));
+    denied(service.mkdir("/guard"));
+
+    // rename: source protected, destination protected, hard-link alias.
+    denied(service.rename("/guard/secret.txt", "/guard-open/moved.txt", false));
+    CHECK(fs::exists(snapshot_path));
+    denied(service.rename("/guard-open/visible.txt", "/guard/moved.txt", false));
+    CHECK(fs::exists(root / "guard-open" / "visible.txt"));
+    CHECK(!fs::exists(root / "guard" / "moved.txt"));
+    denied(service.rename("/guard-open/alias.txt", "/guard-open/alias2.txt", false));
+    CHECK(fs::exists(root / "guard-open" / "alias.txt"));
+    CHECK(!fs::exists(root / "guard-open" / "alias2.txt"));
+
+    // delete: protected file, protected directory and aliases.
+    RemoveResult removed;
+    denied(service.remove({"/guard/secret.txt"}, removed));
+    content_unchanged();
+    denied(service.remove({"/guard"}, removed));
+    content_unchanged();
+    denied(service.remove({"/guard-open/alias.txt"}, removed));
+    CHECK(fs::exists(root / "guard-open" / "alias.txt"));
+    // Recursive deletion of an ordinary directory containing a protected
+    // hard-link alias also refuses before unlinking the alias.
+    denied(service.remove({"/guard-tree"}, removed));
+    CHECK(fs::exists(root / "guard-tree" / "deep-alias.txt"));
+    content_unchanged();
+
+    // Upload begin and download open.
+    FileService::Upload upload;
+    denied(service.begin_upload("/guard/secret.txt", upload));
+    CHECK(!upload.active());
+    denied(service.begin_upload("/guard/new-upload.bin", upload));
+    CHECK(!upload.active());
+    denied(service.begin_upload("/guard-open/alias.txt", upload));
+    FileService::ReadHandle handle;
+    denied(service.open_for_read("/guard/secret.txt", handle));
+    CHECK(!handle.fd.valid());
+    denied(service.open_for_read("/guard-open/alias.txt", handle));
+
+    // Canonical guard for a credential file that did not exist when the
+    // sandbox was constructed.
+    denied(service.write_text("/guard-open/lazy-token", "secret", true, entry));
+    CHECK(!fs::exists(lazy_token));
+    denied(service.begin_upload("/guard-open/lazy-token", upload));
+    CHECK(!upload.active());
+    {
+        std::ofstream file(lazy_token);
+        file << "lazy-secret";
+    }
+    denied(service.read_text("/guard-open/lazy-token", content, entry));
+    denied(service.stat("/guard-open/lazy-token", entry));
+    denied(service.open_for_read("/guard-open/lazy-token", handle));
+
+    // Ordinary operations still work through the protected-aware service.
+    CHECK(service.read_text("/guard-open/visible.txt", content, entry).ok());
+    CHECK_STR_EQ(content, "visible");
+    CHECK(service.write_text("/guard-open/ordinary.txt", "ordinary", true, entry).ok());
+    FileService::Upload ordinary_upload;
+    CHECK(service.begin_upload("/guard-open/ordinary.bin", ordinary_upload).ok());
+    CHECK(ordinary_upload.append("data", 4).ok());
+    CHECK(ordinary_upload.finish(entry).ok());
+    CHECK(service.mkdir("/guard-open/newdir").ok());
+    CHECK(service.rename("/guard-open/visible.txt", "/guard-open/renamed.txt", false).ok());
+
+    // The administrator file manager keeps its existing semantics.
+    CHECK(admin.read_text("/guard/secret.txt", content, entry).ok());
+    CHECK_STR_EQ(content, "top-secret");
+    CHECK(admin.stat("/guard/secret.txt", entry).ok());
+    ListOptions admin_list;
+    admin_list.path = "/guard";
+    ListResult admin_entries;
+    CHECK(admin.list(admin_list, admin_entries).ok());
+
+    // Symlink aliases into protected paths are rejected in follow mode. The
+    // extension sandbox inherits --follow-symlinks from the server config.
+    Error follow_error;
+    auto follow_sandbox = PathSandbox::create(root.string(), true, sandbox_options, follow_error);
+    CHECK(follow_sandbox != nullptr);
+    if (follow_sandbox) {
+        FileService follow_service(*follow_sandbox, options);
+        FileService::ReadHandle follow_handle;
+        denied(follow_service.open_for_read("/guard-open/file-link", follow_handle));
+        denied(follow_service.read_text("/guard-open/file-link", content, entry));
+    }
+}
+
 } // namespace
 
 int main() {
@@ -371,6 +553,7 @@ int main() {
     test_open_for_read(fixture);
     test_ranges();
     test_mime_helpers();
+    test_protected_paths(root, *fixture.service);
     fs::remove_all(root);
     return edgedesk::test::finish("file_service_test");
 }
