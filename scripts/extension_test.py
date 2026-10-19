@@ -336,7 +336,50 @@ def main():
         token = json_body(payload).get("token", "")
         runtime_headers = {"X-EdgeDesk-Runtime": token}
 
-        # Integrity failure isolates the app and closes runtime access.
+        # Defense in depth: a file absent from the integrity manifest is never
+        # served, even while the stored revision integrity state is still ok.
+        unregistered = os.path.join(revision_dir, rev1, "unregistered.txt")
+        with open(unregistered, "w") as handle:
+            handle.write("unregistered")
+        status, _, _ = request("GET", f"/apps/{app_id}/1.0.0/{rev1}/unregistered.txt")
+        check(status == 404, f"unregistered asset was served: {status}")
+        status, payload, _ = request("GET", f"/apps/{app_id}/1.0.0/{rev1}/")
+        check(status == 200 and b"integration v1" in payload,
+              f"registered asset became unavailable: {status}")
+        os.unlink(unregistered)
+
+        # Tampering with a historical revision marks only that revision
+        # non-runnable: app status, active revision, grants, static serving and
+        # the live runtime session must all remain untouched.
+        historical_tampered = os.path.join(revision_dir, rev2, "index.html")
+        with open(historical_tampered, "w") as handle:
+            handle.write("<h1>historical tampered</h1>")
+        status, payload, _ = request("POST", f"/api/extensions/{app_id}/integrity-check",
+                                     {"revision_id": rev2}, cookie)
+        result = json_body(payload)
+        check(status == 409 and result.get("ok") is False,
+              f"historical tampering was not detected: {status} {payload[:200]!r}")
+        check(result.get("app_isolated") is False, "historical mismatch reported app isolation")
+        status, payload, _ = request("GET", f"/api/extensions/{app_id}", cookie=cookie)
+        detail = json_body(payload)
+        app_state = detail.get("app", {})
+        check(app_state.get("status") == "enabled", "historical mismatch changed app status")
+        check(app_state.get("active_revision_id") == rev1, "historical mismatch changed the active revision")
+        check(bool(app_state.get("granted_permissions")), "historical mismatch cleared grants")
+        status, payload, _ = request("GET", f"/apps/{app_id}/1.0.0/{rev1}/")
+        check(status == 200 and b"integration v1" in payload,
+              "active revision stopped serving after historical mismatch")
+        status, _, _ = runtime("storage/get", {"key": "settings"})
+        check(status == 200, f"historical mismatch invalidated the active runtime session: {status}")
+        status, payload, _ = request("POST", f"/api/extensions/{app_id}/activate",
+                                     {"revision_id": rev2, "confirm": True}, cookie)
+        check(status == 409, f"integrity-failed revision was activatable: {status} {payload[:200]!r}")
+        if args.state_dir:
+            with open(os.path.join(args.state_dir, "audit.log")) as handle:
+                audit_lines = handle.readlines()
+            expected = f'"revision={rev2} path=index.html revision_isolated"'
+            check(any('"event":"extension.integrity"' in line and expected in line for line in audit_lines),
+                  "audit did not record the revision-scoped integrity mismatch")
         tampered = os.path.join(revision_dir, rev1, "index.html")
         with open(tampered, "w") as handle:
             handle.write("<h1>tampered</h1>")
@@ -349,6 +392,12 @@ def main():
         check(status in (401, 403), f"isolated app runtime session still worked: {status}")
         status, payload, _ = request("GET", f"/apps/{app_id}/1.0.0/{rev1}/")
         check(status == 404, "isolated revision still served")
+        if args.state_dir:
+            with open(os.path.join(args.state_dir, "audit.log")) as handle:
+                audit_lines = handle.readlines()
+            expected = f'"revision={rev1} path=index.html app_isolated"'
+            check(any('"event":"extension.integrity"' in line and expected in line for line in audit_lines),
+                  "audit did not record app-scoped integrity isolation")
 
         # Repair by reinstalling a good package, then approve again.
         repaired = os.path.join(temp, "repaired.zip")

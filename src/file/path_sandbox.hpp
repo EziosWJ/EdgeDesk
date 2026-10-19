@@ -4,6 +4,7 @@
 #include "core/fd.hpp"
 #include "file/protected_paths.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -54,6 +55,20 @@ public:
 
     // Metadata of the final component without following symlinks.
     Error stat(std::string_view path, struct stat& out) const;
+
+    enum class NodeKind { regular_file, directory, symlink, other };
+
+    struct TreeEntry {
+        std::string path; // relative to the root, '/'-separated, no leading '/'
+        NodeKind kind = NodeKind::other;
+        std::uint64_t size = 0;
+    };
+
+    // Recursively enumerates every node below the root using directory file
+    // descriptors (openat/fdopendir/fstatat). Symlinks are reported but never
+    // followed or descended into; special files are reported as `other`.
+    // The root itself is not included.
+    Error enumerate_tree(std::vector<TreeEntry>& out) const;
 
     // Duplicates the root directory fd.
     Error open_root(UniqueFd& out_fd) const;

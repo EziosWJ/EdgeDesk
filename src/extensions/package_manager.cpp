@@ -752,7 +752,8 @@ Error PackageManager::activate_revision(std::string_view app_id, std::string_vie
     if (!revision_found || revision.app_id != app_id) {
         return Error::make(ErrorCode::not_found, "revision not found for this application");
     }
-    if (revision.integrity != integrity_state::ok) {
+    if (revision.integrity != integrity_state::ok ||
+        revision.status == revision_status::isolated) {
         return Error::make(ErrorCode::conflict, "revision is isolated after an integrity failure");
     }
     if (revision.status == revision_status::active) {
@@ -963,6 +964,16 @@ Error PackageManager::read_static(std::string_view app_id, std::string_view vers
     auto sandbox = static_sandbox(app_id, revision_id);
     if (!sandbox) return Error::make(ErrorCode::io_error, "revision files are unavailable");
 
+    std::vector<IntegrityEntry> entries;
+    error = store_->list_integrity_entries(revision_id, entries);
+    if (!error.ok()) return error;
+    auto integrity_entry = [&](const std::string& logical) -> const IntegrityEntry* {
+        for (const auto& entry : entries) {
+            if ("/" + entry.path == logical) return &entry;
+        }
+        return nullptr;
+    };
+
     std::string requested(relative);
     if (requested.empty()) requested = "index.html";
     std::string logical = "/" + requested;
@@ -971,33 +982,27 @@ Error PackageManager::read_static(std::string_view app_id, std::string_view vers
     if (!PathSandbox::normalize(logical, normalized, message)) {
         return Error::make(ErrorCode::invalid_argument, message);
     }
-    auto load = [&](const std::string& path, std::string& body) -> Error {
-        return read_small_file(*sandbox, path, std::numeric_limits<std::size_t>::max(), body);
-    };
-    std::string body;
-    error = load(normalized, body);
+
+    // Only files registered in the active revision's integrity manifest may be
+    // served. Route-like paths without an extension fall back to index.html,
+    // but the effective path must itself be registered.
     std::string effective = normalized;
-    if (!error.ok() && !has_extension(normalized)) {
+    const IntegrityEntry* entry = integrity_entry(effective);
+    if (entry == nullptr && !has_extension(normalized)) {
         effective = "/index.html";
-        error = load(effective, body);
+        entry = integrity_entry(effective);
     }
-    if (!error.ok()) {
-        if (error.code == ErrorCode::not_found) return error;
-        return error;
+    if (entry == nullptr || entry->sha256.empty()) {
+        return Error::make(ErrorCode::not_found, "asset is not registered in the integrity manifest");
     }
-    std::vector<IntegrityEntry> entries;
-    error = store_->list_integrity_entries(revision_id, entries);
+
+    std::string body;
+    error = read_small_file(*sandbox, effective, std::numeric_limits<std::size_t>::max(), body);
     if (!error.ok()) return error;
-    std::string digest;
-    for (const auto& entry : entries) {
-        if ("/" + entry.path == effective) {
-            digest = entry.sha256;
-            break;
-        }
-    }
+    const std::string digest = entry->sha256;
     asset.body = std::move(body);
     asset.mime = mime_for_file_name(base_name(effective));
-    asset.etag = digest.empty() ? std::string() : "\"" + digest + "\"";
+    asset.etag = "\"" + digest + "\"";
     asset.immutable = true;
     Manifest manifest;
     const auto document = nlohmann::json::parse(revision.manifest_json, nullptr, false);

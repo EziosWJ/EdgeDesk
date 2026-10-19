@@ -223,6 +223,212 @@ void test_integrity_isolation(const fs::path& base) {
     CHECK_STR_EQ(asset.body, "<h1>fixed</h1>");
 }
 
+struct PackageFixture {
+    std::unique_ptr<PackageManager> manager;
+    InstallResult installed;
+    std::string revision_dir;
+};
+
+PackageFixture make_fixture(const fs::path& base, const std::string& name, const std::string& app_id) {
+    PackageFixture fixture;
+    Error error;
+    fixture.manager = PackageManager::create((base / name).string(), error);
+    CHECK(fixture.manager != nullptr);
+    if (!fixture.manager) return fixture;
+    const auto zip = make_zip(base, name + ".zip",
+                              app_items(manifest_json(app_id, "1.0.0"), "<h1>one</h1>"));
+    CHECK(fixture.manager->install(zip, {}, fixture.installed).ok());
+    AppRecord app;
+    CHECK(fixture.manager->approve(app_id, {}, true, app).ok());
+    CHECK(fixture.manager->revision_directory(app_id, fixture.installed.revision.revision_id,
+                                              fixture.revision_dir).ok());
+    return fixture;
+}
+
+void write_text(const fs::path& path, const std::string& text) {
+    std::ofstream file(path, std::ios::trunc | std::ios::binary);
+    file << text;
+}
+
+void expect_active_mismatch(PackageFixture& fixture, const std::string& app_id,
+                            const std::string& expected_path) {
+    IntegrityResult check;
+    CHECK(fixture.manager->check_integrity(app_id, "", check).ok());
+    CHECK(!check.ok);
+    CHECK(check.app_isolated);
+    CHECK_STR_EQ(check.mismatch_path, expected_path);
+    AppRecord app;
+    bool found = false;
+    CHECK(fixture.manager->get_app(app_id, app, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(app.status, app_status::isolated);
+}
+
+void test_integrity_extra_file_and_unregistered_asset(const fs::path& base) {
+    const std::string id = "io.example.integrity.extra";
+    auto fixture = make_fixture(base, "apps-extra", id);
+    if (!fixture.manager) return;
+    const std::string revision = fixture.installed.revision.revision_id;
+    write_text(fs::path(fixture.revision_dir) / "zz-extra.txt", "exfiltrated");
+
+    // Defense in depth: unregistered files are not served even while the
+    // stored revision integrity state is still ok.
+    StaticAsset asset;
+    CHECK(!fixture.manager->read_static(id, "1.0.0", revision, "zz-extra.txt", asset).ok());
+    CHECK(fixture.manager->read_static(id, "1.0.0", revision, "", asset).ok());
+    CHECK_STR_EQ(asset.body, "<h1>one</h1>");
+    CHECK(fixture.manager->read_static(id, "1.0.0", revision, "assets/app.js", asset).ok());
+
+    expect_active_mismatch(fixture, id, "zz-extra.txt");
+    CHECK(!fixture.manager->read_static(id, "1.0.0", revision, "", asset).ok());
+}
+
+void test_integrity_missing_file(const fs::path& base) {
+    const std::string id = "io.example.integrity.missing";
+    auto fixture = make_fixture(base, "apps-missing", id);
+    if (!fixture.manager) return;
+    CHECK(fs::remove(fs::path(fixture.revision_dir) / "assets" / "app.js"));
+    expect_active_mismatch(fixture, id, "assets/app.js");
+}
+
+void test_integrity_modified_content(const fs::path& base) {
+    const std::string id = "io.example.integrity.content";
+    auto fixture = make_fixture(base, "apps-content", id);
+    if (!fixture.manager) return;
+    // Same length as "<h1>one</h1>" so only the digest differs.
+    write_text(fs::path(fixture.revision_dir) / "index.html", "<h1>two</h1>");
+    expect_active_mismatch(fixture, id, "index.html");
+}
+
+void test_integrity_size_change(const fs::path& base) {
+    const std::string id = "io.example.integrity.size";
+    auto fixture = make_fixture(base, "apps-size", id);
+    if (!fixture.manager) return;
+    write_text(fs::path(fixture.revision_dir) / "index.html", "<h1>one</h1>extra");
+    expect_active_mismatch(fixture, id, "index.html");
+}
+
+void test_integrity_symlink(const fs::path& base) {
+    const std::string id = "io.example.integrity.symlink";
+    auto fixture = make_fixture(base, "apps-symlink", id);
+    if (!fixture.manager) return;
+    std::error_code link_error;
+    fs::create_symlink("index.html", fs::path(fixture.revision_dir) / "link.js", link_error);
+    CHECK(!link_error);
+    expect_active_mismatch(fixture, id, "link.js");
+}
+
+void test_integrity_special_file(const fs::path& base) {
+    const std::string id = "io.example.integrity.fifo";
+    auto fixture = make_fixture(base, "apps-fifo", id);
+    if (!fixture.manager) return;
+    CHECK_EQ(::mkfifo((fs::path(fixture.revision_dir) / "pipe").c_str(), 0600), 0);
+    expect_active_mismatch(fixture, id, "pipe");
+}
+
+void test_integrity_manifest_entry_removed(const fs::path& base) {
+    const std::string id = "io.example.integrity.manifest";
+    auto fixture = make_fixture(base, "apps-manifest", id);
+    if (!fixture.manager) return;
+    const std::string revision = fixture.installed.revision.revision_id;
+    std::vector<IntegrityEntry> entries;
+    CHECK(fixture.manager->store().list_integrity_entries(revision, entries).ok());
+    CHECK_EQ(entries.size(), std::size_t{3});
+    std::string removed;
+    for (auto it = entries.begin(); it != entries.end(); ++it) {
+        if (it->path == "assets/app.js") {
+            removed = it->path;
+            entries.erase(it);
+            break;
+        }
+    }
+    CHECK_STR_EQ(removed, "assets/app.js");
+    CHECK(fixture.manager->store().replace_integrity_entries(revision, entries).ok());
+    // The on-disk file is now unregistered.
+    expect_active_mismatch(fixture, id, "assets/app.js");
+}
+
+void test_integrity_case_collision(const fs::path& base) {
+    const std::string id = "io.example.integrity.case";
+    auto fixture = make_fixture(base, "apps-case", id);
+    if (!fixture.manager) return;
+    const std::string revision = fixture.installed.revision.revision_id;
+    std::vector<IntegrityEntry> entries;
+    CHECK(fixture.manager->store().list_integrity_entries(revision, entries).ok());
+    entries.push_back(IntegrityEntry{"Index.html", 11, std::string(64, '0')});
+    CHECK(fixture.manager->store().replace_integrity_entries(revision, entries).ok());
+    expect_active_mismatch(fixture, id, "Index.html");
+}
+
+void test_historical_integrity_scope(const fs::path& base) {
+    const std::string apps_root = (base / "apps-history").string();
+    Error error;
+    auto manager = PackageManager::create(apps_root, error);
+    CHECK(manager != nullptr);
+    if (!manager) return;
+    const std::string id = "io.example.integrity.history";
+    const auto v1 = make_zip(base, "history-1.zip",
+                             app_items(manifest_json(id, "1.0.0", {"storage"}), "<h1>v1</h1>"));
+    InstallResult first;
+    CHECK(manager->install(v1, {}, first).ok());
+    AppRecord app;
+    CHECK(manager->approve(id, {"storage"}, true, app).ok());
+
+    const auto v2 = make_zip(base, "history-2.zip",
+                             app_items(manifest_json(id, "1.1.0", {"storage"}), "<h1>v2</h1>"));
+    InstallOptions upgrade;
+    upgrade.expected_app_id = id;
+    InstallResult second;
+    CHECK(manager->install(v2, upgrade, second).ok());
+    CHECK_STR_EQ(second.app.active_revision_id, second.revision.revision_id);
+    CHECK_EQ(second.app.granted_permissions.size(), std::size_t{1});
+
+    std::string historical_dir;
+    CHECK(manager->revision_directory(id, first.revision.revision_id, historical_dir).ok());
+    write_text(fs::path(historical_dir) / "index.html", "<h1>bad</h1>");
+
+    IntegrityResult check;
+    CHECK(manager->check_integrity(id, first.revision.revision_id, check).ok());
+    CHECK(!check.ok);
+    CHECK(!check.app_isolated);
+    CHECK_STR_EQ(check.mismatch_path, "index.html");
+
+    bool found = false;
+    CHECK(manager->get_app(id, app, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(app.status, app_status::enabled);
+    CHECK_STR_EQ(app.active_revision_id, second.revision.revision_id);
+    CHECK_EQ(app.granted_permissions.size(), std::size_t{1});
+    CHECK_STR_EQ(app.granted_permissions.front(), "storage");
+
+    RevisionRecord historical;
+    CHECK(manager->get_revision(first.revision.revision_id, historical, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(historical.status, revision_status::isolated);
+    CHECK_STR_EQ(historical.integrity, integrity_state::mismatch);
+    RevisionRecord active;
+    CHECK(manager->get_revision(second.revision.revision_id, active, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(active.status, revision_status::active);
+    CHECK_STR_EQ(active.integrity, integrity_state::ok);
+
+    StaticAsset asset;
+    CHECK(manager->read_static(id, "1.1.0", second.revision.revision_id, "", asset).ok());
+    CHECK_STR_EQ(asset.body, "<h1>v2</h1>");
+    IntegrityResult active_check;
+    CHECK(manager->check_integrity(id, "", active_check).ok());
+    CHECK(active_check.ok);
+
+    // An integrity-failed revision can never be activated.
+    AppRecord after_activation;
+    const Error activation = manager->activate_revision(id, first.revision.revision_id, true, after_activation);
+    CHECK(!activation.ok());
+    CHECK(activation.code == ErrorCode::conflict);
+    CHECK(manager->get_app(id, app, found).ok());
+    CHECK_STR_EQ(app.active_revision_id, second.revision.revision_id);
+    CHECK_STR_EQ(app.status, app_status::enabled);
+}
+
 void test_reject_bad_packages(const fs::path& base) {
     const std::string apps_root = (base / "apps-bad").string();
     Error error;
@@ -532,6 +738,15 @@ int main() {
     test_install_approve_static(base);
     test_same_version_and_upgrade(base);
     test_integrity_isolation(base);
+    test_integrity_extra_file_and_unregistered_asset(base);
+    test_integrity_missing_file(base);
+    test_integrity_modified_content(base);
+    test_integrity_size_change(base);
+    test_integrity_symlink(base);
+    test_integrity_special_file(base);
+    test_integrity_manifest_entry_removed(base);
+    test_integrity_case_collision(base);
+    test_historical_integrity_scope(base);
     test_reject_bad_packages(base);
     test_uninstall_and_retention(base);
     test_network_grant_controls_csp(base);

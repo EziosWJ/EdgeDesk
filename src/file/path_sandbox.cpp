@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <string>
@@ -95,6 +96,73 @@ bool strip_parent_components(std::string_view path, std::string& out, std::strin
         out += parts[i];
     }
     return true;
+}
+
+Error enumerate_directory(int dir_fd, const std::string& prefix,
+                          std::vector<PathSandbox::TreeEntry>& out) {
+    const int duplicate = duplicate_fd(dir_fd);
+    if (duplicate < 0) return errno_to_error("cannot duplicate directory descriptor for enumeration");
+    DIR* dir = ::fdopendir(duplicate);
+    if (dir == nullptr) {
+        const int saved = errno;
+        ::close(duplicate);
+        errno = saved;
+        return errno_to_error("cannot enumerate " + (prefix.empty() ? std::string("sandbox root") : prefix));
+    }
+    const int listing_fd = ::dirfd(dir);
+    for (;;) {
+        errno = 0;
+        struct dirent* entry = ::readdir(dir);
+        if (entry == nullptr) {
+            if (errno == 0) break;
+            const int saved = errno;
+            ::closedir(dir);
+            errno = saved;
+            return errno_to_error("cannot read directory " +
+                                  (prefix.empty() ? std::string("sandbox root") : prefix));
+        }
+        const std::string name = entry->d_name;
+        if (name == "." || name == "..") continue;
+        const std::string relative = prefix.empty() ? name : prefix + "/" + name;
+        struct stat info {};
+        if (::fstatat(listing_fd, name.c_str(), &info, AT_SYMLINK_NOFOLLOW) != 0) {
+            const int saved = errno;
+            ::closedir(dir);
+            errno = saved;
+            return errno_to_error("cannot stat " + relative);
+        }
+        PathSandbox::TreeEntry node;
+        node.path = relative;
+        if (S_ISREG(info.st_mode)) {
+            node.kind = PathSandbox::NodeKind::regular_file;
+            node.size = static_cast<std::uint64_t>(info.st_size);
+        } else if (S_ISDIR(info.st_mode)) {
+            node.kind = PathSandbox::NodeKind::directory;
+        } else if (S_ISLNK(info.st_mode)) {
+            node.kind = PathSandbox::NodeKind::symlink;
+        } else {
+            node.kind = PathSandbox::NodeKind::other;
+        }
+        out.push_back(node);
+        if (node.kind != PathSandbox::NodeKind::directory) continue;
+
+        const int child = ::openat(listing_fd, name.c_str(),
+                                   O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (child < 0) {
+            const int saved = errno;
+            ::closedir(dir);
+            errno = saved;
+            return errno_to_error("cannot open directory " + relative);
+        }
+        Error error = enumerate_directory(child, relative, out);
+        ::close(child);
+        if (!error.ok()) {
+            ::closedir(dir);
+            return error;
+        }
+    }
+    if (::closedir(dir) != 0) return errno_to_error("cannot close directory listing");
+    return Error::none();
 }
 
 } // namespace
@@ -469,6 +537,14 @@ Error PathSandbox::stat(std::string_view path, struct stat& out) const {
     }
     if (protected_.blocks_identity(out.st_dev, out.st_ino)) return protected_path_denied();
     return Error::none();
+}
+
+Error PathSandbox::enumerate_tree(std::vector<TreeEntry>& out) const {
+    out.clear();
+    const int fd = ::openat(root_fd_.get(), ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0) return errno_to_error("cannot open sandbox root for enumeration");
+    UniqueFd root(fd);
+    return enumerate_directory(root.get(), "", out);
 }
 
 } // namespace edgedesk

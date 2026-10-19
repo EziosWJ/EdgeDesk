@@ -346,9 +346,13 @@ int handle_integrity(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
                           app_id);
         return http::write_error(resp, error);
     }
-    if (!result.ok) ctx.extension_runtime->invalidate_app(app_id);
+    // A historical revision mismatch marks only that revision non-runnable.
+    // Runtime sessions and grants are invalidated solely when the app's active
+    // revision is the one that failed verification.
+    if (result.app_isolated) ctx.extension_runtime->invalidate_app(app_id);
     ctx.audit->record("extension.integrity", result.ok ? "ok" : "mismatch",
-                      "revision=" + result.revision_id + " path=" + result.mismatch_path,
+                      "revision=" + result.revision_id + " path=" + result.mismatch_path +
+                          (result.ok ? "" : (result.app_isolated ? " app_isolated" : " revision_isolated")),
                       http::client_ip(*ctx.config, req), app_id);
     hv::Json out;
     out["ok"] = result.ok;

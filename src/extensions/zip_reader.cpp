@@ -12,6 +12,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <limits>
+#include <map>
 #include <set>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -628,39 +629,122 @@ Error ZipReader::verify_revision(const std::string& revision_root,
     Error sandbox_error;
     auto sandbox = PathSandbox::create(revision_root, false, sandbox_error);
     if (!sandbox) return sandbox_error;
-    std::vector<char> buffer(kCopyChunk);
+
+    // Enumerate the actual revision tree through directory file descriptors.
+    // The integrity manifest and the on-disk file set must be exactly equal.
+    std::vector<PathSandbox::TreeEntry> tree;
+    Error tree_error = sandbox->enumerate_tree(tree);
+    if (!tree_error.ok()) {
+        mismatch_path = ".";
+        return tree_error;
+    }
+
+    bool have_problem = false;
+    std::string first_path;
+    std::string first_reason;
+    auto note = [&](const std::string& path, const std::string& reason) {
+        if (!have_problem || path < first_path) {
+            first_path = path;
+            first_reason = reason;
+            have_problem = true;
+        }
+    };
+
+    // Validate the manifest itself: reject duplicate and case-colliding entries
+    // and paths that cannot denote a file relative to the revision root.
+    std::map<std::string, const IntegrityEntry*> manifest;
+    std::map<std::string, std::string> folded;
     for (const auto& entry : entries) {
+        if (entry.path.empty() || entry.path.front() == '/' || entry.path.back() == '/') {
+            note(entry.path, "invalid manifest path");
+            continue;
+        }
+        if (!manifest.emplace(entry.path, &entry).second) {
+            note(entry.path, "duplicate integrity entry");
+        }
+        const std::string lower = ascii_lower(entry.path);
+        auto folded_entry = folded.emplace(lower, entry.path);
+        if (!folded_entry.second && folded_entry.first->second != entry.path) {
+            note(std::min(entry.path, folded_entry.first->second), "case-colliding integrity entries");
+        }
+    }
+
+    std::map<std::string, const PathSandbox::TreeEntry*> actual;
+    for (const auto& node : tree) {
+        if (node.kind == PathSandbox::NodeKind::directory) continue;
+        if (!actual.emplace(node.path, &node).second) {
+            note(node.path, "duplicate filesystem path");
+        }
+        if (node.kind == PathSandbox::NodeKind::symlink) {
+            note(node.path, "unexpected symlink");
+        } else if (node.kind != PathSandbox::NodeKind::regular_file) {
+            note(node.path, "unexpected special file");
+        } else if (manifest.find(node.path) == manifest.end()) {
+            note(node.path, "unregistered file");
+        }
+    }
+
+    std::vector<char> buffer(kCopyChunk);
+    for (const auto& item : manifest) {
+        const IntegrityEntry& entry = *item.second;
+        const auto found = actual.find(entry.path);
+        if (found == actual.end()) {
+            note(entry.path, "missing file");
+            continue;
+        }
+        const PathSandbox::TreeEntry* node = found->second;
+        if (node->kind == PathSandbox::NodeKind::symlink) {
+            note(entry.path, "unexpected symlink");
+            continue;
+        }
+        if (node->kind != PathSandbox::NodeKind::regular_file) {
+            note(entry.path, "unexpected special file");
+            continue;
+        }
+        if (node->size != entry.size) {
+            note(entry.path, "size mismatch");
+            continue;
+        }
+
         UniqueFd fd;
-        Error error = sandbox->open_file("/" + entry.path, O_RDONLY, fd);
-        if (!error.ok()) {
-            mismatch_path = entry.path;
-            return Error::make(error.code, "integrity check cannot open " + entry.path + ": " + error.message);
+        Error open_error = sandbox->open_file("/" + entry.path, O_RDONLY, fd);
+        if (!open_error.ok()) {
+            note(entry.path, "cannot open file");
+            continue;
         }
         struct stat info {};
         if (::fstat(fd.get(), &info) != 0 || !S_ISREG(info.st_mode) ||
             static_cast<std::uint64_t>(info.st_size) != entry.size) {
-            mismatch_path = entry.path;
-            return Error::make(ErrorCode::conflict, "integrity mismatch (size): " + entry.path);
+            note(entry.path, "size mismatch");
+            continue;
         }
         Sha256 hasher;
         std::uint64_t offset = 0;
+        bool read_failed = false;
         for (;;) {
             const auto read = ::pread(fd.get(), buffer.data(), buffer.size(), static_cast<off_t>(offset));
             if (read < 0) {
                 if (errno == EINTR) continue;
-                mismatch_path = entry.path;
-                return io_error("read revision file " + entry.path);
+                read_failed = true;
+                break;
             }
             if (read == 0) break;
             hasher.update(buffer.data(), static_cast<std::size_t>(read));
             offset += static_cast<std::uint64_t>(read);
         }
-        if (offset != entry.size || hasher.finish_hex() != entry.sha256) {
-            mismatch_path = entry.path;
-            return Error::make(ErrorCode::conflict, "integrity mismatch (sha256): " + entry.path);
+        if (read_failed || offset != entry.size) {
+            note(entry.path, "cannot read file");
+            continue;
+        }
+        if (hasher.finish_hex() != entry.sha256) {
+            note(entry.path, "sha256 mismatch");
         }
     }
-    return Error::none();
+
+    if (!have_problem) return Error::none();
+    mismatch_path = first_path;
+    return Error::make(ErrorCode::conflict,
+                       "integrity mismatch (" + first_reason + "): " + first_path);
 }
 
 } // namespace edgedesk::extensions
