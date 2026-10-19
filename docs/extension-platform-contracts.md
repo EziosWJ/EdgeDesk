@@ -104,7 +104,7 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 | 方法 | 参数 | 结果 |
 | --- | --- | --- |
 | `platform.getInfo` | `{}` | `hostApiVersion, appId, instanceId, revisionId, version` |
-| `platform.reportError`（通知） | `type,message,stack` | 写入脱敏审计 |
+| `platform.reportError`（通知） | `type,message,stack` | 写入脱敏审计；字段分别截断（120/1024/2048 字节）并结构化编码，不写原始请求正文 |
 | `auth.getStatus` | `{}` | `authenticated, method`（不含 Cookie/Token） |
 | `storage.get` | `key` | `key,value,sizeBytes,updatedAt` |
 | `storage.set` | `key,value` | `key,sizeBytes,usageBytes` |

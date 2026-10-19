@@ -27,12 +27,19 @@
 - 两个失败目标在 CMake 配置阶段均未找到目标 ZLIB 头文件/库；跟踪于 [Issue #24](https://github.com/EziosWJ/EdgeDesk/issues/24)。
 - 该结果不否定旧 PR #14 当时的 5/5 通过记录，但旧 PR 的通过不能代替当前提交的跨平台验收。SPEC-0008 的安全与可靠性修复另见 [总任务 #16](https://github.com/EziosWJ/EdgeDesk/issues/16)。
 
+## 2026-10-19 T-07 审计脱敏本地执行记录
+
+- 变更：新增 `security/redaction.{hpp,cpp}`；`AuditLog::record` 对 detail/path 统一脱敏并限制为 8192 字节；扩展错误上报改为脱敏 + UTF-8 安全截断 + 结构化编码。
+- L0：`JOBS=8 CTEST_JOBS=4 scripts/test-fast.sh --no-frontend` 通过（17/17 原生测试，含新增 `audit_test`；SDK/CLI 4/4；`web/node_modules` 缺失，前端单测未运行）。
+- L1：`JOBS=8 CTEST_JOBS=4 scripts/test-pr.sh --no-frontend --port 19161` 通过（17/17 原生测试 + 全量集成；`extension_test` 新增错误上报脱敏与 JSONL 逐行解析断言）。`--no-frontend` 复用既有 `web/dist`，本轮未重新构建前端。
+- 未执行：L2 平台矩阵（embed/musl/ARM64）；本轮结论不构成跨平台发布验收。
+
 ## 测试分层（本地入口）
 
 | 层级 | 入口 | 覆盖 | 何时运行 |
 | --- | --- | --- | --- |
-| L0 编辑循环 | `scripts/test-fast.sh` | `host-offline-tests` 构建 + 16 项原生单测 + 前端单测（`web/node_modules` 存在时；V1.3 为 144 项）+ SDK/CLI 测试（Node 存在时） | 每次改动 |
-| L1 任务/PR | `scripts/test-pr.sh` | `dev-disk` 构建 + 16 项原生单测 + 全量集成（含扩展平台）+ 前端 `npm test` / `npm run build` | 提交前 |
+| L0 编辑循环 | `scripts/test-fast.sh` | `host-offline-tests` 构建 + 17 项原生单测 + 前端单测（`web/node_modules` 存在时；V1.3 为 144 项）+ SDK/CLI 测试（Node 存在时） | 每次改动 |
+| L1 任务/PR | `scripts/test-pr.sh` | `dev-disk` 构建 + 17 项原生单测 + 全量集成（含扩展平台）+ 前端 `npm test` / `npm run build` | 提交前 |
 | L2 全矩阵 | 见下方“构建与平台矩阵” | `release-embed`、`release-embed-arm64`、`release-disk`、x86_64-musl、arm64-disk、arm64-musl、CI | main/nightly/release；当前 CI 对 PR 也执行全矩阵 |
 
 ```bash
@@ -73,6 +80,7 @@ scripts/test-pr.sh
 | `auth_store_test` | 未初始化/已初始化/损坏状态、原子写入、0600/0700、flock、恢复重置 | GCC 13.3 host | 通过 |
 | `password_hash_test` | 密码策略、Argon2id hash/verify、盐独立、参数升级、有界 worker 队列 | GCC 13.3 host | 通过 |
 | `settings_store_test` | 默认值、白名单保存、非法枚举/越界拒绝、损坏文件回退、持久化 | GCC 13.3 host | 通过 |
+| `audit_test` | Authorization/Cookie/Set-Cookie/API Key/密码脱敏、JSON 与表单键、URL query/fragment/userinfo、裸 Bearer、大小写与 URL 编码、幂等性、空值/多行/超长输入、UTF-8 安全截断、8192 字节 sink 上限、JSONL 逐行有效 | GCC 13.3 host | 通过 |
 | `path_sandbox_test` | `..` 穿越、URL 编码、绝对路径、前缀欺骗目录、符号链接逃逸/循环（含 follow 模式）、嵌套相对目标（`dir`、`../..`、逃逸拒绝）、lstat 语义 | GCC 13.3 host | 通过 |
 | `file_service_test` | 列表/排序/分页/隐藏文件、`dirs_only` 直接子目录（符号链接不跟随）、文本读写与原子保存保留权限、二进制拒绝、上传/中止/超限、递归删除计数、Range 解析、MIME 判定 | GCC 13.3 host | 通过 |
 | `command_guard_test` | 危险命令命中（rm -rf 根、块设备写入、fork 炸弹、关机…）与安全命令不误报 | GCC 13.3 host | 通过 |
@@ -83,7 +91,7 @@ scripts/test-pr.sh
 | `extension_store_test` | SQLite 0700/0600、应用/修订/权限/完整性、操作日志、KV 键限/5 MiB 配额/回滚事务/分页、重启持久化 | GCC 13.3 host | 通过 |
 | `extension_package_test` | ZIP 安装、审批/静态资源/SPA、同版本覆盖、升级/降级、完整性隔离与修复、路径穿越/符号链接/重复名/本地头不一致、卸载保留/恢复/删除、修订保留与固定、启动孤儿清理 | GCC 13.3 host | 通过 |
 | `file_lock_test` | 共享/独占、硬链接别名、缺失目标父目录身份、多锁原子性、FileService 读写锁、Upload 移动锁转移 | GCC 13.3 host | 通过 |
-| `extension_test.py`（L1） | 安装/审批/静态 CSP、运行会话、KV 配额/回滚、目录游标、锁冲突、1 MiB 分块上传/下载 SHA-256、终端创建/关闭、禁用即时失效、升级/同版本覆盖/降级、完整性隔离、修复、卸载保留/恢复/删除、审计事件 | dev-disk + 真实 PTY/文件系统 | 通过 |
+| `extension_test.py`（L1） | 安装/审批/静态 CSP、运行会话、KV 配额/回滚、目录游标、锁冲突、1 MiB 分块上传/下载 SHA-256、终端创建/关闭、错误上报脱敏、禁用即时失效、升级/同版本覆盖/降级、完整性隔离、修复、卸载保留/恢复/删除、审计事件 | dev-disk + 真实 PTY/文件系统 | 通过 |
 | SDK CLI 测试 | manifest/资源/相对路径/符号链接/重复路径校验、ZIP 打包与检查 | Node 24.14 | 通过 |
 | `embed_generator_test` | `#embed` 生成器的确定性、路径校验、ETag | Python 3.12 | 通过 |
 | 前端单元/DOM 测试 | **V1.2 桌面**：AppRegistry（默认注册、未知 appId、重复注册、元数据/尺寸校验、单/多实例、启动器搜索）、桌面图标布局（网格命中、拖拽换位、边界、去重）、WindowManager（单/多实例、稳定实例 ID、z-index 有界、最小化保持挂载/恢复、最大化几何还原、移动/缩放/视口约束、中等视口完整可见、关闭守卫）、DesktopPersistence（序列化往返、损坏 JSON、版本不兼容、未知 appId、重复单实例、非法几何、敏感字段剥离、localStorage 不可用、恢复时会话失效标记、防抖自动保存）、DesktopShell（单击/双击、Dock 启动/聚焦/多窗口选择、最小化恢复、真全屏与桌面框架恢复、启动器搜索/空态/Esc/焦点返回、Alt 快捷键与输入焦点保护、窄屏强制最大化、退出登录）、终端恢复（session_not_found 不创建替代会话、无 session ID 时才 create、attached 状态）、编辑器生命周期（最小化保留缓冲、未保存关闭确认、外部修改保护、文件消失拒绝保存）、NAS 设备概览（CPU/内存/存储/网卡/系统/服务小组件、多挂载点、多网卡、loopback 排除、缺失值 vs 0、采集中断、加载空态）。**V1.3 扩展平台**：动态应用注册、禁用关闭窗口、待审批应用不可启动、扩展元数据更新。**V1.2.1 回归**：顶部退出登录注销服务端会话并由脏编辑器否决退出、最小化后重开保留最大化状态。**V1.1 回归**：会话持久化、metrics 窗口有界、格式化、FloatingWindow DOM 交互、Sidebar、图表工具、Dashboard 旧断言已迁移、文件管理、认证、设置、偏好。 | Node 24.14 / vitest 3.2 / happy-dom | 通过（144 项）；`npm run build`（tsc + vite）通过 |
@@ -91,7 +99,7 @@ scripts/test-pr.sh
 | `api_test.py` | health 契约、密码登录/会话/Bearer、CSRF、目录浏览（含 `dirs_only` 只返回直接子目录）、文本读写、mkdir/rename/delete、流式上传字节一致、Range 206/416、路径沙箱拒绝、JSON 体积限制、系统指标（含 `network[].addresses` 字段） | 见下（三种二进制） | 通过 |
 | `ws_test.py` | 未认证/异源握手拒绝、终端 create/input/输出/resize/guard、断线重连（回放）、会话存活、显式关闭、metrics 快照+增量 | 同上 | 通过 |
 | `rate_limit_test.py` | 登录限流与通用限流在严格配置下触发 429；伪造 `X-Forwarded-For` 不能绕过 peer-IP 限流 | 同上 | 通过 |
-| 审计校验 | `auth.setup`、`login`、`auth.password_change`、`auth.reset`、`file.upload`、`terminal.create` 事件落盘且不含秘密 | 同上 | 通过 |
+| 审计校验 | `auth.setup`、`login`、`auth.password_change`、`auth.reset`、`file.upload`、`terminal.create`、`extension.error` 事件落盘且不含秘密；错误上报注入的 Bearer/Cookie/API Key/密码/query/fragment 样本不出现在审计文件，且每行均为有效 JSON | 同上 | 通过 |
 
 ### 原型还原度与浏览器目视验收
 
