@@ -10,7 +10,8 @@
 #include <string_view>
 
 // Lightweight JSON-lines audit log with size rotation (ADR-0003).
-// Secrets (tokens, cookies, terminal input) are never written.
+// detail/path pass through security/redaction at the sink: credentials are
+// replaced with [REDACTED], and each field is bounded/UTF-8-safe.
 
 namespace edgedesk {
 

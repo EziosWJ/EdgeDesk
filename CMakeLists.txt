@@ -33,7 +33,6 @@ endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_package(Threads REQUIRED)
-find_package(ZLIB REQUIRED)
 set(EDGEDESK_FRONTEND_DIR "${CMAKE_SOURCE_DIR}/web")
 set(EDGEDESK_DIST_DIR "${EDGEDESK_FRONTEND_DIR}/dist")
 
@@ -80,6 +79,37 @@ target_compile_definitions(edgedesk_sqlite PRIVATE
 target_compile_options(edgedesk_sqlite PRIVATE -w)
 target_link_libraries(edgedesk_sqlite PUBLIC Threads::Threads)
 
+# zlib 1.3.1 (pinned, vendored under third_party/zlib). Host and cross builds
+# compile the same sources in-tree; no ZLIB::ZLIB lookup is performed. Bootlin
+# musl stable-2026.08 toolchains ship libz.so.1 without zlib.h, libz.so or
+# libz.a, and a host lookup would leak glibc zlib into cross builds.
+# src/extensions/zip_reader.cpp uses raw DEFLATE inflate and crc32.
+add_library(edgedesk_zlib STATIC
+  third_party/zlib/adler32.c
+  third_party/zlib/compress.c
+  third_party/zlib/crc32.c
+  third_party/zlib/deflate.c
+  third_party/zlib/gzclose.c
+  third_party/zlib/gzlib.c
+  third_party/zlib/gzread.c
+  third_party/zlib/gzwrite.c
+  third_party/zlib/infback.c
+  third_party/zlib/inffast.c
+  third_party/zlib/inflate.c
+  third_party/zlib/inftrees.c
+  third_party/zlib/trees.c
+  third_party/zlib/uncompr.c
+  third_party/zlib/zutil.c
+)
+target_include_directories(edgedesk_zlib PUBLIC "${CMAKE_SOURCE_DIR}/third_party/zlib")
+if(UNIX)
+  # The release tarball's zconf.h is the unconfigured template; upstream's
+  # configure/CMake define these from header probes. Without them the gz*
+  # sources miss <unistd.h> prototypes (read/write/close/lseek).
+  target_compile_definitions(edgedesk_zlib PRIVATE HAVE_UNISTD_H HAVE_STDARG_H)
+endif()
+target_compile_options(edgedesk_zlib PRIVATE -Wall -Wextra)
+
 # Library with all non-network modules: core, file, terminal, system, security,
 # web assets, extension platform. Tests link this target without pulling in libhv.
 add_library(edgedesk_core STATIC
@@ -100,11 +130,13 @@ add_library(edgedesk_core STATIC
   src/file/file_service.cpp
   src/file/file_types.cpp
   src/file/path_sandbox.cpp
+  src/file/protected_paths.cpp
   src/security/audit.cpp
   src/security/auth.cpp
   src/security/auth_store.cpp
   src/security/password_hash.cpp
   src/security/rate_limiter.cpp
+  src/security/redaction.cpp
   src/security/settings_store.cpp
   src/system/cpu_metrics.cpp
   src/system/disk_metrics.cpp
@@ -125,7 +157,7 @@ target_compile_definitions(edgedesk_core
   PRIVATE EDGEDESK_DISK_DEFAULT_DIR="${EDGEDESK_WEB_ROOT}"
   PUBLIC EDGEDESK_VERSION="${PROJECT_VERSION}"
   PUBLIC EDGEDESK_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
-target_link_libraries(edgedesk_core PUBLIC Threads::Threads edgedesk_argon2 edgedesk_sqlite ZLIB::ZLIB)
+target_link_libraries(edgedesk_core PUBLIC Threads::Threads edgedesk_argon2 edgedesk_sqlite edgedesk_zlib)
 if(UNIX AND NOT APPLE)
   # forkpty lives in libutil on glibc and in libc on musl.
   include(CheckLibraryExists)
@@ -218,6 +250,7 @@ if(EDGEDESK_BUILD_TESTS)
     auth_store_test:security/auth_store_test.cpp
     password_hash_test:security/password_hash_test.cpp
     settings_store_test:security/settings_store_test.cpp
+    audit_test:security/audit_test.cpp
     command_guard_test:terminal/command_guard_test.cpp
     terminal_session_test:terminal/terminal_session_test.cpp
     system_metrics_test:system/system_metrics_test.cpp
@@ -225,6 +258,8 @@ if(EDGEDESK_BUILD_TESTS)
     manifest_test:extensions/manifest_test.cpp
     extension_store_test:extensions/extension_store_test.cpp
     extension_package_test:extensions/extension_package_test.cpp
+    extension_runtime_test:extensions/extension_runtime_test.cpp
+    extension_memory_test:extensions/extension_memory_test.cpp
     file_lock_test:file/file_lock_test.cpp
   )
   foreach(entry IN LISTS EDGEDESK_TEST_TARGETS)
@@ -237,6 +272,13 @@ if(EDGEDESK_BUILD_TESTS)
     target_compile_features(${test_name} PRIVATE cxx_std_17)
     target_compile_options(${test_name} PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME ${test_name} COMMAND ${test_name})
+    # extension_memory_test re-execs itself in a forked child. Under
+    # cross-compilation that child needs the same emulator as the test itself.
+    if(test_name STREQUAL "extension_memory_test" AND CMAKE_CROSSCOMPILING_EMULATOR)
+      string(REPLACE ";" " " edgedesk_test_exec_prefix "${CMAKE_CROSSCOMPILING_EMULATOR}")
+      set_tests_properties(${test_name} PROPERTIES
+        ENVIRONMENT "EDGEDESK_TEST_EXEC_PREFIX=${edgedesk_test_exec_prefix}")
+    endif()
   endforeach()
   add_test(NAME embed_generator_test
     COMMAND ${Python3_EXECUTABLE} -m unittest discover -s "${CMAKE_SOURCE_DIR}/tools/tests" -p "test_*.py")

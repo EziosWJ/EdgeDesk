@@ -291,8 +291,15 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
       const result = await extensionApi.integrityCheck(selected.app_id);
       setIntegrity(result);
       if (!result.ok) {
-        windowStore.closeAllForApp(selected.app_id);
-        await afterMutation('完整性校验失败：应用已隔离，异常修订已保留。', selected.app_id);
+        if (result.app_isolated) {
+          windowStore.closeAllForApp(selected.app_id);
+          await afterMutation('完整性校验失败：活动修订异常，应用已隔离并保留异常文件。', selected.app_id);
+        } else {
+          await afterMutation(
+            `完整性校验失败：修订 ${result.revision_id.slice(0, 8)} 已标记为不可运行，应用状态未改变。`,
+            selected.app_id,
+          );
+        }
       } else {
         await afterMutation('完整性校验通过。', selected.app_id);
       }
@@ -549,6 +556,12 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
                       );
                     })}
                   </div>
+                  {selected.requested_permissions.includes('network') &&
+                    !selected.granted_permissions.includes('network') && (
+                      <p className="ed-ext-hint" role="status">
+                        网络来源尚未授权，应用无法加载任何外部资源。升级新增或扩大的来源需要管理员重新审核后才会生效。
+                      </p>
+                    )}
                   {selected.network_origins.length > 0 && (
                     <div className="ed-ext-origins">
                       <span>已声明的外部来源（共用白名单，http/明文风险自担）</span>
@@ -663,7 +676,9 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
                   <span>
                     {integrity.ok
                       ? `完整性校验通过：${integrity.revision_id}`
-                      : `完整性校验失败：${integrity.mismatch_path || integrity.revision_id}`}
+                      : integrity.app_isolated
+                        ? `完整性校验失败：${integrity.mismatch_path || integrity.revision_id}（应用已隔离）`
+                        : `完整性校验失败：${integrity.mismatch_path || integrity.revision_id}（该修订已隔离，应用状态未改变）`}
                   </span>
                 </div>
               )}

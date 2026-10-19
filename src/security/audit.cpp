@@ -1,6 +1,7 @@
 #include "security/audit.hpp"
 
 #include "core/util.hpp"
+#include "security/redaction.hpp"
 
 #include <cerrno>
 #include <cstdio>
@@ -158,12 +159,18 @@ void AuditLog::rotate_locked() {
 void AuditLog::record(std::string_view event, std::string_view outcome, std::string_view detail,
                       std::string_view ip, std::string_view path) {
     if (!enabled_) return;
+    // Detail and path carry untrusted text (extension error reports, route and
+    // URL fragments). Redact and hard-bound them at the sink so every caller
+    // is covered, including future ones. Event/outcome are fixed identifiers
+    // and stay escaped but unmodified.
+    const std::string safe_detail = detail.empty() ? std::string() : sanitize_audit_field(detail);
+    const std::string safe_path = path.empty() ? std::string() : sanitize_audit_field(path);
     std::string line = "{\"ts\":\"" + format_iso8601_utc(now_unix_seconds()) + "\"";
     line += ",\"event\":\"" + json_escape(event) + "\"";
     line += ",\"outcome\":\"" + json_escape(outcome) + "\"";
-    if (!detail.empty()) line += ",\"detail\":\"" + json_escape(detail) + "\"";
+    if (!safe_detail.empty()) line += ",\"detail\":\"" + json_escape(safe_detail) + "\"";
     if (!ip.empty()) line += ",\"ip\":\"" + json_escape(ip) + "\"";
-    if (!path.empty()) line += ",\"path\":\"" + json_escape(path) + "\"";
+    if (!safe_path.empty()) line += ",\"path\":\"" + json_escape(safe_path) + "\"";
     line += "}\n";
 
     std::lock_guard<std::mutex> lock(mutex_);

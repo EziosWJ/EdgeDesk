@@ -8,7 +8,7 @@
 - `docs/architecture.md`（模块/线程/资源边界）、`docs/api.md`（HTTP 与 WS 协议）、
   `docs/config.md`（配置项与部署）、`docs/testing.md`（验证矩阵）描述当前实现。
 - `docs/phase1.md` 是历史骨架记录；不要将其当作当前功能范围。
-- 扩展应用平台唯一需求基线为 `docs/spec/0007-extension-applications.md`，配套决策为 `docs/adr/0011-extension-runtime-and-packages.md`、`docs/adr/0012-extension-security-and-communication.md`、`docs/adr/0013-extension-file-api-and-transfer.md`，风险与阶段计划分别见 `docs/security/extension-app-risk-register.md`、`docs/tasks/0007-extension-applications.md`。V1.3 已按这些决策实现首期静态运行时；实现契约与验证证据见 `docs/extension-platform-contracts.md` 与 `docs/testing.md`。数字签名、应用间通信、秘密存储和后端/脚本运行时仍未实现，不得宣称具备。
+- 扩展应用平台核心功能需求基线为 `docs/spec/0007-extension-applications.md`；安全与可靠性加固补充基线为 `docs/spec/0008-extension-platform-hardening.md`。配套决策为 `docs/adr/0011-extension-runtime-and-packages.md`、`docs/adr/0012-extension-security-and-communication.md`、`docs/adr/0013-extension-file-api-and-transfer.md`，风险与实施计划分别见 `docs/security/extension-app-risk-register.md`、`docs/tasks/0007-extension-applications.md`、`docs/tasks/0008-extension-platform-hardening.md`。V1.3 已实现首期静态运行时，但 SPEC-0008 中的修复必须以代码、回归测试与当前 CI 证据验收。数字签名、应用间通信、秘密存储和后端/脚本运行时仍未实现，不得宣称具备。
 - React + TypeScript + Vite 与 xterm.js 已确认为前端基线（ADR-0001）；不要再讨论替换。
 
 ## 固定的技术边界

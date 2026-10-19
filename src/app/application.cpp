@@ -6,6 +6,7 @@
 #include "file/file_lock.hpp"
 #include "file/file_service.hpp"
 #include "file/path_sandbox.hpp"
+#include "file/protected_paths.hpp"
 #include "http/middleware.hpp"
 #include "http/server.hpp"
 #include "security/audit.hpp"
@@ -122,9 +123,23 @@ void Application::initialize() {
                   << "): " << extension_error.message << "\n"
                   << "         Core APIs remain available; pass --apps-root to a writable directory.\n";
     } else {
-        extension_runtime_ =
-            std::make_unique<extensions::ExtensionRuntime>(packages_->store(), *packages_, *files_,
-                                                           terminals_.get());
+        // Extension calls get their own sandbox over the same root. The
+        // protected set covers platform state that must never be reachable
+        // through files.manage even when --file-root is "/". It is compiled
+        // after the package manager has created apps_root so that existing
+        // descendants (including SQLite files and revisions) are indexed for
+        // hard-link alias detection.
+        PathSandbox::Options extension_options;
+        extension_options.protected_paths = platform_protected_paths(config_);
+        extension_sandbox_ =
+            PathSandbox::create(config_.file_root, config_.follow_symlinks, extension_options, sandbox_error);
+        if (!extension_sandbox_) {
+            throw std::runtime_error(sandbox_error.message);
+        }
+        extension_files_ = std::make_unique<FileService>(*extension_sandbox_, file_options);
+        extension_files_->set_lock_manager(file_locks_.get());
+        extension_runtime_ = std::make_unique<extensions::ExtensionRuntime>(
+            packages_->store(), *packages_, *extension_files_, terminals_.get());
     }
 }
 

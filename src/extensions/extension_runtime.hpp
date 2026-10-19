@@ -64,6 +64,12 @@ public:
     ExtensionRuntime(const ExtensionRuntime&) = delete;
     ExtensionRuntime& operator=(const ExtensionRuntime&) = delete;
 
+    // Backing file service for every extension files.* operation. It carries
+    // the platform-internal protected-path policy; routes must not use the
+    // administrator file service for extension calls.
+    FileService& files() { return files_; }
+    const FileService& files() const { return files_; }
+
     Error create_session(std::string_view app_id, std::string_view instance_id, RuntimeSession& out);
     Error validate(std::string_view token, RuntimeSession& out);
     void remove_session(std::string_view token);
@@ -131,14 +137,32 @@ private:
         std::int64_t last_activity_ms = 0;
     };
 
+    // Resources detached from the session maps by a teardown. Transfer
+    // destructors abort uploads, unlink journals and release file locks, and
+    // terminal closes may call back into the host, so the owner releases these
+    // only after mutex_ is unlocked.
+    struct SessionResources {
+        std::vector<std::string> terminal_ids;
+        std::vector<UploadTask> uploads;
+        std::vector<DownloadTask> downloads;
+        void append(SessionResources&& other);
+    };
+
     static Error cursor_stale();
     bool find_session_locked(std::string_view token, RuntimeSession& out) const;
-    std::vector<std::string> erase_session_locked(std::string_view token);
+    // Removes session state and detaches its resources. The caller must hold
+    // mutex_ and later pass the result to finish_teardown() outside the lock.
+    SessionResources take_session_locked(std::string_view token);
+    void finish_teardown(SessionResources resources);
+    void teardown_session(std::string_view token);
     void close_terminals(const std::vector<std::string>& session_ids);
     Error write_transfer_journal(UploadTask& task, std::string_view transfer_id) const;
     void recover_transfer_journal();
     Error transfer_owner_check(const RuntimeSession& session, const UploadTask& task) const;
     Error transfer_owner_check(const RuntimeSession& session, const DownloadTask& task) const;
+
+    // Narrow deterministic-time seam for unit tests; not production API.
+    friend struct RuntimeTestAccess;
 
     ExtensionStore& store_;
     PackageManager& packages_;

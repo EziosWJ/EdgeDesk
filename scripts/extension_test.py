@@ -25,6 +25,17 @@ import zipfile
 FAILURES = []
 ORIGIN = ""
 
+# Fake secrets injected through the runtime error-report bridge. The audit log
+# must never contain these values and must remain one JSON object per line.
+AUDIT_ERROR_SECRETS = [
+    "IT-BEARER-SECRET-0f0f",
+    "IT-COOKIE-SECRET-1a1a",
+    "IT-APIKEY-SECRET-2b2b",
+    "IT-PASSWORD-SECRET-3c3c",
+    "IT-QUERY-SECRET-4d4d",
+    "IT-FRAGMENT-SECRET-5e5e",
+]
+
 
 def check(condition, message):
     if condition:
@@ -147,10 +158,13 @@ def main():
 
     app_id = "io.example.integration"
     revision_dir = os.path.join(args.apps_root, "revisions", app_id)
+    # Deterministic 2 MiB asset: large enough to exercise the streaming route.
+    large_asset = bytes(range(256)) * 8192
     with tempfile.TemporaryDirectory(prefix="edgedesk-ext-it-") as temp:
         v1 = os.path.join(temp, "v1.zip")
         make_zip(v1, manifest_for(app_id, "1.0.0", origins=["https://*.example.com"]),
-                 "<h1>integration v1</h1>", "console.log('v1')")
+                 "<h1>integration v1</h1>", "console.log('v1')",
+                 extra={"assets/large.bin": large_asset})
 
         status, payload, _ = install(cookie, v1)
         body = json_body(payload)
@@ -180,6 +194,25 @@ def main():
         check("object-src 'none'" in csp, "CSP object-src missing")
         status, _, _ = request("GET", f"/apps/{app_id}/1.0.0/{rev1}/missing.js")
         check(status == 404, "missing asset with extension must not SPA-fallback")
+        status, _, _ = request("GET", "/apps")
+        check(status == 404, "bare /apps must not SPA-fallback")
+        status, _, _ = request("GET", "/apps/")
+        check(status == 404, "bare /apps/ must not SPA-fallback")
+
+        # Large asset: streamed body, HEAD without a body, and ETag 304.
+        asset_url = f"/apps/{app_id}/1.0.0/{rev1}/assets/large.bin"
+        status, payload, headers = request("GET", asset_url)
+        check(status == 200 and payload == large_asset,
+              f"streamed static asset mismatch: {status} {len(payload)} bytes")
+        large_etag = headers.get("ETag", "")
+        check(large_etag.startswith('"'), f"large asset ETag missing: {large_etag!r}")
+        status, payload, headers = request("HEAD", asset_url)
+        check(status == 200 and payload == b"",
+              f"HEAD static asset returned a body: {status} {len(payload)} bytes")
+        check(headers.get("Content-Length") == str(len(large_asset)),
+              f"HEAD Content-Length mismatch: {headers.get('Content-Length')!r}")
+        status, payload, _ = request("GET", asset_url, headers={"If-None-Match": large_etag})
+        check(status == 304 and payload == b"", f"If-None-Match did not produce 304: {status}")
 
         status, payload, _ = request("POST", "/api/extensions/runtime/sessions",
                                      {"app_id": app_id, "instance_id": "11111111-2222-3333-4444-555555555555"},
@@ -192,6 +225,30 @@ def main():
 
         def runtime(path, body):
             return request("POST", "/api/extensions/runtime/" + path, body, cookie, headers=runtime_headers)
+
+        error_message = (
+            "Authorization: Bearer " + AUDIT_ERROR_SECRETS[0] + "\n"
+            "Cookie: edgedesk_session=" + AUDIT_ERROR_SECRETS[1] + "; theme=dark\n"
+            "{\"api_key\":\"" + AUDIT_ERROR_SECRETS[2] + "\"}\n"
+            "password=" + AUDIT_ERROR_SECRETS[3] + "\n"
+            "https://example.com/cb?token=" + AUDIT_ERROR_SECRETS[4] +
+            "#access_token=" + AUDIT_ERROR_SECRETS[5]
+        )
+        status, payload, _ = runtime("errors", {
+            "type": "RuntimeError Bearer " + AUDIT_ERROR_SECRETS[0],
+            "message": error_message,
+            "stack": "Error: token=" + AUDIT_ERROR_SECRETS[4] + " at app.js:1:1",
+        })
+        check(status == 200 and json_body(payload).get("ok") is True,
+              f"runtime error report failed: {status} {payload[:200]!r}")
+
+        # Non-string fields are untrusted input too: they must not crash the
+        # route or be serialized verbatim.
+        status, payload, _ = runtime("errors", {
+            "type": 42, "message": {"nested": True}, "stack": [1, 2],
+        })
+        check(status == 200 and json_body(payload).get("ok") is True,
+              f"non-string error fields should be ignored: {status} {payload[:200]!r}")
 
         status, payload, _ = runtime("storage/set", {"key": "settings", "value": {"n": 1}})
         check(status == 200, f"storage set failed: {status} {payload[:200]!r}")
@@ -336,7 +393,50 @@ def main():
         token = json_body(payload).get("token", "")
         runtime_headers = {"X-EdgeDesk-Runtime": token}
 
-        # Integrity failure isolates the app and closes runtime access.
+        # Defense in depth: a file absent from the integrity manifest is never
+        # served, even while the stored revision integrity state is still ok.
+        unregistered = os.path.join(revision_dir, rev1, "unregistered.txt")
+        with open(unregistered, "w") as handle:
+            handle.write("unregistered")
+        status, _, _ = request("GET", f"/apps/{app_id}/1.0.0/{rev1}/unregistered.txt")
+        check(status == 404, f"unregistered asset was served: {status}")
+        status, payload, _ = request("GET", f"/apps/{app_id}/1.0.0/{rev1}/")
+        check(status == 200 and b"integration v1" in payload,
+              f"registered asset became unavailable: {status}")
+        os.unlink(unregistered)
+
+        # Tampering with a historical revision marks only that revision
+        # non-runnable: app status, active revision, grants, static serving and
+        # the live runtime session must all remain untouched.
+        historical_tampered = os.path.join(revision_dir, rev2, "index.html")
+        with open(historical_tampered, "w") as handle:
+            handle.write("<h1>historical tampered</h1>")
+        status, payload, _ = request("POST", f"/api/extensions/{app_id}/integrity-check",
+                                     {"revision_id": rev2}, cookie)
+        result = json_body(payload)
+        check(status == 409 and result.get("ok") is False,
+              f"historical tampering was not detected: {status} {payload[:200]!r}")
+        check(result.get("app_isolated") is False, "historical mismatch reported app isolation")
+        status, payload, _ = request("GET", f"/api/extensions/{app_id}", cookie=cookie)
+        detail = json_body(payload)
+        app_state = detail.get("app", {})
+        check(app_state.get("status") == "enabled", "historical mismatch changed app status")
+        check(app_state.get("active_revision_id") == rev1, "historical mismatch changed the active revision")
+        check(bool(app_state.get("granted_permissions")), "historical mismatch cleared grants")
+        status, payload, _ = request("GET", f"/apps/{app_id}/1.0.0/{rev1}/")
+        check(status == 200 and b"integration v1" in payload,
+              "active revision stopped serving after historical mismatch")
+        status, _, _ = runtime("storage/get", {"key": "settings"})
+        check(status == 200, f"historical mismatch invalidated the active runtime session: {status}")
+        status, payload, _ = request("POST", f"/api/extensions/{app_id}/activate",
+                                     {"revision_id": rev2, "confirm": True}, cookie)
+        check(status == 409, f"integrity-failed revision was activatable: {status} {payload[:200]!r}")
+        if args.state_dir:
+            with open(os.path.join(args.state_dir, "audit.log")) as handle:
+                audit_lines = handle.readlines()
+            expected = f'"revision={rev2} path=index.html revision_isolated"'
+            check(any('"event":"extension.integrity"' in line and expected in line for line in audit_lines),
+                  "audit did not record the revision-scoped integrity mismatch")
         tampered = os.path.join(revision_dir, rev1, "index.html")
         with open(tampered, "w") as handle:
             handle.write("<h1>tampered</h1>")
@@ -349,6 +449,12 @@ def main():
         check(status in (401, 403), f"isolated app runtime session still worked: {status}")
         status, payload, _ = request("GET", f"/apps/{app_id}/1.0.0/{rev1}/")
         check(status == 404, "isolated revision still served")
+        if args.state_dir:
+            with open(os.path.join(args.state_dir, "audit.log")) as handle:
+                audit_lines = handle.readlines()
+            expected = f'"revision={rev1} path=index.html app_isolated"'
+            check(any('"event":"extension.integrity"' in line and expected in line for line in audit_lines),
+                  "audit did not record app-scoped integrity isolation")
 
         # Repair by reinstalling a good package, then approve again.
         repaired = os.path.join(temp, "repaired.zip")
@@ -396,15 +502,139 @@ def main():
         status, payload, _ = request("GET", f"/api/extensions/{app_id}", cookie=cookie)
         check(status == 404, f"deleted app record still visible: {status} {payload[:300]!r}")
 
+        # ---- network permission and origin policy ----
+        net_id = "io.example.network"
+        net_v1 = os.path.join(temp, "net-v1.zip")
+        make_zip(net_v1, manifest_for(net_id, "1.0.0", ["storage", "network"],
+                                      ["https://*.example.net"]),
+                 "<h1>network v1</h1>", "console.log('net1')")
+        status, payload, _ = install(cookie, net_v1)
+        check(status == 201, f"network install failed: {status} {payload[:200]!r}")
+        net_rev1 = json_body(payload).get("revision", {}).get("revision_id", "")
+
+        # Approve storage first: network stays ungranted, so no external sources.
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/approve",
+                               {"permissions": ["storage"], "enable": True}, cookie)
+        check(status == 200, f"network install approval failed: {status}")
+        status, payload, headers = request("GET", f"/apps/{net_id}/1.0.0/{net_rev1}/")
+        check(status == 200, f"network install static failed: {status}")
+        csp = headers.get("Content-Security-Policy", "")
+        check("example.net" not in csp, f"ungranted network leaked into CSP: {csp}")
+
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/permissions",
+                               {"permissions": ["storage", "network"]}, cookie)
+        check(status == 200, "network grant failed")
+        status, _, headers = request("GET", f"/apps/{net_id}/1.0.0/{net_rev1}/")
+        csp = headers.get("Content-Security-Policy", "")
+        check("https://*.example.net" in csp and "https://example.net" in csp,
+              f"approved wildcard sources missing from CSP: {csp}")
+        for directive in ("script-src", "style-src", "img-src", "font-src", "connect-src", "media-src",
+                          "frame-src", "child-src", "form-action"):
+            segment = csp.split(directive, 1)[1].split(";", 1)[0]
+            check("example.net" in segment, f"{directive} did not receive the approved origin: {segment}")
+
+        status, payload, _ = request("POST", "/api/extensions/runtime/sessions",
+                                     {"app_id": net_id,
+                                      "instance_id": "22222222-3333-4444-5555-666666666666"}, cookie)
+        net_session = json_body(payload)
+        check(status == 201, f"network session failed: {status} {payload[:200]!r}")
+        check(net_session.get("origins") == ["https://*.example.net"],
+              f"session origins not limited to the approved set: {net_session.get('origins')}")
+
+        # Revoking network removes CSP sources and new sessions lose origins.
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/permissions",
+                               {"permissions": ["storage"]}, cookie)
+        check(status == 200, f"network revoke failed: {status}")
+        status, _, headers = request("GET", f"/apps/{net_id}/1.0.0/{net_rev1}/")
+        csp = headers.get("Content-Security-Policy", "")
+        check("example.net" not in csp, f"revoked network still in CSP: {csp}")
+        check("form-action 'self'" in csp, f"CSP form-action was not reset: {csp}")
+        status, payload, _ = request("POST", "/api/extensions/runtime/sessions",
+                                     {"app_id": net_id,
+                                      "instance_id": "33333333-4444-5555-6666-777777777777"}, cookie)
+        revoked_session = json_body(payload)
+        check(status == 201 and revoked_session.get("origins") == [],
+              f"revoked session kept origins: {revoked_session.get('origins')}")
+
+        # Re-grant, then disable/re-enable: approvals persist across sessions.
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/permissions",
+                               {"permissions": ["storage", "network"]}, cookie)
+        check(status == 200, f"network re-grant failed: {status}")
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/disable", {}, cookie)
+        check(status == 200, "network disable failed")
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/enable", {}, cookie)
+        check(status == 200, "network enable failed")
+        status, payload, _ = request("POST", "/api/extensions/runtime/sessions",
+                                     {"app_id": net_id,
+                                      "instance_id": "44444444-5555-6666-7777-888888888888"}, cookie)
+        reenabled = json_body(payload)
+        check(status == 201 and reenabled.get("origins") == ["https://*.example.net"],
+              f"re-enabled session lost approved origins: {reenabled.get('origins')}")
+
+        # Upgrading to an expanded origin set removes network and needs review.
+        net_v2 = os.path.join(temp, "net-v2.zip")
+        make_zip(net_v2, manifest_for(net_id, "1.1.0", ["storage", "network"],
+                                      ["https://*.example.net", "https://api.example.net"]),
+                 "<h1>network v2</h1>", "console.log('net2')")
+        status, payload, _ = install(cookie, net_v2, upgrade_app=net_id)
+        check(status == 201, f"network upgrade failed: {status} {payload[:200]!r}")
+        upgraded_net = json_body(payload).get("app", {})
+        net_rev2 = json_body(payload).get("revision", {}).get("revision_id", "")
+        check(upgraded_net.get("status") == "enabled", "network upgrade disabled the app unexpectedly")
+        check("network" in upgraded_net.get("requested_permissions", []),
+              "upgraded manifest did not request network")
+        check("network" not in upgraded_net.get("granted_permissions", []),
+              "expanded origins silently retained the network grant")
+        status, _, headers = request("GET", f"/apps/{net_id}/1.1.0/{net_rev2}/")
+        csp = headers.get("Content-Security-Policy", "")
+        check("example.net" not in csp, f"expanded origins leaked into CSP before review: {csp}")
+        status, payload, _ = request("POST", "/api/extensions/runtime/sessions",
+                                     {"app_id": net_id,
+                                      "instance_id": "55555555-6666-7777-8888-999999999999"}, cookie)
+        upgraded_session = json_body(payload)
+        check(status == 201 and upgraded_session.get("origins") == [],
+              f"unreviewed upgrade kept origins: {upgraded_session.get('origins')}")
+
+        # Explicit re-approval makes both origins effective.
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/approve",
+                               {"permissions": ["storage", "network"], "enable": True}, cookie)
+        check(status == 200, "network re-approval after upgrade failed")
+        status, _, headers = request("GET", f"/apps/{net_id}/1.1.0/{net_rev2}/")
+        csp = headers.get("Content-Security-Policy", "")
+        check("https://*.example.net" in csp and "https://api.example.net" in csp,
+              f"re-approved origins missing from CSP: {csp}")
+        status, payload, _ = request("POST", "/api/extensions/runtime/sessions",
+                                     {"app_id": net_id,
+                                      "instance_id": "66666666-7777-8888-9999-aaaaaaaaaaaa"}, cookie)
+        approved_session = json_body(payload)
+        check(status == 201 and sorted(approved_session.get("origins", [])) ==
+              sorted(["https://*.example.net", "https://api.example.net"]),
+              f"session origins do not match the approved set: {approved_session.get('origins')}")
+
+        status, _, _ = request("POST", f"/api/extensions/{net_id}/uninstall", {"data_action": "keep"},
+                               cookie)
+        check(status == 200, f"network uninstall failed: {status}")
+        status, payload, _ = request("GET", f"/api/extensions/{net_id}", cookie=cookie)
+        check(status == 200 and json_body(payload).get("app", {}).get("status") == "uninstalled",
+              f"network app was not marked uninstalled: {status} {payload[:300]!r}")
+
     if args.state_dir:
         audit_path = os.path.join(args.state_dir, "audit.log")
         if os.path.isfile(audit_path):
             text = open(audit_path, encoding="utf-8", errors="replace").read()
             for event in ("extension.install", "extension.approve", "extension.upgrade",
                           "extension.integrity", "extension.uninstall", "extension.file",
-                          "extension.terminal", "extension.storage"):
+                          "extension.terminal", "extension.storage", "extension.error"):
                 check(event in text, f"audit event missing: {event}")
             check(args.password not in text, "audit leaked credentials")
+            for line in text.splitlines():
+                try:
+                    json.loads(line)
+                except json.JSONDecodeError:
+                    check(False, f"audit line is not valid JSON: {line[:160]!r}")
+            for secret in AUDIT_ERROR_SECRETS:
+                check(secret not in text, f"audit leaked error-report secret: {secret}")
+            check("[REDACTED]" in text, "audit redaction marker missing")
         else:
             check(False, f"audit log missing: {audit_path}")
 

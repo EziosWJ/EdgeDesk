@@ -61,6 +61,12 @@ std::vector<std::string> intersect(const std::vector<std::string>& left,
     return out;
 }
 
+constexpr const char* kNetworkPermission = "network";
+
+void revoke_network(std::vector<std::string>& grants) {
+    grants.erase(std::remove(grants.begin(), grants.end(), kNetworkPermission), grants.end());
+}
+
 Error read_small_file(const PathSandbox& sandbox, const std::string& path, std::size_t max_bytes,
                       std::string& out) {
     UniqueFd fd;
@@ -89,6 +95,26 @@ Error read_small_file(const PathSandbox& sandbox, const std::string& path, std::
         offset += static_cast<std::size_t>(read);
     }
     out.resize(offset);
+    return Error::none();
+}
+
+// Opens an already-normalized logical path as a regular file and returns its
+// size. Directories and other special files are rejected (the package writer
+// only ever creates regular files, but a tampered revision must not block).
+Error open_regular_file(const PathSandbox& sandbox, const std::string& path, UniqueFd& fd,
+                        std::uint64_t& size) {
+    Error error = sandbox.open_file(path, O_RDONLY, fd);
+    if (!error.ok()) return error;
+    struct stat info {};
+    if (::fstat(fd.get(), &info) != 0) {
+        fd.reset();
+        return Error::make(ErrorCode::io_error, "cannot stat " + path);
+    }
+    if (!S_ISREG(info.st_mode)) {
+        fd.reset();
+        return Error::make(ErrorCode::invalid_argument, path + " is not a regular file");
+    }
+    size = static_cast<std::uint64_t>(info.st_size);
     return Error::none();
 }
 
@@ -126,7 +152,9 @@ bool remove_tree_at(const std::string& path, std::string& error) {
     }
     struct DirCloser {
         DIR* dir;
-        ~DirCloser() { ::closedir(dir); }
+        ~DirCloser() {
+            if (dir != nullptr) ::closedir(dir);
+        }
     } closer{raw};
     const int fd = ::dirfd(raw);
     for (;;) {
@@ -290,10 +318,9 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
         return Error::make(ErrorCode::permission_denied, open_error);
     }
 
-    std::vector<ExtractedFile> files;
     std::vector<IntegrityEntry> integrity;
     std::uint64_t total_bytes = 0;
-    error = zip->extract_all(temp_fd.get(), files, integrity, total_bytes);
+    error = zip->extract_all(temp_fd.get(), integrity, total_bytes);
     temp_fd.reset();
     if (!error.ok()) {
         std::string ignored;
@@ -316,6 +343,11 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
         fail_operation(operation_id, temp_path, "", manifest_error);
         return Error::make(ErrorCode::invalid_argument, manifest_error);
     }
+    // The validated manifest is kept in `manifest.raw`, so the separately
+    // parsed document is no longer needed. Dump once and release the DOM to
+    // avoid carrying several full copies of the manifest into the commit.
+    std::string manifest_json = manifest.raw.dump();
+    document = nlohmann::json();
     if (!options.expected_app_id.empty() && options.expected_app_id != manifest.id) {
         const std::string message = "package application id does not match the upgrade target";
         fail_operation(operation_id, temp_path, "", message);
@@ -330,7 +362,7 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
     }
     bool has_index = false;
     bool has_manifest = false;
-    for (const auto& file : files) {
+    for (const auto& file : integrity) {
         if (file.path == "index.html") has_index = true;
         if (file.path == "manifest.json") has_manifest = true;
     }
@@ -371,25 +403,13 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
         }
     }
 
-    bool restored = false;
+    // Retained KV is only deleted as part of the final metadata transaction.
+    // Until that transaction commits, the uninstalled app row, retained flag
+    // and previous KV must remain intact; stale retained rows (data_retained
+    // was cleared but rows survived) are not restorable either.
     const bool retained = found && existing.data_retained;
-    if (retained && reinstall) {
-        restored = options.restore_retained_data;
-        if (!restored) {
-            error = store_->kv_delete_all(manifest.id);
-            if (!error.ok()) {
-                fail_operation(operation_id, temp_path, "", error.message);
-                return error;
-            }
-        }
-    } else if (found && existing.status == app_status::uninstalled) {
-        // Stale retained rows without the flag are not restorable.
-        error = store_->kv_delete_all(manifest.id);
-        if (!error.ok()) {
-            fail_operation(operation_id, temp_path, "", error.message);
-            return error;
-        }
-    }
+    const bool restored = reinstall && retained && options.restore_retained_data;
+    const bool delete_retained_kv = reinstall && !restored;
 
     std::string revision_id;
     for (int attempt = 0; attempt < 8; ++attempt) {
@@ -427,9 +447,9 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
     revision.revision_id = revision_id;
     revision.app_id = manifest.id;
     revision.version = manifest.version;
-    revision.manifest_json = document.dump();
+    revision.manifest_json = std::move(manifest_json);
     revision.created_at = now_unix_seconds();
-    revision.file_count = files.size();
+    revision.file_count = integrity.size();
     revision.total_bytes = total_bytes;
     revision.status = revision_status::active;
     revision.integrity = integrity_state::ok;
@@ -450,9 +470,10 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
 
     const auto requested = permission_names(manifest.permissions);
     const std::string previous_active = upgrading ? existing.active_revision_id : "";
-    const auto retained_grants = upgrading ? intersect(existing.granted_permissions, requested)
-                                           : std::vector<std::string>{};
+    auto retained_grants = upgrading ? intersect(existing.granted_permissions, requested)
+                                     : std::vector<std::string>{};
     const bool requires_fresh_approval = !found || reinstall || existing.status == app_status::isolated;
+    const auto declared_origins = origin_strings(manifest.origins);
 
     error = store_->run_transaction([&]() -> Error {
         if (!previous_active.empty()) {
@@ -474,11 +495,30 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
         transaction_error = store_->replace_permission_requests(manifest.id, requested);
         if (!transaction_error.ok()) return transaction_error;
         if (requires_fresh_approval) {
-            transaction_error = store_->replace_permission_grants(manifest.id, {});
-        } else {
-            transaction_error = store_->replace_permission_grants(manifest.id, retained_grants);
+            retained_grants.clear();
+        } else if (contains(retained_grants, kNetworkPermission)) {
+            // Keeping network requires the new revision to stay inside the
+            // administrator's previously approved origin set. Expanded or
+            // changed origins force an explicit re-review.
+            std::vector<std::string> approved;
+            transaction_error = store_->list_network_origins(manifest.id, approved);
+            if (!transaction_error.ok()) return transaction_error;
+            if (!origins_subset(declared_origins, approved)) {
+                revoke_network(retained_grants);
+            }
         }
-        return transaction_error;
+        transaction_error = store_->replace_permission_grants(manifest.id, retained_grants);
+        if (!transaction_error.ok()) return transaction_error;
+        if (!contains(retained_grants, kNetworkPermission)) {
+            transaction_error = store_->clear_network_origins(manifest.id);
+            if (!transaction_error.ok()) return transaction_error;
+        }
+        if (delete_retained_kv) {
+            // Same transaction as the app/revision switch: a failure or crash
+            // before COMMIT leaves the old KV and the old app state untouched.
+            return store_->kv_delete_all(manifest.id);
+        }
+        return Error::none();
     });
     if (!error.ok()) {
         fail_operation(operation_id, temp_path, destination, error.message);
@@ -499,8 +539,8 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
 
     error = store_->get_app(manifest.id, result.app, found);
     if (!error.ok()) return error;
-    result.revision = revision;
-    result.manifest = manifest;
+    result.revision = std::move(revision);
+    result.manifest = std::move(manifest);
     result.operation_id = operation_id;
     result.publisher_verified = false;
     result.approval_required = result.app.status == app_status::pending_review;
@@ -565,17 +605,28 @@ Error PackageManager::approve(std::string_view app_id, const std::vector<std::st
         if (!contains(unique, permission)) unique.push_back(permission);
     }
     std::sort(unique.begin(), unique.end());
+    Manifest manifest;
+    bool manifest_loaded = false;
     if (enable) {
-        Manifest manifest;
         Error manifest_error = active_manifest(app_id, manifest);
         if (!manifest_error.ok()) return manifest_error;
+        manifest_loaded = true;
         if (app.status == app_status::isolated) {
             return Error::make(ErrorCode::conflict,
                                "application is isolated after an integrity failure; reinstall it first");
         }
     }
+    const bool network_granted = contains(unique, kNetworkPermission);
+    if (network_granted && !manifest_loaded) {
+        Error manifest_error = active_manifest(app_id, manifest);
+        if (!manifest_error.ok()) return manifest_error;
+    }
+    const auto approved_origins = network_granted ? origin_strings(manifest.origins)
+                                                  : std::vector<std::string>{};
     error = store_->run_transaction([&]() -> Error {
         Error transaction_error = store_->replace_permission_grants(app_id, unique);
+        if (!transaction_error.ok()) return transaction_error;
+        transaction_error = store_->replace_network_origins(app_id, approved_origins);
         if (!transaction_error.ok()) return transaction_error;
         if (enable) return store_->set_app_status(app_id, app_status::enabled);
         if (app.status == app_status::pending_review) return store_->set_app_status(app_id, app_status::disabled);
@@ -634,7 +685,19 @@ Error PackageManager::update_permissions(std::string_view app_id,
         if (!contains(unique, permission)) unique.push_back(permission);
     }
     std::sort(unique.begin(), unique.end());
-    error = store_->replace_permission_grants(app_id, unique);
+    const bool network_granted = contains(unique, kNetworkPermission);
+    Manifest manifest;
+    if (network_granted) {
+        Error manifest_error = active_manifest(app_id, manifest);
+        if (!manifest_error.ok()) return manifest_error;
+    }
+    const auto approved_origins = network_granted ? origin_strings(manifest.origins)
+                                                  : std::vector<std::string>{};
+    error = store_->run_transaction([&]() -> Error {
+        Error transaction_error = store_->replace_permission_grants(app_id, unique);
+        if (!transaction_error.ok()) return transaction_error;
+        return store_->replace_network_origins(app_id, approved_origins);
+    });
     if (!error.ok()) return error;
     return store_->get_app(app_id, app, found);
 }
@@ -654,6 +717,8 @@ Error PackageManager::uninstall(std::string_view app_id, bool keep_data) {
     const std::string app_id_string(app_id);
     error = store_->run_transaction([&]() -> Error {
         Error transaction_error = store_->clear_permission_grants(app_id);
+        if (!transaction_error.ok()) return transaction_error;
+        transaction_error = store_->clear_network_origins(app_id);
         if (!transaction_error.ok()) return transaction_error;
         transaction_error = store_->replace_permission_requests(app_id, {});
         if (!transaction_error.ok()) return transaction_error;
@@ -707,7 +772,8 @@ Error PackageManager::activate_revision(std::string_view app_id, std::string_vie
     if (!revision_found || revision.app_id != app_id) {
         return Error::make(ErrorCode::not_found, "revision not found for this application");
     }
-    if (revision.integrity != integrity_state::ok) {
+    if (revision.integrity != integrity_state::ok ||
+        revision.status == revision_status::isolated) {
         return Error::make(ErrorCode::conflict, "revision is isolated after an integrity failure");
     }
     if (revision.status == revision_status::active) {
@@ -725,7 +791,8 @@ Error PackageManager::activate_revision(std::string_view app_id, std::string_vie
     }
     const std::string previous_active = app.active_revision_id;
     const auto requested = permission_names(manifest.permissions);
-    const auto grants = intersect(app.granted_permissions, requested);
+    auto grants = intersect(app.granted_permissions, requested);
+    const auto declared_origins = origin_strings(manifest.origins);
     const bool was_isolated = app.status == app_status::isolated;
     error = store_->run_transaction([&]() -> Error {
         if (!previous_active.empty()) {
@@ -744,8 +811,20 @@ Error PackageManager::activate_revision(std::string_view app_id, std::string_vie
         if (!transaction_error.ok()) return transaction_error;
         transaction_error = store_->replace_permission_requests(app_id, requested);
         if (!transaction_error.ok()) return transaction_error;
+        if (contains(grants, kNetworkPermission)) {
+            // Downgrades and rollbacks follow the same rule as upgrades: an
+            // origin set outside the approved set needs a fresh review.
+            std::vector<std::string> approved;
+            transaction_error = store_->list_network_origins(app_id, approved);
+            if (!transaction_error.ok()) return transaction_error;
+            if (!origins_subset(declared_origins, approved)) revoke_network(grants);
+        }
         transaction_error = store_->replace_permission_grants(app_id, grants);
         if (!transaction_error.ok()) return transaction_error;
+        if (!contains(grants, kNetworkPermission)) {
+            transaction_error = store_->clear_network_origins(app_id);
+            if (!transaction_error.ok()) return transaction_error;
+        }
         if (was_isolated) {
             transaction_error = store_->set_app_status(app_id, app_status::disabled);
         }
@@ -857,6 +936,8 @@ Error PackageManager::check_integrity(std::string_view app_id, std::string_view 
             if (!transaction_error.ok()) return transaction_error;
             transaction_error = store_->clear_permission_grants(app_id);
             if (!transaction_error.ok()) return transaction_error;
+            transaction_error = store_->clear_network_origins(app_id);
+            if (!transaction_error.ok()) return transaction_error;
             result.app_isolated = true;
         }
         return transaction_error;
@@ -878,9 +959,9 @@ std::shared_ptr<PathSandbox> PackageManager::static_sandbox(std::string_view app
     return shared;
 }
 
-Error PackageManager::read_static(std::string_view app_id, std::string_view version,
+Error PackageManager::open_static(std::string_view app_id, std::string_view version,
                                   std::string_view revision_id, std::string_view relative,
-                                  StaticAsset& asset) const {
+                                  StaticAssetHandle& asset) const {
     asset = {};
     AppRecord app;
     bool found = false;
@@ -903,6 +984,16 @@ Error PackageManager::read_static(std::string_view app_id, std::string_view vers
     auto sandbox = static_sandbox(app_id, revision_id);
     if (!sandbox) return Error::make(ErrorCode::io_error, "revision files are unavailable");
 
+    std::vector<IntegrityEntry> entries;
+    error = store_->list_integrity_entries(revision_id, entries);
+    if (!error.ok()) return error;
+    auto integrity_entry = [&](const std::string& logical) -> const IntegrityEntry* {
+        for (const auto& entry : entries) {
+            if ("/" + entry.path == logical) return &entry;
+        }
+        return nullptr;
+    };
+
     std::string requested(relative);
     if (requested.empty()) requested = "index.html";
     std::string logical = "/" + requested;
@@ -911,41 +1002,75 @@ Error PackageManager::read_static(std::string_view app_id, std::string_view vers
     if (!PathSandbox::normalize(logical, normalized, message)) {
         return Error::make(ErrorCode::invalid_argument, message);
     }
-    auto load = [&](const std::string& path, std::string& body) -> Error {
-        return read_small_file(*sandbox, path, std::numeric_limits<std::size_t>::max(), body);
-    };
-    std::string body;
-    error = load(normalized, body);
+
+    // Only files registered in the active revision's integrity manifest may be
+    // served. Route-like paths without an extension fall back to index.html,
+    // but the effective path must itself be registered.
     std::string effective = normalized;
-    if (!error.ok() && !has_extension(normalized)) {
+    const IntegrityEntry* entry = integrity_entry(effective);
+    if (entry == nullptr && !has_extension(normalized)) {
         effective = "/index.html";
-        error = load(effective, body);
+        entry = integrity_entry(effective);
     }
-    if (!error.ok()) {
-        if (error.code == ErrorCode::not_found) return error;
-        return error;
+    if (entry == nullptr || entry->sha256.empty()) {
+        return Error::make(ErrorCode::not_found, "asset is not registered in the integrity manifest");
     }
-    std::vector<IntegrityEntry> entries;
-    error = store_->list_integrity_entries(revision_id, entries);
+
+    // Open the registered file read-only; the HTTP layer streams it in chunks.
+    UniqueFd fd;
+    std::uint64_t size = 0;
+    error = open_regular_file(*sandbox, effective, fd, size);
     if (!error.ok()) return error;
-    std::string digest;
-    for (const auto& entry : entries) {
-        if ("/" + entry.path == effective) {
-            digest = entry.sha256;
-            break;
-        }
-    }
-    asset.body = std::move(body);
+    const std::string digest = entry->sha256;
+    asset.fd = std::move(fd);
+    asset.size = size;
     asset.mime = mime_for_file_name(base_name(effective));
-    asset.etag = digest.empty() ? std::string() : "\"" + digest + "\"";
+    asset.etag = "\"" + digest + "\"";
     asset.immutable = true;
     Manifest manifest;
     const auto document = nlohmann::json::parse(revision.manifest_json, nullptr, false);
     std::vector<std::string> warnings;
     std::string manifest_error;
     if (parse_manifest(document, manifest, manifest_error, warnings)) {
-        asset.csp = manifest.csp_policy();
+        std::vector<std::string> effective_origins;
+        if (contains(app.granted_permissions, kNetworkPermission)) {
+            std::vector<std::string> approved;
+            Error origins_error = store_->list_network_origins(app_id, approved);
+            if (!origins_error.ok()) return origins_error;
+            effective_origins = intersect_origins(origin_strings(manifest.origins), approved);
+        }
+        asset.csp = manifest.csp_policy(effective_origins);
     }
+    return Error::none();
+}
+
+Error PackageManager::read_static(std::string_view app_id, std::string_view version,
+                                  std::string_view revision_id, std::string_view relative,
+                                  StaticAsset& asset) const {
+    asset = {};
+    StaticAssetHandle handle;
+    Error error = open_static(app_id, version, revision_id, relative, handle);
+    if (!error.ok()) return error;
+    if (handle.size > std::numeric_limits<std::size_t>::max()) {
+        return Error::make(ErrorCode::too_large, "static asset is too large to buffer");
+    }
+    asset.body.resize(static_cast<std::size_t>(handle.size));
+    std::size_t offset = 0;
+    while (offset < asset.body.size()) {
+        const auto read = ::pread(handle.fd.get(), asset.body.data() + offset, asset.body.size() - offset,
+                                  static_cast<off_t>(offset));
+        if (read < 0) {
+            if (errno == EINTR) continue;
+            return Error::make(ErrorCode::io_error, "cannot read static asset");
+        }
+        if (read == 0) break;
+        offset += static_cast<std::size_t>(read);
+    }
+    asset.body.resize(offset);
+    asset.mime = std::move(handle.mime);
+    asset.etag = std::move(handle.etag);
+    asset.csp = std::move(handle.csp);
+    asset.immutable = handle.immutable;
     return Error::none();
 }
 

@@ -61,6 +61,7 @@
 | [SPEC-0005](spec/0005-authentication-and-settings.md) | V1.1 管理员认证、首次初始化、系统设置与验收 |
 | [SPEC-0006](spec/0006-desktop-workspace.md) | V1.2 桌面图标、Dock、启动器、窗口管理、持久化与恢复 |
 | [SPEC-0007](spec/0007-extension-applications.md) | 扩展应用 ZIP 包、安装/审批/升级/卸载、iframe 沙箱、宿主 API、KV 与文件传输；含第 1～98 轮决策台账 |
+| [SPEC-0008](spec/0008-extension-platform-hardening.md) | 扩展应用平台安全与可靠性加固：内部路径保护、网络授权、完整性、数据事务、资源清理、审计脱敏与跨平台构建 |
 
 ## 实施计划
 
@@ -68,7 +69,8 @@
 | --- | --- |
 | [SPEC-0005 开发任务拆分](tasks/0005-authentication-and-settings.md) | V1.1 认证与设置的实现决策、任务依赖、测试矩阵与发布门槛 |
 | [SPEC-0006 V1.2 实施计划](tasks/0006-desktop-workspace.md) | 桌面化分阶段实施、Issue 拆分、通用完成定义与发布门槛 |
-| [SPEC-0007 扩展应用平台实施计划](tasks/0007-extension-applications.md) | Phase 0～9、建议 Issue 依赖、验收标准与发布门槛（已实现；L2 待 CI） |
+| [SPEC-0007 扩展应用平台实施计划](tasks/0007-extension-applications.md) | Phase 0～9、原始实施任务与验收标准 |
+| [SPEC-0008 扩展平台硬化实施计划](tasks/0008-extension-platform-hardening.md) | 8 个实现 Ticket、依赖顺序、回归测试与发布门槛 |
 
 ## 设计素材
 

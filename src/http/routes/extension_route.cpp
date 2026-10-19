@@ -6,17 +6,27 @@
 #include "extensions/package_manager.hpp"
 #include "http/upload_state.hpp"
 #include "security/auth.hpp"
+#include "security/redaction.hpp"
 #include "terminal/terminal_manager.hpp"
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <fcntl.h>
 #include <memory>
+#include <thread>
 #include <unistd.h>
 
 namespace edgedesk {
 namespace {
+
+// Streaming static assets: fixed chunk size and a bounded socket backlog. A
+// slow client blocks one async worker for at most kStaticStallGuardMs.
+constexpr std::size_t kStaticChunk = 128 * 1024;
+constexpr std::size_t kStaticBufferHighWater = 1024 * 1024;
+constexpr int kStaticStallGuardMs = 60 * 1000;
 
 using extensions::AppRecord;
 using edgedesk::ExtensionUploadRequestState;
@@ -29,7 +39,6 @@ using extensions::PackageManager;
 using extensions::Permission;
 using extensions::RevisionRecord;
 using extensions::RuntimeSession;
-using extensions::StaticAsset;
 using extensions::TransferInfo;
 
 bool manager_ready(RouteContext& ctx, HttpResponse* resp) {
@@ -115,6 +124,11 @@ bool json_object(HttpRequest* req, hv::Json& body, HttpResponse* resp) {
         return false;
     }
     return true;
+}
+
+std::string string_field(const hv::Json& body, const char* field, const char* fallback) {
+    if (!body.contains(field) || !body[field].is_string()) return fallback;
+    return body[field].get<std::string>();
 }
 
 std::vector<std::string> string_array(const hv::Json& body, const char* field, Error& error) {
@@ -346,9 +360,13 @@ int handle_integrity(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
                           app_id);
         return http::write_error(resp, error);
     }
-    if (!result.ok) ctx.extension_runtime->invalidate_app(app_id);
+    // A historical revision mismatch marks only that revision non-runnable.
+    // Runtime sessions and grants are invalidated solely when the app's active
+    // revision is the one that failed verification.
+    if (result.app_isolated) ctx.extension_runtime->invalidate_app(app_id);
     ctx.audit->record("extension.integrity", result.ok ? "ok" : "mismatch",
-                      "revision=" + result.revision_id + " path=" + result.mismatch_path,
+                      "revision=" + result.revision_id + " path=" + result.mismatch_path +
+                          (result.ok ? "" : (result.app_isolated ? " app_isolated" : " revision_isolated")),
                       http::client_ip(*ctx.config, req), app_id);
     hv::Json out;
     out["ok"] = result.ok;
@@ -750,7 +768,7 @@ int handle_files_stat(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     const std::string path = body.value("path", "");
     if (path.empty()) return http::write_error(resp, 400, "invalid_argument", "path is required");
     FileEntry entry;
-    Error error = ctx.files->stat(path, entry);
+    Error error = ctx.extension_runtime->files().stat(path, entry);
     if (!error.ok()) return write_runtime_error(resp, error);
     hv::Json out;
     out["ok"] = true;
@@ -769,11 +787,11 @@ int handle_files_read(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     if (path.empty()) return http::write_error(resp, 400, "invalid_argument", "path is required");
     std::string content;
     FileEntry entry;
-    Error error = ctx.files->read_text(path, content, entry);
+    Error error = ctx.extension_runtime->files().read_text(path, content, entry);
     std::string encoding = "utf-8";
     if (!error.ok() && error.code == ErrorCode::unsupported) {
         FileService::ReadHandle handle;
-        error = ctx.files->open_for_read(path, handle);
+        error = ctx.extension_runtime->files().open_for_read(path, handle);
         if (error.ok()) {
             if (handle.size > 1024 * 1024) {
                 return http::write_error(resp, 413, "too_large",
@@ -827,7 +845,7 @@ int handle_files_mkdir(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) 
     if (!json_object(req, body, resp)) return 400;
     const std::string path = body.value("path", "");
     if (path.empty()) return http::write_error(resp, 400, "invalid_argument", "path is required");
-    Error error = ctx.files->mkdir(path);
+    Error error = ctx.extension_runtime->files().mkdir(path);
     if (!error.ok()) {
         ctx.audit->record("extension.file", "denied", runtime_detail(session, "mkdir"),
                           http::client_ip(*ctx.config, req), normalized_audit_path(ctx, path));
@@ -852,7 +870,7 @@ int handle_files_rename(RouteContext& ctx, HttpRequest* req, HttpResponse* resp)
     if (from.empty() || to.empty()) {
         return http::write_error(resp, 400, "invalid_argument", "from and to are required");
     }
-    Error error = ctx.files->rename(from, to, body.value("overwrite", false));
+    Error error = ctx.extension_runtime->files().rename(from, to, body.value("overwrite", false));
     if (!error.ok()) {
         ctx.audit->record("extension.file", "denied", runtime_detail(session, "rename"),
                           http::client_ip(*ctx.config, req), normalized_audit_path(ctx, from));
@@ -881,7 +899,8 @@ int handle_files_delete(RouteContext& ctx, HttpRequest* req, HttpResponse* resp)
         paths.push_back(item.get<std::string>());
     }
     RemoveResult result;
-    Error error = ctx.files->remove(paths, result);    if (!error.ok()) {
+    Error error = ctx.extension_runtime->files().remove(paths, result);
+    if (!error.ok()) {
         ctx.audit->record("extension.file", "denied", runtime_detail(session, "delete"),
                           http::client_ip(*ctx.config, req), paths.empty() ? "" : normalized_audit_path(ctx, paths.front()));
         return write_runtime_error(resp, error);
@@ -1049,15 +1068,19 @@ int handle_runtime_error_report(RouteContext& ctx, HttpRequest* req, HttpRespons
     if (!runtime_session(ctx, req, resp, session)) return 401;
     hv::Json body;
     if (!json_object(req, body, resp)) return 400;
-    std::string type = body.value("type", "error");
-    std::string message = body.value("message", "");
-    std::string stack = body.value("stack", "");
-    if (type.size() > 120) type.resize(120);
-    if (message.size() > 1024) message.resize(1024);
-    if (stack.size() > 2048) stack.resize(2048);
+    // Extension-supplied diagnostics are untrusted. Redact before applying the
+    // per-field caps, then quote each field so newlines/control characters
+    // cannot forge adjacent key=value entries in the audit detail.
+    const std::string type =
+        truncate_utf8(redact_sensitive(string_field(body, "type", "error")), 120);
+    const std::string message =
+        truncate_utf8(redact_sensitive(string_field(body, "message", "")), 1024);
+    const std::string stack =
+        truncate_utf8(redact_sensitive(string_field(body, "stack", "")), 2048);
     ctx.audit->record("extension.error", "reported",
-                      runtime_detail(session, "error") + " revision=" + session.revision_id + " type=" + type +
-                          " message=" + message + " stack=" + stack,
+                      runtime_detail(session, "error") + " revision=" + session.revision_id +
+                          " type=" + quote_audit_field(type) + " message=" +
+                          quote_audit_field(message) + " stack=" + quote_audit_field(stack),
                       http::client_ip(*ctx.config, req), "");
     hv::Json out;
     out["ok"] = true;
@@ -1159,58 +1182,83 @@ int handle_terminal_close(RouteContext& ctx, HttpRequest* req, HttpResponse* res
 
 } // namespace
 
-int serve_extension_asset(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
-    if (req->method != HTTP_GET && req->method != HTTP_HEAD) return 405;
+void serve_extension_asset_stream(RouteContext& ctx, const HttpRequestPtr& req,
+                                  const HttpResponseWriterPtr& writer, bool head) {
+    auto write_plain = [&writer](int status, const std::string& message) {
+        writer->Begin();
+        writer->WriteStatus(static_cast<http_status>(status));
+        writer->WriteHeader("Content-Type", "text/plain; charset=utf-8");
+        writer->WriteHeader("Cache-Control", "no-store");
+        writer->WriteHeader("Content-Length", static_cast<std::uint64_t>(message.size()));
+        writer->EndHeaders();
+        if (!message.empty()) writer->WriteBody(message.data(), static_cast<int>(message.size()));
+        writer->End();
+    };
     if (ctx.packages == nullptr) {
-        resp->status_code = static_cast<http_status>(503);
-        resp->headers["Content-Type"] = "text/plain; charset=utf-8";
-        resp->body = "extension platform unavailable";
-        return 503;
+        write_plain(503, "extension platform unavailable");
+        return;
     }
     const std::string path = req->Path();
-    if (path.rfind("/apps/", 0) != 0) return 404;
+    if (path.rfind("/apps/", 0) != 0) {
+        write_plain(404, "not found");
+        return;
+    }
     const std::string rest = path.substr(6);
     std::vector<std::string> segments;
     std::size_t start = 0;
     while (start <= rest.size()) {
         const auto slash = rest.find('/', start);
-        const std::string raw = rest.substr(start, slash == std::string::npos ? rest.size() - start : slash - start);
+        const std::string raw =
+            rest.substr(start, slash == std::string::npos ? rest.size() - start : slash - start);
         std::string decoded;
-        if (!url_decode(raw, decoded)) return 400;
+        if (!url_decode(raw, decoded)) {
+            write_plain(400, "invalid application asset path");
+            return;
+        }
         segments.push_back(std::move(decoded));
         if (slash == std::string::npos) break;
         start = slash + 1;
     }
-    if (segments.size() < 3) return 404;
+    if (segments.size() < 3) {
+        write_plain(404, "not found");
+        return;
+    }
     for (std::size_t i = 0; i < segments.size(); ++i) {
-        if (segments[i].empty() && i + 1 < segments.size()) return 400;
+        if (segments[i].empty() && i + 1 < segments.size()) {
+            write_plain(400, "invalid application asset path");
+            return;
+        }
     }
     const std::string& app_id = segments[0];
     const std::string& version = segments[1];
     const std::string& revision_id = segments[2];
-    if (app_id.empty() || version.empty() || revision_id.empty()) return 404;
+    if (app_id.empty() || version.empty() || revision_id.empty()) {
+        write_plain(404, "not found");
+        return;
+    }
     std::string relative;
     for (std::size_t i = 3; i < segments.size(); ++i) {
         if (!relative.empty()) relative.push_back('/');
         relative += segments[i];
     }
-    StaticAsset asset;
-    Error error = ctx.packages->read_static(app_id, version, revision_id, relative, asset);
+
+    extensions::StaticAssetHandle asset;
+    Error error = ctx.packages->open_static(app_id, version, revision_id, relative, asset);
     if (!error.ok()) {
-        const int status = error.code == ErrorCode::not_found ? 404 : 400;
-        resp->status_code = static_cast<http_status>(status);
-        resp->headers["Content-Type"] = "text/plain; charset=utf-8";
-        resp->headers["Cache-Control"] = "no-store";
-        resp->body = status == 404 ? "not found" : "invalid application asset path";
-        return status;
+        const bool missing = error.code == ErrorCode::not_found;
+        write_plain(missing ? 404 : 400, missing ? "not found" : "invalid application asset path");
+        return;
     }
-    resp->headers["Content-Type"] = asset.mime;
-    resp->headers["X-Content-Type-Options"] = "nosniff";
-    resp->headers["Referrer-Policy"] = "no-referrer";
-    resp->headers["X-Frame-Options"] = "SAMEORIGIN";
-    resp->headers["Cross-Origin-Resource-Policy"] = "cross-origin";
-    resp->headers["Access-Control-Allow-Origin"] = "*";
-    resp->headers["Cache-Control"] = "public, max-age=31536000, immutable";
+
+    writer->Begin();
+    writer->WriteStatus(HTTP_STATUS_OK);
+    writer->WriteHeader("Content-Type", asset.mime.c_str());
+    writer->WriteHeader("X-Content-Type-Options", "nosniff");
+    writer->WriteHeader("Referrer-Policy", "no-referrer");
+    writer->WriteHeader("X-Frame-Options", "SAMEORIGIN");
+    writer->WriteHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    writer->WriteHeader("Access-Control-Allow-Origin", "*");
+    writer->WriteHeader("Cache-Control", "public, max-age=31536000, immutable");
     if (!asset.csp.empty()) {
         // A sandboxed iframe has an opaque origin, so CSP 'self' may not match
         // the asset URL in every browser. Add the exact host explicitly so
@@ -1225,28 +1273,77 @@ int serve_extension_asset(RouteContext& ctx, HttpRequest* req, HttpResponse* res
                 position += extra.size();
             }
         }
-        resp->headers["Content-Security-Policy"] = policy;
+        writer->WriteHeader("Content-Security-Policy", policy.c_str());
     }
     if (!asset.etag.empty()) {
-        resp->headers["ETag"] = asset.etag;
+        writer->WriteHeader("ETag", asset.etag.c_str());
         const std::string if_none_match = req->GetHeader("If-None-Match", "");
         if (!if_none_match.empty() && if_none_match == asset.etag) {
-            resp->status_code = static_cast<http_status>(304);
-            resp->body.clear();
-            resp->content_length = 0;
-            return 304;
+            writer->WriteStatus(HTTP_STATUS_NOT_MODIFIED);
+            writer->EndHeaders();
+            writer->End();
+            return;
         }
     }
-    if (req->method == HTTP_GET) {
-        resp->content_length = asset.body.size();
-        resp->body = std::move(asset.body);
-    } else {
-        resp->content_length = asset.body.size();
+    if (head) {
+        writer->WriteHeader("Content-Length", asset.size);
+        writer->EndHeaders();
+        writer->End();
+        return;
     }
-    return 200;
+
+    writer->EndHeaders("Transfer-Encoding", "chunked");
+    std::vector<char> buffer(kStaticChunk);
+    std::uint64_t offset = 0;
+    int stalled_ms = 0;
+    while (offset < asset.size) {
+        const std::size_t wanted = static_cast<std::size_t>(
+            std::min<std::uint64_t>(asset.size - offset, buffer.size()));
+        std::size_t filled = 0;
+        while (filled < wanted) {
+            const auto read = ::pread(asset.fd.get(), buffer.data() + filled,
+                                      wanted - filled, static_cast<off_t>(offset + filled));
+            if (read < 0) {
+                if (errno == EINTR) continue;
+                writer->close();
+                return;
+            }
+            if (read == 0) break; // Immutable revisions should not shrink.
+            filled += static_cast<std::size_t>(read);
+        }
+        if (filled == 0) {
+            writer->close();
+            return;
+        }
+        if (writer->WriteChunked(buffer.data(), static_cast<int>(filled)) < 0) return;
+        if (!writer->isOpened()) return;
+        offset += filled;
+        // Backpressure: keep the socket write queue bounded for slow clients.
+        while (writer->writeBufsize() > kStaticBufferHighWater) {
+            if (!writer->isOpened()) return;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            stalled_ms += 2;
+            if (stalled_ms > kStaticStallGuardMs) {
+                writer->close();
+                return;
+            }
+        }
+    }
+    writer->EndChunked();
+    writer->End();
 }
 
 void register_extension_routes(hv::HttpService& router, RouteContext& ctx) {
+    // Application assets are public (opaque-origin iframe) and streamed from
+    // the active revision. The wildcard route is deliberately separate from
+    // privileged /api/ routes; the SPA/static handler keeps the fallback and
+    // returns 404 for anything under /apps/ that this route does not match.
+    router.GET("/apps/*", [&ctx](const HttpRequestPtr& req, const HttpResponseWriterPtr& writer) {
+        serve_extension_asset_stream(ctx, req, writer, false);
+    });
+    router.HEAD("/apps/*", [&ctx](const HttpRequestPtr& req, const HttpResponseWriterPtr& writer) {
+        serve_extension_asset_stream(ctx, req, writer, true);
+    });
     router.GET("/api/extensions", [&ctx](HttpRequest* req, HttpResponse* resp) {
         return handle_list(ctx, req, resp);
     });

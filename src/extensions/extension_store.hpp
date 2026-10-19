@@ -147,6 +147,13 @@ public:
                                     const std::vector<std::string>& modules);
     Error clear_permission_grants(std::string_view app_id);
 
+    // Network origins the administrator approved for the app. Persisted
+    // separately from grants so an upgrade cannot silently expand the set;
+    // callers must mutate these inside the same transaction as grant changes.
+    Error replace_network_origins(std::string_view app_id, const std::vector<std::string>& origins);
+    Error list_network_origins(std::string_view app_id, std::vector<std::string>& out) const;
+    Error clear_network_origins(std::string_view app_id);
+
     // integrity manifests
     Error replace_integrity_entries(std::string_view revision_id,
                                     const std::vector<IntegrityEntry>& entries);

@@ -3,9 +3,12 @@
 #include "core/types.hpp"
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
+#include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <string>
 #include <unistd.h>
 
 namespace edgedesk {
@@ -49,6 +52,21 @@ std::string join_logical(std::string_view parent, std::string_view child) {
     return std::string(parent) + "/" + std::string(child);
 }
 
+std::string prefix_logical(const std::vector<std::string>& components, std::size_t count) {
+    std::string out;
+    for (std::size_t i = 0; i < count && i < components.size(); ++i) {
+        out.push_back('/');
+        out += components[i];
+    }
+    return out.empty() ? "/" : out;
+}
+
+Error protected_path_denied() {
+    // Deliberately generic: do not disclose protected contents or the
+    // configured absolute host paths to an extension caller.
+    return Error::make(ErrorCode::permission_denied, "access to a platform-internal path is denied");
+}
+
 // Lexically pops ".." against already-resolved components; escaping the root
 // is an error. Used only for symlink targets discovered during the walk.
 bool strip_parent_components(std::string_view path, std::string& out, std::string& error_message) {
@@ -80,9 +98,81 @@ bool strip_parent_components(std::string_view path, std::string& out, std::strin
     return true;
 }
 
+Error enumerate_directory(int dir_fd, const std::string& prefix,
+                          std::vector<PathSandbox::TreeEntry>& out) {
+    const int duplicate = duplicate_fd(dir_fd);
+    if (duplicate < 0) return errno_to_error("cannot duplicate directory descriptor for enumeration");
+    DIR* dir = ::fdopendir(duplicate);
+    if (dir == nullptr) {
+        const int saved = errno;
+        ::close(duplicate);
+        errno = saved;
+        return errno_to_error("cannot enumerate " + (prefix.empty() ? std::string("sandbox root") : prefix));
+    }
+    const int listing_fd = ::dirfd(dir);
+    for (;;) {
+        errno = 0;
+        struct dirent* entry = ::readdir(dir);
+        if (entry == nullptr) {
+            if (errno == 0) break;
+            const int saved = errno;
+            ::closedir(dir);
+            errno = saved;
+            return errno_to_error("cannot read directory " +
+                                  (prefix.empty() ? std::string("sandbox root") : prefix));
+        }
+        const std::string name = entry->d_name;
+        if (name == "." || name == "..") continue;
+        const std::string relative = prefix.empty() ? name : prefix + "/" + name;
+        struct stat info {};
+        if (::fstatat(listing_fd, name.c_str(), &info, AT_SYMLINK_NOFOLLOW) != 0) {
+            const int saved = errno;
+            ::closedir(dir);
+            errno = saved;
+            return errno_to_error("cannot stat " + relative);
+        }
+        PathSandbox::TreeEntry node;
+        node.path = relative;
+        if (S_ISREG(info.st_mode)) {
+            node.kind = PathSandbox::NodeKind::regular_file;
+            node.size = static_cast<std::uint64_t>(info.st_size);
+        } else if (S_ISDIR(info.st_mode)) {
+            node.kind = PathSandbox::NodeKind::directory;
+        } else if (S_ISLNK(info.st_mode)) {
+            node.kind = PathSandbox::NodeKind::symlink;
+        } else {
+            node.kind = PathSandbox::NodeKind::other;
+        }
+        out.push_back(node);
+        if (node.kind != PathSandbox::NodeKind::directory) continue;
+
+        const int child = ::openat(listing_fd, name.c_str(),
+                                   O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (child < 0) {
+            const int saved = errno;
+            ::closedir(dir);
+            errno = saved;
+            return errno_to_error("cannot open directory " + relative);
+        }
+        Error error = enumerate_directory(child, relative, out);
+        ::close(child);
+        if (!error.ok()) {
+            ::closedir(dir);
+            return error;
+        }
+    }
+    if (::closedir(dir) != 0) return errno_to_error("cannot close directory listing");
+    return Error::none();
+}
+
 } // namespace
 
 std::unique_ptr<PathSandbox> PathSandbox::create(const std::string& root, bool follow_symlinks, Error& error) {
+    return create(root, follow_symlinks, Options{}, error);
+}
+
+std::unique_ptr<PathSandbox> PathSandbox::create(const std::string& root, bool follow_symlinks,
+                                                 const Options& options, Error& error) {
     const int fd = ::open(root.c_str(), O_PATH | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0) {
         error = errno_to_error("cannot open sandbox root " + root);
@@ -94,14 +184,63 @@ std::unique_ptr<PathSandbox> PathSandbox::create(const std::string& root, bool f
         error = Error::make(ErrorCode::invalid_argument, "sandbox root is not a directory: " + root);
         return nullptr;
     }
+    std::string canonical_root = root;
+    char resolved[PATH_MAX + 1];
+    if (::realpath(root.c_str(), resolved) != nullptr) {
+        canonical_root = resolved;
+    }
+    while (canonical_root.size() > 1 && canonical_root.back() == '/') canonical_root.pop_back();
+    if (canonical_root.empty()) canonical_root = "/";
     error = Error::none();
-    return std::unique_ptr<PathSandbox>(new PathSandbox(root, std::move(root_fd), follow_symlinks));
+    return std::unique_ptr<PathSandbox>(new PathSandbox(
+        root, std::move(canonical_root), std::move(root_fd), follow_symlinks,
+        ProtectedPaths::from_paths(options.protected_paths)));
 }
 
-PathSandbox::PathSandbox(std::string root, UniqueFd root_fd, bool follow_symlinks)
-    : root_(std::move(root)), root_fd_(std::move(root_fd)), follow_symlinks_(follow_symlinks) {}
+PathSandbox::PathSandbox(std::string root, std::string canonical_root, UniqueFd root_fd,
+                         bool follow_symlinks, ProtectedPaths protected_paths)
+    : root_(std::move(root)),
+      canonical_root_(std::move(canonical_root)),
+      root_fd_(std::move(root_fd)),
+      follow_symlinks_(follow_symlinks),
+      protected_(std::move(protected_paths)) {}
 
 PathSandbox::~PathSandbox() = default;
+
+std::string PathSandbox::canonical_for(std::string_view logical_path) const {
+    if (logical_path.empty() || logical_path == "/") return canonical_root_;
+    if (canonical_root_ == "/") return std::string(logical_path);
+    return canonical_root_ + std::string(logical_path);
+}
+
+Error PathSandbox::check_logical(std::string_view logical_path) const {
+    if (protected_.empty()) return Error::none();
+    const std::string candidate = canonical_for(logical_path);
+    if (protected_.blocks_canonical(candidate)) return protected_path_denied();
+    return Error::none();
+}
+
+Error PathSandbox::check_fd(int fd, std::string_view logical_path) const {
+    if (protected_.empty()) return Error::none();
+    Error canonical = check_logical(logical_path);
+    if (!canonical.ok()) return canonical;
+    struct stat info {};
+    if (::fstat(fd, &info) != 0) return errno_to_error("cannot stat resolved path");
+    if (protected_.blocks_identity(info.st_dev, info.st_ino)) return protected_path_denied();
+    return Error::none();
+}
+
+Error PathSandbox::check_entry(int dir_fd, std::string_view name, std::string_view logical_path) const {
+    if (protected_.empty()) return Error::none();
+    Error canonical = check_logical(logical_path);
+    if (!canonical.ok()) return canonical;
+    struct stat info {};
+    if (::fstatat(dir_fd, std::string(name).c_str(), &info, AT_SYMLINK_NOFOLLOW) == 0 &&
+        protected_.blocks_identity(info.st_dev, info.st_ino)) {
+        return protected_path_denied();
+    }
+    return Error::none();
+}
 
 bool PathSandbox::normalize(std::string_view path, std::string& out, std::string& error_message) {
     if (path.empty() || path.front() != '/') {
@@ -150,11 +289,16 @@ Error PathSandbox::open_root(UniqueFd& out_fd) const {
     const int fd = duplicate_fd(root_fd_.get());
     if (fd < 0) return errno_to_error("cannot duplicate sandbox root fd");
     out_fd.reset(fd);
+    Error check = check_fd(out_fd.get(), "/");
+    if (!check.ok()) {
+        out_fd.reset();
+        return check;
+    }
     return Error::none();
 }
 
 Error PathSandbox::walk(const std::string& normalized, int depth, UniqueFd& out_dir,
-                        std::string& out_name) const {
+                        std::string& out_name, std::string* out_resolved) const {
     if (depth > kMaxLinkDepth) {
         return Error::make(ErrorCode::permission_denied, "too many symbolic links (possible loop)");
     }
@@ -174,6 +318,7 @@ Error PathSandbox::walk(const std::string& normalized, int depth, UniqueFd& out_
     if (components.empty()) {
         out_name = ".";
         out_dir = std::move(current);
+        if (out_resolved != nullptr) *out_resolved = "/";
         return Error::none();
     }
 
@@ -191,11 +336,7 @@ Error PathSandbox::walk(const std::string& normalized, int depth, UniqueFd& out_
                         return Error::make(ErrorCode::permission_denied,
                                            "symbolic links are not allowed: " + component);
                     }
-                    std::string prefix = "/";
-                    for (std::size_t j = 0; j < i; ++j) {
-                        if (prefix.size() > 1) prefix.push_back('/');
-                        prefix += components[j];
-                    }
+                    const std::string prefix = prefix_logical(components, i);
                     std::string target;
                     if (!resolve_link_target(join_logical(prefix, component), target, depth).ok()) {
                         return Error::make(ErrorCode::permission_denied, "cannot resolve symlink: " + component);
@@ -208,7 +349,7 @@ Error PathSandbox::walk(const std::string& normalized, int depth, UniqueFd& out_
                     if (!strip_parent_components(remainder, normalized_remainder, target)) {
                         return Error::make(ErrorCode::permission_denied, "symlink target escapes the sandbox root");
                     }
-                    return walk(normalized_remainder, depth + 1, out_dir, out_name);
+                    return walk(normalized_remainder, depth + 1, out_dir, out_name, out_resolved);
                 }
             }
             if (errno == ENOENT) {
@@ -226,11 +367,7 @@ Error PathSandbox::walk(const std::string& normalized, int depth, UniqueFd& out_
                 return Error::make(ErrorCode::permission_denied,
                                    "symbolic links are not allowed: " + component);
             }
-            std::string prefix = "/";
-            for (std::size_t j = 0; j < i; ++j) {
-                if (prefix.size() > 1) prefix.push_back('/');
-                prefix += components[j];
-            }
+            const std::string prefix = prefix_logical(components, i);
             std::string target;
             if (!resolve_link_target(join_logical(prefix, component), target, depth).ok()) {
                 return Error::make(ErrorCode::permission_denied, "cannot resolve symlink: " + component);
@@ -244,12 +381,16 @@ Error PathSandbox::walk(const std::string& normalized, int depth, UniqueFd& out_
             if (!strip_parent_components(remainder, normalized_remainder, message)) {
                 return Error::make(ErrorCode::permission_denied, "symlink target escapes the sandbox root");
             }
-            return walk(normalized_remainder, depth + 1, out_dir, out_name);
+            return walk(normalized_remainder, depth + 1, out_dir, out_name, out_resolved);
         }
+        const std::string resolved_prefix = prefix_logical(components, i + 1);
+        Error check = check_fd(current.get(), resolved_prefix);
+        if (!check.ok()) return check;
     }
 
     out_name = components.back();
     out_dir = std::move(current);
+    if (out_resolved != nullptr) *out_resolved = normalized;
     return Error::none();
 }
 
@@ -296,7 +437,10 @@ Error PathSandbox::open_parent(std::string_view path, UniqueFd& out_dir, std::st
     if (!normalize(path, normalized, message)) {
         return Error::make(ErrorCode::invalid_argument, message);
     }
-    return walk(normalized, 0, out_dir, out_name);
+    std::string resolved;
+    Error error = walk(normalized, 0, out_dir, out_name, &resolved);
+    if (!error.ok()) return error;
+    return check_entry(out_dir.get(), out_name, resolved);
 }
 
 Error PathSandbox::open_dir(std::string_view path, UniqueFd& out_fd) const {
@@ -310,7 +454,10 @@ Error PathSandbox::open_dir(std::string_view path, UniqueFd& out_fd) const {
         // it; O_PATH descriptors cannot be used with fdopendir().
         const int fd = ::openat(root_fd_.get(), ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         if (fd < 0) return errno_to_error("cannot open sandbox root");
-        out_fd.reset(fd);
+        UniqueFd opened(fd);
+        Error check = check_fd(opened.get(), "/");
+        if (!check.ok()) return check;
+        out_fd = std::move(opened);
         return Error::none();
     }
     return open_file_depth(normalized, O_RDONLY | O_DIRECTORY, out_fd, 0, 0);
@@ -328,7 +475,13 @@ Error PathSandbox::open_file_depth(std::string_view path, int flags, UniqueFd& o
     }
     UniqueFd dir;
     std::string name;
-    Error error = walk(normalized, depth, dir, name);
+    std::string resolved;
+    Error error = walk(normalized, depth, dir, name, &resolved);
+    if (!error.ok()) return error;
+    // Check the final entry before openat so O_CREAT/O_TRUNC cannot mutate a
+    // protected target (including a hard-link alias). The post-open identity
+    // check below closes the remaining swap window as far as possible.
+    error = check_entry(dir.get(), name, resolved);
     if (!error.ok()) return error;
 
     // O_NOFOLLOW is always applied; when symlink following is enabled the link
@@ -352,7 +505,10 @@ Error PathSandbox::open_file_depth(std::string_view path, int flags, UniqueFd& o
         }
         return errno_to_error("cannot open " + normalized);
     }
-    out_fd.reset(fd);
+    UniqueFd opened(fd);
+    Error check = check_fd(opened.get(), resolved);
+    if (!check.ok()) return check;
+    out_fd = std::move(opened);
     return Error::none();
 }
 
@@ -367,6 +523,8 @@ Error PathSandbox::stat(std::string_view path, struct stat& out) const {
         return Error::make(ErrorCode::invalid_argument, message);
     }
     if (normalized == "/") {
+        Error check = check_fd(root_fd_.get(), "/");
+        if (!check.ok()) return check;
         if (::fstat(root_fd_.get(), &out) != 0) return errno_to_error("cannot stat sandbox root");
         return Error::none();
     }
@@ -377,7 +535,16 @@ Error PathSandbox::stat(std::string_view path, struct stat& out) const {
     if (::fstatat(dir.get(), name.c_str(), &out, AT_SYMLINK_NOFOLLOW) != 0) {
         return errno_to_error("cannot stat " + normalized);
     }
+    if (protected_.blocks_identity(out.st_dev, out.st_ino)) return protected_path_denied();
     return Error::none();
+}
+
+Error PathSandbox::enumerate_tree(std::vector<TreeEntry>& out) const {
+    out.clear();
+    const int fd = ::openat(root_fd_.get(), ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0) return errno_to_error("cannot open sandbox root for enumeration");
+    UniqueFd root(fd);
+    return enumerate_directory(root.get(), "", out);
 }
 
 } // namespace edgedesk

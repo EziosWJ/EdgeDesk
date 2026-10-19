@@ -13,7 +13,7 @@
 namespace edgedesk::extensions {
 namespace {
 
-constexpr int kSchemaVersion = 1;
+constexpr int kSchemaVersion = 2;
 
 class Stmt {
 public:
@@ -273,6 +273,12 @@ CREATE TABLE IF NOT EXISTS permission_grants (
     module TEXT NOT NULL,
     granted_at INTEGER NOT NULL,
     PRIMARY KEY(app_id, module),
+    FOREIGN KEY(app_id) REFERENCES apps(app_id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS network_origins (
+    app_id TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    PRIMARY KEY(app_id, origin),
     FOREIGN KEY(app_id) REFERENCES apps(app_id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS integrity_entries (
@@ -689,6 +695,49 @@ Error ExtensionStore::replace_permission_grants(std::string_view app_id,
 
 Error ExtensionStore::clear_permission_grants(std::string_view app_id) {
     return replace_permission_grants(app_id, {});
+}
+
+Error ExtensionStore::replace_network_origins(std::string_view app_id,
+                                              const std::vector<std::string>& origins) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Error error;
+    {
+        Stmt stmt(db_, "DELETE FROM network_origins WHERE app_id=?", error);
+        if (!stmt.ok()) return error;
+        stmt.text(1, app_id);
+        Error step_error = step_result(db_, stmt.step(), "clear network origins");
+        if (!step_error.ok()) return step_error;
+    }
+    for (const auto& origin : origins) {
+        Stmt stmt(db_, "INSERT OR IGNORE INTO network_origins(app_id, origin) VALUES(?,?)", error);
+        if (!stmt.ok()) return error;
+        stmt.text(1, app_id);
+        stmt.text(2, origin);
+        Error step_error = step_result(db_, stmt.step(), "insert network origin");
+        if (!step_error.ok()) return step_error;
+    }
+    return Error::none();
+}
+
+Error ExtensionStore::list_network_origins(std::string_view app_id,
+                                           std::vector<std::string>& out) const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    out.clear();
+    Error error;
+    Stmt stmt(db_, "SELECT origin FROM network_origins WHERE app_id=? ORDER BY origin", error);
+    if (!stmt.ok()) return error;
+    stmt.text(1, app_id);
+    for (;;) {
+        const int result = stmt.step();
+        if (result == SQLITE_DONE) break;
+        if (result != SQLITE_ROW) return step_result(db_, result, "read network origins");
+        out.push_back(column_text(stmt.get(), 0));
+    }
+    return Error::none();
+}
+
+Error ExtensionStore::clear_network_origins(std::string_view app_id) {
+    return replace_network_origins(app_id, {});
 }
 
 Error ExtensionStore::insert_integrity_locked(const std::vector<IntegrityEntry>& entries,
