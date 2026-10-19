@@ -147,10 +147,13 @@ def main():
 
     app_id = "io.example.integration"
     revision_dir = os.path.join(args.apps_root, "revisions", app_id)
+    # Deterministic 2 MiB asset: large enough to exercise the streaming route.
+    large_asset = bytes(range(256)) * 8192
     with tempfile.TemporaryDirectory(prefix="edgedesk-ext-it-") as temp:
         v1 = os.path.join(temp, "v1.zip")
         make_zip(v1, manifest_for(app_id, "1.0.0", origins=["https://*.example.com"]),
-                 "<h1>integration v1</h1>", "console.log('v1')")
+                 "<h1>integration v1</h1>", "console.log('v1')",
+                 extra={"assets/large.bin": large_asset})
 
         status, payload, _ = install(cookie, v1)
         body = json_body(payload)
@@ -180,6 +183,25 @@ def main():
         check("object-src 'none'" in csp, "CSP object-src missing")
         status, _, _ = request("GET", f"/apps/{app_id}/1.0.0/{rev1}/missing.js")
         check(status == 404, "missing asset with extension must not SPA-fallback")
+        status, _, _ = request("GET", "/apps")
+        check(status == 404, "bare /apps must not SPA-fallback")
+        status, _, _ = request("GET", "/apps/")
+        check(status == 404, "bare /apps/ must not SPA-fallback")
+
+        # Large asset: streamed body, HEAD without a body, and ETag 304.
+        asset_url = f"/apps/{app_id}/1.0.0/{rev1}/assets/large.bin"
+        status, payload, headers = request("GET", asset_url)
+        check(status == 200 and payload == large_asset,
+              f"streamed static asset mismatch: {status} {len(payload)} bytes")
+        large_etag = headers.get("ETag", "")
+        check(large_etag.startswith('"'), f"large asset ETag missing: {large_etag!r}")
+        status, payload, headers = request("HEAD", asset_url)
+        check(status == 200 and payload == b"",
+              f"HEAD static asset returned a body: {status} {len(payload)} bytes")
+        check(headers.get("Content-Length") == str(len(large_asset)),
+              f"HEAD Content-Length mismatch: {headers.get('Content-Length')!r}")
+        status, payload, _ = request("GET", asset_url, headers={"If-None-Match": large_etag})
+        check(status == 304 and payload == b"", f"If-None-Match did not produce 304: {status}")
 
         status, payload, _ = request("POST", "/api/extensions/runtime/sessions",
                                      {"app_id": app_id, "instance_id": "11111111-2222-3333-4444-555555555555"},

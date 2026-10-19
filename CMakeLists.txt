@@ -225,6 +225,7 @@ if(EDGEDESK_BUILD_TESTS)
     manifest_test:extensions/manifest_test.cpp
     extension_store_test:extensions/extension_store_test.cpp
     extension_package_test:extensions/extension_package_test.cpp
+    extension_memory_test:extensions/extension_memory_test.cpp
     file_lock_test:file/file_lock_test.cpp
   )
   foreach(entry IN LISTS EDGEDESK_TEST_TARGETS)

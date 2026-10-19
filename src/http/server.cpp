@@ -49,13 +49,17 @@ int Server::run() {
     register_extension_routes(router, context_);
 
     // Extension application assets are served from immutable revision
-    // directories. They are public to the sandboxed iframe (opaque origin,
-    // no host cookies) but fully isolated from privileged API routes.
+    // directories by the async /apps/* route registered above. Anything under
+    // /apps/ that the route did not match (for example the bare prefix) stays
+    // a 404 and never falls through to the frontend SPA shell.
     router.staticHandler = [this](HttpRequest* req, HttpResponse* resp) -> int {
         if (req->method != HTTP_GET && req->method != HTTP_HEAD) return 405;
         const std::string path = req->Path();
-        if (path.rfind("/apps/", 0) == 0) {
-            return serve_extension_asset(context_, req, resp);
+        if (path == "/apps" || path.rfind("/apps/", 0) == 0) {
+            resp->status_code = static_cast<http_status>(404);
+            resp->headers["Content-Type"] = "text/plain; charset=utf-8";
+            resp->body = "not found";
+            return 404;
         }
         const bool api_path = path.rfind("/api/", 0) == 0 || path.rfind("/ws/", 0) == 0;
         auto asset = context_.web_root->read(path);

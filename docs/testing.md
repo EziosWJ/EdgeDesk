@@ -1,7 +1,7 @@
 # EdgeDesk 测试与验证矩阵
 
 > 只记录**实际执行过**的验证。未运行的环境一律标注“未验证”，不得以文档目标代替结果。
-> 复现命令附在每节末尾。V1.3 扩展平台新增 5 个原生测试、扩展集成测试、SDK CLI 测试和真实浏览器验收。
+> 复现命令附在每节末尾。V1.3 扩展平台新增 6 个原生测试、扩展集成测试、SDK CLI 测试和真实浏览器验收。
 
 ## 2026-10-18 V1.3 扩展平台实际执行记录
 
@@ -19,6 +19,27 @@
 未执行/未验证：L2 平台矩阵（`release-embed`、musl、ARM64/qemu、真实硬件）本轮未重新运行；
 该本地执行记录不包含 L2；本轮跨平台 CI 的实际结果见下方 SPEC-0008 复核记录。不得把上表当作跨平台发布验收。
 
+## 2026-10-19 #21 包安装与静态资源内存边界实际执行记录
+
+- L0：`JOBS=8 CTEST_JOBS=4 scripts/test-fast.sh --no-frontend`，**17/17 原生测试通过**
+  （新增 `extension_memory_test`），SDK CLI 4/4 通过。本轮 `web/node_modules` 不存在，
+  未运行前端单测。
+- L1：`JOBS=8 CTEST_JOBS=4 scripts/test-pr.sh --no-frontend --port 19221`，**17/17 原生 +
+  全量集成通过**（auth/api/ws/限流/恢复/扩展/崩溃恢复）。仓库无 `web/node_modules` 与
+  `web/dist`，为执行 L1 临时创建了仅含 `EdgeDesk` 标记的最小 `web/dist/index.html`
+  （无哈希资源），运行后删除、未提交；本轮未运行前端测试与 `npm run build`。
+- `extension_memory_test` 在 `fork`+`exec` 的独立子进程中读取 `/proc/self/status`
+  的 `VmHWM`，避免父进程历史峰值污染基线。实测（64 MiB stored/deflate 资产，
+  另有 manifest 与 `index.html`，每次运行数值略有波动）：
+  - 安装：baseline 5724 KiB，peak 6192 KiB，**delta 468 KiB**；完整性清单精确覆盖
+    3 个文件，`total_bytes` 等于 64 MiB + manifest + index 的实际大小。
+  - 静态服务：baseline 5844 KiB，peak 6108 KiB，**delta 264 KiB**；完整读取
+    64 MiB 资产，分块 128 KiB。两次 delta 均远低于 24 MiB 断言上限，且不随资产大小线性增长。
+  - 失败清理：`RLIMIT_FSIZE` + 忽略 `SIGXFSZ` 注入 `EFBIG`（替代不可移植的真实 ENOSPC），
+    安装失败后临时目录与修订目录为空、无挂起操作、无应用记录；`recover()` 后仍为空。
+- 未执行/未验证：真实 ENOSPC（磁盘写满）注入、L2 平台矩阵、前端单测与构建。
+  不得将本记录视为跨平台或前端验收。
+
 
 ## 2026-10-18 SPEC-0008 复核：当前跨平台 CI 阻断
 
@@ -31,8 +52,8 @@
 
 | 层级 | 入口 | 覆盖 | 何时运行 |
 | --- | --- | --- | --- |
-| L0 编辑循环 | `scripts/test-fast.sh` | `host-offline-tests` 构建 + 16 项原生单测 + 前端单测（`web/node_modules` 存在时；V1.3 为 144 项）+ SDK/CLI 测试（Node 存在时） | 每次改动 |
-| L1 任务/PR | `scripts/test-pr.sh` | `dev-disk` 构建 + 16 项原生单测 + 全量集成（含扩展平台）+ 前端 `npm test` / `npm run build` | 提交前 |
+| L0 编辑循环 | `scripts/test-fast.sh` | `host-offline-tests` 构建 + 17 项原生单测 + 前端单测（`web/node_modules` 存在时；V1.3 为 144 项）+ SDK/CLI 测试（Node 存在时） | 每次改动 |
+| L1 任务/PR | `scripts/test-pr.sh` | `dev-disk` 构建 + 17 项原生单测 + 全量集成（含扩展平台）+ 前端 `npm test` / `npm run build` | 提交前 |
 | L2 全矩阵 | 见下方“构建与平台矩阵” | `release-embed`、`release-embed-arm64`、`release-disk`、x86_64-musl、arm64-disk、arm64-musl、CI | main/nightly/release；当前 CI 对 PR 也执行全矩阵 |
 
 ```bash
@@ -82,6 +103,7 @@ scripts/test-pr.sh
 | `manifest_test` | 核心字段、权限、来源通配符/CSP、窗口边界、宿主不兼容、保留运行时不执行、非法 ID/版本/来源/图标 | GCC 13.3 host | 通过 |
 | `extension_store_test` | SQLite 0700/0600、应用/修订/权限/完整性、操作日志、KV 键限/5 MiB 配额/回滚事务/分页、重启持久化 | GCC 13.3 host | 通过 |
 | `extension_package_test` | ZIP 安装、审批/静态资源/SPA、同版本覆盖、升级/降级、完整性隔离与修复、路径穿越/符号链接/重复名/本地头不一致、卸载保留/恢复/删除、修订保留与固定、启动孤儿清理 | GCC 13.3 host | 通过 |
+| `extension_memory_test` | 64 MiB 资产安装/静态服务峰值 `VmHWM` 增量（子进程隔离）、完整性精确集合、`RLIMIT_FSIZE`/`EFBIG` 中断清理、无挂起操作与应用记录 | GCC 13.3 host | 通过（安装 delta 468 KiB、静态 delta 264 KiB） |
 | `file_lock_test` | 共享/独占、硬链接别名、缺失目标父目录身份、多锁原子性、FileService 读写锁、Upload 移动锁转移 | GCC 13.3 host | 通过 |
 | `extension_test.py`（L1） | 安装/审批/静态 CSP、运行会话、KV 配额/回滚、目录游标、锁冲突、1 MiB 分块上传/下载 SHA-256、终端创建/关闭、禁用即时失效、升级/同版本覆盖/降级、完整性隔离、修复、卸载保留/恢复/删除、审计事件 | dev-disk + 真实 PTY/文件系统 | 通过 |
 | SDK CLI 测试 | manifest/资源/相对路径/符号链接/重复路径校验、ZIP 打包与检查 | Node 24.14 | 通过 |

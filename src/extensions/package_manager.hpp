@@ -1,9 +1,11 @@
 #pragma once
 
 #include "core/error.hpp"
+#include "core/fd.hpp"
 #include "extensions/extension_store.hpp"
 #include "extensions/manifest.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -52,6 +54,17 @@ struct StaticAsset {
     bool immutable = true;
 };
 
+// Bounded-memory view of a registered static asset. The file stays open for
+// the caller to stream; no content is read into memory here.
+struct StaticAssetHandle {
+    UniqueFd fd;
+    std::uint64_t size = 0;
+    std::string mime;
+    std::string etag;
+    std::string csp;
+    bool immutable = true;
+};
+
 class PackageManager {
 public:
     static std::unique_ptr<PackageManager> create(const std::string& root, Error& error);
@@ -93,6 +106,12 @@ public:
     // empty or a normalized relative path.
     Error read_static(std::string_view app_id, std::string_view version, std::string_view revision_id,
                       std::string_view relative, StaticAsset& asset) const;
+
+    // Resolves a registered active-revision asset and opens it through the
+    // revision PathSandbox. Used by the HTTP layer to stream without buffering
+    // the whole file. All path and revision checks live here.
+    Error open_static(std::string_view app_id, std::string_view version, std::string_view revision_id,
+                      std::string_view relative, StaticAssetHandle& asset) const;
 
     // Resolves a revision directory for transfer/audit code. appId and
     // revisionId must be known and belong together.
