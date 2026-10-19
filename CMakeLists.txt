@@ -238,6 +238,13 @@ if(EDGEDESK_BUILD_TESTS)
     target_compile_features(${test_name} PRIVATE cxx_std_17)
     target_compile_options(${test_name} PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME ${test_name} COMMAND ${test_name})
+    # extension_memory_test re-execs itself in a forked child. Under
+    # cross-compilation that child needs the same emulator as the test itself.
+    if(test_name STREQUAL "extension_memory_test" AND CMAKE_CROSSCOMPILING_EMULATOR)
+      string(REPLACE ";" " " edgedesk_test_exec_prefix "${CMAKE_CROSSCOMPILING_EMULATOR}")
+      set_tests_properties(${test_name} PROPERTIES
+        ENVIRONMENT "EDGEDESK_TEST_EXEC_PREFIX=${edgedesk_test_exec_prefix}")
+    endif()
   endforeach()
   add_test(NAME embed_generator_test
     COMMAND ${Python3_EXECUTABLE} -m unittest discover -s "${CMAKE_SOURCE_DIR}/tools/tests" -p "test_*.py")

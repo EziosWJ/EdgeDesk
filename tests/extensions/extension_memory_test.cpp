@@ -278,6 +278,34 @@ struct ChildResult {
     std::string output;
 };
 
+// argv[0] of the test process. Under qemu-user /proc/self/exe resolves to the
+// host emulator, so re-exec must name the guest binary explicitly.
+std::string self_executable_path;
+
+// Cross-compiled builds run this test through CMAKE_CROSSCOMPILING_EMULATOR.
+// The emulator only wraps the top-level process, so a bare exec of
+// /proc/self/exe fails (ENOEXEC/127) on ARM64 hosts without binfmt. CMake
+// passes the emulator command in EDGEDESK_TEST_EXEC_PREFIX; when unset the
+// child is executed directly as on a native host.
+std::vector<std::string> child_exec_prefix() {
+    std::vector<std::string> tokens;
+    const char* raw = std::getenv("EDGEDESK_TEST_EXEC_PREFIX");
+    if (raw == nullptr) return tokens;
+    std::string token;
+    for (const char* cursor = raw; *cursor != '\0'; ++cursor) {
+        if (*cursor == ' ') {
+            if (!token.empty()) {
+                tokens.push_back(token);
+                token.clear();
+            }
+        } else {
+            token.push_back(*cursor);
+        }
+    }
+    if (!token.empty()) tokens.push_back(token);
+    return tokens;
+}
+
 ChildResult run_child(const std::vector<std::string>& arguments) {
     ChildResult result;
     int pipe_fds[2] = {-1, -1};
@@ -292,12 +320,17 @@ ChildResult run_child(const std::vector<std::string>& arguments) {
         ::close(pipe_fds[0]);
         if (::dup2(pipe_fds[1], STDOUT_FILENO) < 0) _exit(127);
         ::close(pipe_fds[1]);
+        std::vector<std::string> child_arguments = child_exec_prefix();
+        child_arguments.push_back(self_executable_path.empty() ? "/proc/self/exe"
+                                                               : self_executable_path);
+        child_arguments.insert(child_arguments.end(), arguments.begin(), arguments.end());
         std::vector<char*> argv;
-        argv.reserve(arguments.size() + 2);
-        argv.push_back(const_cast<char*>("/proc/self/exe"));
-        for (const auto& argument : arguments) argv.push_back(const_cast<char*>(argument.c_str()));
+        argv.reserve(child_arguments.size() + 1);
+        for (const auto& argument : child_arguments) {
+            argv.push_back(const_cast<char*>(argument.c_str()));
+        }
         argv.push_back(nullptr);
-        ::execv("/proc/self/exe", argv.data());
+        ::execv(argv.front(), argv.data());
         _exit(127);
     }
     ::close(pipe_fds[1]);
@@ -527,6 +560,11 @@ int run_parent() {
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc > 0 && argv[0] != nullptr) {
+        std::error_code ec;
+        const auto absolute = std::filesystem::absolute(argv[0], ec);
+        if (!ec) self_executable_path = absolute.string();
+    }
     if (argc >= 2) {
         const std::string mode = argv[1];
         if (mode == "--install-child" && argc >= 4) return install_child(argv[2], argv[3]);
