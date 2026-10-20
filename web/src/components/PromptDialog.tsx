@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 type Props = {
   title: string;
@@ -18,7 +19,7 @@ export function PromptDialog({ title, label, initial = '', confirmText = '确定
     inputRef.current?.select();
   }, []);
 
-  return (
+  return createPortal(
     <div className="ed-modal-backdrop" onPointerDown={onCancel}>
       <form
         className="ed-modal ed-panel"
@@ -46,6 +47,7 @@ export function PromptDialog({ title, label, initial = '', confirmText = '确定
           </button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body,
   );
 }

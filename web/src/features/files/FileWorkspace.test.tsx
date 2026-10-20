@@ -272,7 +272,7 @@ describe('FileWorkspace', () => {
     expect(container.querySelector('.ed-selection-count')?.textContent).toContain('已选 2 项');
 
     act(() => buttonByText('删除').click());
-    const dialog = container.querySelector('[role="alertdialog"]')!;
+    const dialog = document.querySelector('[role="alertdialog"]')!;
     expect(dialog.textContent).toContain('/README.md');
     expect(dialog.textContent).toContain('/.env');
 
@@ -292,7 +292,7 @@ describe('FileWorkspace', () => {
     mock.failNextDelete('mock delete failure');
 
     act(() => buttonByText('删除').click());
-    act(() => container.querySelector<HTMLElement>('[role="alertdialog"] .ed-modal-actions .danger')!.click());
+    act(() => document.querySelector<HTMLElement>('[role="alertdialog"] .ed-modal-actions .danger')!.click());
     await flush();
 
     expect(container.textContent).toContain('mock delete failure');
@@ -346,7 +346,7 @@ describe('FileWorkspace', () => {
     });
     await flush();
 
-    let dialog = container.querySelector<HTMLElement>('[role="alertdialog"]')!;
+    let dialog = document.querySelector<HTMLElement>('[role="alertdialog"]')!;
     expect(dialog.textContent).toContain('上传 2 个文件到 /');
     expect(dialog.textContent).toContain('notes.txt');
     expect(dialog.textContent).toContain('README.md');
@@ -357,12 +357,12 @@ describe('FileWorkspace', () => {
     act(() => dialog.querySelectorAll<HTMLButtonElement>('.ed-modal-actions button')[0].click());
     await flush();
     expect(uploads).toHaveLength(0);
-    expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
 
     // Dropping again and confirming uploads every file to the current directory.
     act(() => section.dispatchEvent(dropEvent('drop', transfer)));
     await flush();
-    dialog = container.querySelector<HTMLElement>('[role="alertdialog"]')!;
+    dialog = document.querySelector<HTMLElement>('[role="alertdialog"]')!;
     act(() => dialog.querySelector<HTMLElement>('.ed-modal-actions .primary')!.click());
     await flush();
     expect(uploads.map((item) => item.name)).toEqual(['notes.txt', 'README.md']);
@@ -428,9 +428,9 @@ describe('FileWorkspace', () => {
     const treeRequestsBefore = listingCalls(mock).filter((call) => call.dirsOnly).length;
 
     act(() => buttonByText('新建文件夹').click());
-    const input = container.querySelector<HTMLInputElement>('.ed-modal input')!;
+    const input = document.querySelector<HTMLInputElement>('.ed-modal input')!;
     typeInto(input, 'newdir');
-    const form = container.querySelector<HTMLFormElement>('.ed-modal')!;
+    const form = document.querySelector<HTMLFormElement>('.ed-modal')!;
     act(() => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
     await flush();
 

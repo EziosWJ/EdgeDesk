@@ -122,9 +122,9 @@ describe('ExtensionManagerView drag-drop upload', () => {
     act(() => {
       view.dispatchEvent(dragEvent('drop', { types: ['Files'], files: [file] }));
     });
-    const dialog = container.querySelector('[role="alertdialog"]');
+    const dialog = document.querySelector('[role="alertdialog"]');
     expect(dialog?.getAttribute('aria-label')).toBe('升级 测试应用？');
-    expect(container.textContent).toContain('app.zip');
+    expect(dialog!.textContent).toContain('app.zip');
 
     const confirm = [...dialog!.querySelectorAll('button')].find(
       (button) => button.textContent === '上传升级包',
@@ -136,7 +136,7 @@ describe('ExtensionManagerView drag-drop upload', () => {
     });
     const upgrade = calls.find((call) => call.url === `/api/extensions/${APP.app_id}/upgrade`);
     expect(upgrade?.init?.method).toBe('PUT');
-    expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
   });
 
   it('installs as a new app when nothing is selected', async () => {
@@ -145,7 +145,7 @@ describe('ExtensionManagerView drag-drop upload', () => {
     act(() => {
       view.dispatchEvent(dragEvent('drop', { types: ['Files'], files: [file] }));
     });
-    const dialog = container.querySelector('[role="alertdialog"]');
+    const dialog = document.querySelector('[role="alertdialog"]');
     expect(dialog?.getAttribute('aria-label')).toBe('安装扩展应用？');
 
     const confirm = [...dialog!.querySelectorAll('button')].find(
@@ -165,7 +165,7 @@ describe('ExtensionManagerView drag-drop upload', () => {
     act(() => {
       view.dispatchEvent(dragEvent('drop', { types: ['Files'], files: [file] }));
     });
-    expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('仅支持上传 ZIP 安装包');
     expect(calls.some((call) => call.url.includes('install') || call.url.includes('upgrade'))).toBe(false);
   });

@@ -175,7 +175,7 @@ describe('ProcessesView', () => {
     await renderAndLoad();
 
     act(() => buttonByText(container, '停止')!.click());
-    const dialog = container.querySelector('[role="alertdialog"]');
+    const dialog = document.querySelector('[role="alertdialog"]');
     expect(dialog?.textContent).toContain('SIGTERM');
     await act(async () => {
       buttonByText(dialog!, '停止服务')!.click();
@@ -191,7 +191,7 @@ describe('ProcessesView', () => {
     await renderAndLoad();
 
     act(() => buttonByText(container, '新建服务')!.click());
-    const dialog = container.querySelector('[role="dialog"][aria-label="创建服务"]')!;
+    const dialog = document.querySelector('[role="dialog"][aria-label="创建服务"]')!;
     const inputs = dialog.querySelectorAll<HTMLInputElement>('input');
     act(() => {
       setValue(inputs[0], 'created-service');

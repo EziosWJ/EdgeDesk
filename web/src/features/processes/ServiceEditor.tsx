@@ -1,4 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle } from 'lucide-react';
 import { Icon } from '../../components/Icon';
 import type { RestartPolicy, ServicePayload, SupervisedService } from '../../types';
@@ -157,7 +158,7 @@ export function ServiceEditor({ initial, busy, onSave, onCancel }: Props) {
     }
   };
 
-  return (
+  return createPortal(
     <div className="ed-modal-backdrop" onPointerDown={busy ? undefined : onCancel}>
       <form
         className="ed-panel ed-proc-editor"
@@ -178,192 +179,194 @@ export function ServiceEditor({ initial, busy, onSave, onCancel }: Props) {
           </button>
         </header>
 
-        {error && (
-          <div className="ed-alert danger" role="alert">
-            <Icon icon={AlertTriangle} size={15} />
-            <span>{error}</span>
-          </div>
-        )}
-
-        <section className="ed-proc-form-section">
-          <h3>基本信息</h3>
-          <label>
-            服务名称
-            <input
-              value={form.name}
-              onChange={(event) => set('name', event.target.value)}
-              placeholder="例如 mihomo"
-              maxLength={128}
-              required
-            />
-          </label>
-          <label>
-            可执行文件（绝对路径）
-            <input
-              value={form.executable}
-              onChange={(event) => set('executable', event.target.value)}
-              placeholder="/usr/local/bin/mihomo"
-              spellCheck={false}
-              required
-            />
-          </label>
-          <label>
-            工作目录
-            <input
-              value={form.cwd}
-              onChange={(event) => set('cwd', event.target.value)}
-              placeholder="/"
-              spellCheck={false}
-              required
-            />
-          </label>
-          <label>
-            参数（每行一个；中间空行表示空字符串参数，末尾换行忽略）
-            <textarea
-              value={form.args}
-              onChange={(event) => set('args', event.target.value)}
-              rows={4}
-              spellCheck={false}
-              placeholder={'-c\n/etc/mihomo/config.yaml'}
-            />
-          </label>
-          <label>
-            环境变量（每行 KEY=VALUE；只传入这里声明的变量和受控基础环境）
-            <textarea
-              value={form.env}
-              onChange={(event) => set('env', event.target.value)}
-              rows={3}
-              spellCheck={false}
-              placeholder="LOG_LEVEL=info"
-            />
-          </label>
-        </section>
-
-        <section className="ed-proc-form-section">
-          <h3>运行身份</h3>
-          <div className="ed-proc-form-grid">
-            <label>
-              运行用户
-              <input
-                value={form.run_user}
-                onChange={(event) => set('run_user', event.target.value)}
-                placeholder="edgedesk-service"
-                autoComplete="off"
-                required
-              />
-            </label>
-            <label>
-              运行用户组
-              <input
-                value={form.run_group}
-                onChange={(event) => set('run_group', event.target.value)}
-                placeholder="edgedesk-service"
-                autoComplete="off"
-                required
-              />
-            </label>
-          </div>
-          {rootIdentity && (
-            <div className="ed-proc-root-warning">
+        <div className="ed-proc-editor-body">
+          {error && (
+            <div className="ed-alert danger" role="alert">
               <Icon icon={AlertTriangle} size={15} />
-              <div>
-                <strong>该服务将以 root 身份运行</strong>
-                <p>托管进程将拥有完整系统权限。仅在你信任该可执行文件和参数时继续。</p>
-                <label className="ed-proc-check">
-                  <input
-                    type="checkbox"
-                    checked={form.allow_root}
-                    onChange={(event) => set('allow_root', event.target.checked)}
-                  />
-                  我确认该服务以 root 身份运行
-                </label>
-              </div>
+              <span>{error}</span>
             </div>
           )}
-        </section>
 
-        <section className="ed-proc-form-section">
-          <h3>启动与恢复</h3>
-          <div className="ed-proc-form-grid">
+          <section className="ed-proc-form-section">
+            <h3>基本信息</h3>
             <label>
-              重启策略
-              <select
-                value={form.restart_policy}
-                onChange={(event) => set('restart_policy', event.target.value as RestartPolicy)}
-              >
-                <option value="on-failure">on-failure：异常退出后重启</option>
-                <option value="always">always：任何退出后重启</option>
-                <option value="never">never：不自动重启</option>
-              </select>
-            </label>
-            <label className="ed-proc-check standalone">
+              服务名称
               <input
-                type="checkbox"
-                checked={form.autostart}
-                onChange={(event) => set('autostart', event.target.checked)}
-              />
-              系统启动时自动启动
-            </label>
-          </div>
-          <div className="ed-proc-form-grid three">
-            <label>
-              最大重启次数
-              <input
-                value={form.max_restarts}
-                onChange={(event) => set('max_restarts', event.target.value)}
-                inputMode="numeric"
+                value={form.name}
+                onChange={(event) => set('name', event.target.value)}
+                placeholder="例如 mihomo"
+                maxLength={128}
+                required
               />
             </label>
             <label>
-              统计窗口（秒）
+              可执行文件（绝对路径）
               <input
-                value={form.restart_window_sec}
-                onChange={(event) => set('restart_window_sec', event.target.value)}
-                inputMode="numeric"
+                value={form.executable}
+                onChange={(event) => set('executable', event.target.value)}
+                placeholder="/usr/local/bin/mihomo"
+                spellCheck={false}
+                required
               />
             </label>
             <label>
-              稳定重置（秒）
+              工作目录
               <input
-                value={form.stable_after_sec}
-                onChange={(event) => set('stable_after_sec', event.target.value)}
-                inputMode="numeric"
+                value={form.cwd}
+                onChange={(event) => set('cwd', event.target.value)}
+                placeholder="/"
+                spellCheck={false}
+                required
               />
             </label>
             <label>
-              初始延迟（毫秒）
-              <input
-                value={form.restart_delay_ms}
-                onChange={(event) => set('restart_delay_ms', event.target.value)}
-                inputMode="numeric"
+              参数（每行一个；中间空行表示空字符串参数，末尾换行忽略）
+              <textarea
+                value={form.args}
+                onChange={(event) => set('args', event.target.value)}
+                rows={4}
+                spellCheck={false}
+                placeholder={'-c\n/etc/mihomo/config.yaml'}
               />
             </label>
             <label>
-              最大延迟（毫秒）
-              <input
-                value={form.max_restart_delay_ms}
-                onChange={(event) => set('max_restart_delay_ms', event.target.value)}
-                inputMode="numeric"
+              环境变量（每行 KEY=VALUE；只传入这里声明的变量和受控基础环境）
+              <textarea
+                value={form.env}
+                onChange={(event) => set('env', event.target.value)}
+                rows={3}
+                spellCheck={false}
+                placeholder="LOG_LEVEL=info"
               />
             </label>
-            <label>
-              停止宽限（毫秒）
-              <input
-                value={form.stop_timeout_ms}
-                onChange={(event) => set('stop_timeout_ms', event.target.value)}
-                inputMode="numeric"
-              />
-            </label>
-            <label>
-              日志上限（MiB）
-              <input
-                value={form.log_max_mib}
-                onChange={(event) => set('log_max_mib', event.target.value)}
-                inputMode="numeric"
-              />
-            </label>
-          </div>
-        </section>
+          </section>
+
+          <section className="ed-proc-form-section">
+            <h3>运行身份</h3>
+            <div className="ed-proc-form-grid">
+              <label>
+                运行用户
+                <input
+                  value={form.run_user}
+                  onChange={(event) => set('run_user', event.target.value)}
+                  placeholder="edgedesk-service"
+                  autoComplete="off"
+                  required
+                />
+              </label>
+              <label>
+                运行用户组
+                <input
+                  value={form.run_group}
+                  onChange={(event) => set('run_group', event.target.value)}
+                  placeholder="edgedesk-service"
+                  autoComplete="off"
+                  required
+                />
+              </label>
+            </div>
+            {rootIdentity && (
+              <div className="ed-proc-root-warning">
+                <Icon icon={AlertTriangle} size={15} />
+                <div>
+                  <strong>该服务将以 root 身份运行</strong>
+                  <p>托管进程将拥有完整系统权限。仅在你信任该可执行文件和参数时继续。</p>
+                  <label className="ed-proc-check">
+                    <input
+                      type="checkbox"
+                      checked={form.allow_root}
+                      onChange={(event) => set('allow_root', event.target.checked)}
+                    />
+                    我确认该服务以 root 身份运行
+                  </label>
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section className="ed-proc-form-section">
+            <h3>启动与恢复</h3>
+            <div className="ed-proc-form-grid">
+              <label>
+                重启策略
+                <select
+                  value={form.restart_policy}
+                  onChange={(event) => set('restart_policy', event.target.value as RestartPolicy)}
+                >
+                  <option value="on-failure">on-failure：异常退出后重启</option>
+                  <option value="always">always：任何退出后重启</option>
+                  <option value="never">never：不自动重启</option>
+                </select>
+              </label>
+              <label className="ed-proc-check standalone">
+                <input
+                  type="checkbox"
+                  checked={form.autostart}
+                  onChange={(event) => set('autostart', event.target.checked)}
+                />
+                系统启动时自动启动
+              </label>
+            </div>
+            <div className="ed-proc-form-grid three">
+              <label>
+                最大重启次数
+                <input
+                  value={form.max_restarts}
+                  onChange={(event) => set('max_restarts', event.target.value)}
+                  inputMode="numeric"
+                />
+              </label>
+              <label>
+                统计窗口（秒）
+                <input
+                  value={form.restart_window_sec}
+                  onChange={(event) => set('restart_window_sec', event.target.value)}
+                  inputMode="numeric"
+                />
+              </label>
+              <label>
+                稳定重置（秒）
+                <input
+                  value={form.stable_after_sec}
+                  onChange={(event) => set('stable_after_sec', event.target.value)}
+                  inputMode="numeric"
+                />
+              </label>
+              <label>
+                初始延迟（毫秒）
+                <input
+                  value={form.restart_delay_ms}
+                  onChange={(event) => set('restart_delay_ms', event.target.value)}
+                  inputMode="numeric"
+                />
+              </label>
+              <label>
+                最大延迟（毫秒）
+                <input
+                  value={form.max_restart_delay_ms}
+                  onChange={(event) => set('max_restart_delay_ms', event.target.value)}
+                  inputMode="numeric"
+                />
+              </label>
+              <label>
+                停止宽限（毫秒）
+                <input
+                  value={form.stop_timeout_ms}
+                  onChange={(event) => set('stop_timeout_ms', event.target.value)}
+                  inputMode="numeric"
+                />
+              </label>
+              <label>
+                日志上限（MiB）
+                <input
+                  value={form.log_max_mib}
+                  onChange={(event) => set('log_max_mib', event.target.value)}
+                  inputMode="numeric"
+                />
+              </label>
+            </div>
+          </section>
+        </div>
 
         <footer className="ed-proc-editor-actions">
           <button type="button" className="ed-button" onClick={onCancel} disabled={busy}>
@@ -374,6 +377,7 @@ export function ServiceEditor({ initial, busy, onSave, onCancel }: Props) {
           </button>
         </footer>
       </form>
-    </div>
+    </div>,
+    document.body,
   );
 }

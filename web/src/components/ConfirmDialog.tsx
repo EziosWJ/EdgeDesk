@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 
 type Props = {
   title: string;
@@ -30,7 +31,7 @@ export function ConfirmDialog({
     confirmRef.current?.focus();
   }, []);
 
-  return (
+  return createPortal(
     <div className="ed-modal-backdrop" onPointerDown={onCancel}>
       <div
         className="ed-modal ed-panel"
@@ -63,6 +64,7 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

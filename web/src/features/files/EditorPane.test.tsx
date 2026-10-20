@@ -92,21 +92,21 @@ describe('editor window lifecycle', () => {
     });
     expect(closed).toBe(false);
     expect(windowStore.getSnapshot()).toHaveLength(1);
-    expect(container.textContent).toContain('关闭未保存的编辑器？');
+    expect(document.body.textContent).toContain('关闭未保存的编辑器？');
 
     act(() => {
-      const cancel = [...container.querySelectorAll<HTMLButtonElement>('.ed-modal button')].find(
+      const cancel = [...document.querySelectorAll<HTMLButtonElement>('.ed-modal button')].find(
         (button) => button.textContent === '继续编辑',
       )!;
       cancel.click();
     });
-    expect(container.textContent).not.toContain('关闭未保存的编辑器？');
+    expect(document.body.textContent).not.toContain('关闭未保存的编辑器？');
 
     act(() => {
       windowStore.requestClose(id);
     });
     act(() => {
-      const discard = [...container.querySelectorAll<HTMLButtonElement>('.ed-modal button')].find(
+      const discard = [...document.querySelectorAll<HTMLButtonElement>('.ed-modal button')].find(
         (button) => button.textContent === '放弃修改并关闭',
       )!;
       discard.click();
