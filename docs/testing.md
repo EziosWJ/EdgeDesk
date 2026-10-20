@@ -424,7 +424,7 @@ file out/build/arm64-disk/bin/edgedesk   # ELF 64-bit ... ARM aarch64
 | L0 原生 | `scripts/test-fast.sh` | **24/24 通过**（新增 `supervisor_types_test`、`supervisor_store_test`、`supervisor_log_store_test`、`supervisor_engine_test`、`supervisor_ipc_test`），13 s |
 | L0 前端 | 同上（`cd web && npm test`） | **27 个文件 / 153 个测试通过** |
 | SDK/CLI | 同上 | **4/4 通过** |
-| L1 全量 | `scripts/test-pr.sh` | 前端测试 + 构建、`dev-disk` 构建、24/24 ctest、完整集成套件通过，**155 s** |
+| L1 全量 | `scripts/test-pr.sh` | 前端测试 + 构建、`dev-disk` 构建、24/24 ctest、完整集成套件通过，**155 s**；快进合并到本地 `main` 后再次运行通过，**176 s** |
 | L2 host-embed | `scripts/with-gcc15.sh all host-embed` | GCC 15 构建通过，**24/24 ctest**，12.05 s |
 | L2 x86_64 musl | `EDGEDESK_TOOLCHAIN_ROOT=~/opt/musl/x86-64--musl--stable-2026.08-1 cmake --preset release-embed && cmake --build --preset release-embed && ctest --preset release-embed` | GCC 15.3、static-pie 构建通过，**24/24 ctest**；`readelf` 无 `INTERP`/`NEEDED` |
 | L2 x86_64 运行冒烟 | 以 `release-embed/bin/edgedesk-supervisor` 启动并执行 Python IPC 客户端 | `health`、create/start/stop/delete 全部成功；PID/PGID 正确，停止后进程消失 |
