@@ -9,7 +9,7 @@
   `docs/config.md`（配置项与部署）、`docs/testing.md`（验证矩阵）描述当前实现。
 - `docs/phase1.md` 是历史骨架记录；不要将其当作当前功能范围。
 - 扩展应用平台核心功能需求基线为 `docs/spec/0007-extension-applications.md`；安全与可靠性加固补充基线为 `docs/spec/0008-extension-platform-hardening.md`。配套决策为 `docs/adr/0011-extension-runtime-and-packages.md`、`docs/adr/0012-extension-security-and-communication.md`、`docs/adr/0013-extension-file-api-and-transfer.md`，风险与实施计划分别见 `docs/security/extension-app-risk-register.md`、`docs/tasks/0007-extension-applications.md`、`docs/tasks/0008-extension-platform-hardening.md`。V1.3 已实现首期静态运行时，但 SPEC-0008 中的修复必须以代码、回归测试与当前 CI 证据验收。数字签名、应用间通信、秘密存储和后端/脚本运行时仍未实现，不得宣称具备。
-- Process Supervisor 设计基线为 `docs/spec/0009-process-supervisor.md`，配套决策为 `docs/adr/0015-process-supervisor-architecture.md` 与 `docs/adr/0016-process-supervisor-security.md`，任务拆分见 `docs/tasks/0009-process-supervisor.md`。当前只有文档，Supervisor 尚未实现；开始编码前必须阅读这些文档，并如实记录测试与平台验证状态。
+- Process Supervisor 设计基线为 `docs/spec/0009-process-supervisor.md`，配套决策为 `docs/adr/0015-process-supervisor-architecture.md` 与 `docs/adr/0016-process-supervisor-security.md`，任务拆分见 `docs/tasks/0009-process-supervisor.md`。V1.0 已实现独立 `edgedesk-supervisor` 守护进程与 `/api/supervisor/*`；实际测试与未验证平台以 `docs/testing.md` 为准，未运行的身份切换、init、重启和压力项不得宣称通过。
 - React + TypeScript + Vite 与 xterm.js 已确认为前端基线（ADR-0001）；不要再讨论替换。
 
 ## 固定的技术边界
@@ -17,7 +17,7 @@
 - 后端：C++17，锁定 libhv v1.3.4，GCC 15+ Linux Release；musl 静态链接是目标，需要匹配的工具链。
 - 资源模式：Release 下使用 GCC 15 `#embed`，本地开发使用磁盘模式。切勿用大量生成的 `0xNN` C++ 数组替代。
 - 前端 Phase 1：React + TypeScript + Vite，使用 `web/public/assets` 和来自 `web/src/styles/edgedesk-tokens.css` 的 token。
-- 现有核心模块不引入数据库/ORM，设备不运行 Node.js。**SQLite 仅有明确的模块级例外：SPEC-0007 的扩展平台使用独立 SQLite 保存扩展元数据与应用 KV；SPEC-0009 规划的独立 Process Supervisor 使用自己的 SQLite 保存服务配置和生命周期管理状态。两者数据库不得共用，也不得因此迁移认证、设置、终端或指标模块。** 独立 SDK/CLI 可使用 Node.js 作为开发构建工具，但不得要求设备运行 Node.js。不要引入未获批准的第三方框架。
+- 现有核心模块不引入数据库/ORM，设备不运行 Node.js。**SQLite 仅有明确的模块级例外：SPEC-0007 的扩展平台使用独立 SQLite 保存扩展元数据与应用 KV；SPEC-0009 的独立 Process Supervisor 使用自己的 SQLite 保存服务配置和生命周期管理状态。两者数据库不得共用，也不得因此迁移认证、设置、终端或指标模块。** 独立 SDK/CLI 可使用 Node.js 作为开发构建工具，但不得要求设备运行 Node.js。不要引入未获批准的第三方框架。
 
 ## 目录归属
 
@@ -41,7 +41,9 @@
 
 已实现：`FileService`（`src/file/`）、`TerminalSessionManager`（`src/terminal/`）、
 `SystemMetrics`（`src/system/`）、认证/限流/审计与设置持久化（`src/security/`）、
-扩展平台（`src/extensions/`：安装/审批/修订、iframe 运行时、KV、文件传输与锁）。
+扩展平台（`src/extensions/`：安装/审批/修订、iframe 运行时、KV、文件传输与锁）、
+Process Supervisor（`src/supervisor/` 独立守护进程 + `src/app/supervisor_service.*`
+有界 IPC 适配 + `src/http/routes/supervisor_route.*` 与前端 `processes` 应用）。
 V1.1 认证由 `AuthStore`（auth.json/锁）、`PasswordHashService`（Argon2id
 有界 worker）和 `Auth`（密码登录/会话/Bearer）组成。路由处理器只负责适配协议
 输入/输出；不得在路由里实现路径校验、PTY 管理或指标采集。
@@ -59,7 +61,7 @@ V1.1 认证由 `AuthStore`（auth.json/锁）、`PasswordHashService`（Argon2id
 9. 扩展应用不得绕过宿主桥接直接访问特权 API；所有扩展文件操作继续通过 `FileService`/`PathSandbox`，不得用前端 `../` 字符串检查替代现有目录 FD、`openat` 和符号链接防护。
 10. 区分宿主机构建、交叉编译和真机测试；只声明实际运行过的内容。
 11. 新增依赖需要理由说明、版本锁定、许可证检查以及 ARM/musl 影响分析。
-12. SQLite 仅允许用于扩展元数据/KV（`third_party/sqlite`，公有领域，已固定版本）；不得据此迁移认证、设置、终端或指标。
+12. SQLite 仅允许用于扩展元数据/KV 与独立 Supervisor 数据库（`third_party/sqlite`，公有领域，已固定版本；两库不得共用）；不得据此迁移认证、设置、终端或指标。
 13. 扩展特权调用只能经宿主 MessagePort 桥接；不得为 sandbox iframe 开放 Origin:null 直连或把宿主 Cookie/Token 传入 iframe。
 
 ## 每个任务的完成标准
@@ -122,9 +124,9 @@ scripts/screenshot.sh http://127.0.0.1:8080/ \
 - 已登录页面用 `--storage <state.json>` 复用 Playwright storage state；`--color-scheme dark` 可验证深色。
 - 截图放 `/tmp` 或 `out/`，不得提交。headless 目视检查是补充，不替代 L0/L1。
 
-## Process Supervisor 规划约束
+## Process Supervisor 约束
 
-- 当前仅有设计文档，`edgedesk-supervisor` 尚未实现；编码前阅读 SPEC-0009、ADR-0015/0016 和任务计划。
+- `edgedesk-supervisor` 已实现 V1.0；修改前阅读 SPEC-0009、ADR-0015/0016 和任务计划，平台验证状态以 `docs/testing.md` 为准。
 - Supervisor 必须是独立进程，通过受权限保护的 Unix Domain Socket 与 EdgeDesk 后端通信；禁止增加 TCP 管理 listener。
 - 服务启动只接受可执行文件和 argv 数组，不使用 Shell 字符串执行。
 - root Supervisor 的 IPC 与服务配置属于特权安全边界；不得绕过 `SO_PEERCRED`、现有 Web 认证、CSRF 或审计。
