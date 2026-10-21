@@ -1,3 +1,7 @@
+# temp
+.claude/worktrees/
+tmp/
+
 # C++
 out/
 build/
