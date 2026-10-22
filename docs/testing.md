@@ -443,7 +443,7 @@ file out/build/arm64-disk/bin/edgedesk   # ELF 64-bit ... ARM aarch64
 | init 探测 | `deploy/install.sh --detect` | 本机输出 `init=systemd`、`pid1=systemd`、`uid=1000`、`systemd=yes` |
 | 暂存安装测试 | `ctest -R install_script_test` | **23 项断言通过**：systemd/OpenRC/BusyBox 暂存安装、配置与 unit 内容、inittab `--force` 幂等、覆盖保护、`--no-supervisor`、端口/host/路径校验、dry-run 不落盘、uninstall/`--purge`、过宽 prefix 拒绝 |
 | L0 全量 | `scripts/test-fast.sh` | **25/25 通过**（新增 `install_script_test`），31 s |
-| L1 全量 | `scripts/test-pr.sh` | 前端 **153 个测试** + 构建、`dev-disk` 构建、**25/25 ctest**、完整集成套件通过，**197 s** |
+| L1 全量 | `scripts/test-pr.sh` | 前端 **153 个测试** + 构建、`dev-disk` 构建、**25/25 ctest**、完整集成套件通过，最终提交上 **155 s** |
 | systemd 静态校验 | `systemd-analyze verify`（仅把 `ExecStart` 临时指向暂存二进制） | 生成的 `edgedesk.service` 与 `edgedesk-supervisor.service` 无告警 |
 | OpenRC/BusyBox 生成物 | `sh -n` 暂存的 init 脚本与 wrapper | 通过；`/etc/inittab` 仅生成一个受管块 |
 
