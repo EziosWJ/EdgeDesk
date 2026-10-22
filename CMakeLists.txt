@@ -328,4 +328,13 @@ if(EDGEDESK_BUILD_TESTS)
   endforeach()
   add_test(NAME embed_generator_test
     COMMAND ${Python3_EXECUTABLE} -m unittest discover -s "${CMAKE_SOURCE_DIR}/tools/tests" -p "test_*.py")
+
+  # The installer is POSIX shell; this test stages every init adapter under a
+  # temporary directory and never touches the running init system.
+  find_program(EDGEDESK_SH_EXECUTABLE sh)
+  if(EDGEDESK_SH_EXECUTABLE)
+    add_test(NAME install_script_test
+      COMMAND "${EDGEDESK_SH_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/tests/install/install_test.sh" "${CMAKE_SOURCE_DIR}")
+  endif()
 endif()

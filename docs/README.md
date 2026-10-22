@@ -19,7 +19,7 @@
 - [ADR-0015：独立 Supervisor 架构](adr/0015-process-supervisor-architecture.md)
 - [ADR-0016：权限与进程执行安全](adr/0016-process-supervisor-security.md)
 - [SPEC-0009 实施计划与执行记录](tasks/0009-process-supervisor.md)：PS-01～PS-09 已实现；PS-10 平台矩阵部分未验证。
-- [部署与 init 适配](../deploy/README.md)：systemd、OpenRC、BusyBox 文件与安装说明。
+- [部署与 init 适配](../deploy/README.md)：`deploy/install.sh` 安装器、systemd、OpenRC、BusyBox 文件与安装说明。
 
 > 代码位于 `src/supervisor/`、`src/app/supervisor_service.*`、`src/http/routes/supervisor_route.*`
 > 与 `web/src/features/processes/`。宿主 Linux 的 L0/L1 与 x86_64 musl/static-pie 构建已执行；

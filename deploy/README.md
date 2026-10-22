@@ -1,26 +1,140 @@
-# Process Supervisor deployment adapters
+# EdgeDesk deployment adapters and installer
 
-These files install the standalone `edgedesk-supervisor` daemon. The daemon
-runs in the foreground and never daemonizes itself; the init system owns its
-restart policy. Managed services are **not** registered with init — the
-Supervisor starts and stops them through its own process groups.
+`deploy/install.sh` is the supported way to install EdgeDesk on a Linux host.
+It is a POSIX `sh` script (runs under dash, bash and BusyBox ash) and performs
+only four kinds of work:
 
-The web backend connects to the Unix socket and must run as a user that is
-allowed by both the socket mode and `SO_PEERCRED`. The examples use the
-`edgedesk` group; replace it with the account that runs the web backend:
+1. detect the available service manager;
+2. collect and validate listen/path settings;
+3. install the binaries, frontend (disk builds only) and configuration;
+4. register `edgedesk` and `edgedesk-supervisor` with that init system.
+
+It never edits business data. The administrator password is still set in the
+Web UI on first login; the installer does not generate or log credentials.
+
+## Quick start
 
 ```sh
-groupadd --system edgedesk
-usermod -aG edgedesk edgedesk     # only when the backend runs as this user
+# Interactive: asks for host, port, file root and prefix (TTY only)
+sudo deploy/install.sh
+
+# Non-interactive
+sudo deploy/install.sh --host 127.0.0.1 --port 8080 \
+  --source /opt/edgedesk-dist --file-root /srv/edgedesk-files
+
+# Inspect the environment without changing anything
+deploy/install.sh --detect
+
+# Print the full plan and generated files, write nothing
+deploy/install.sh --dry-run --source out/build/release-embed/bin
+
+# Stage a package tree without touching the running system
+deploy/install.sh --destdir /tmp/edgedesk-stage \
+  --source out/build/release-embed/bin --file-root /srv
 ```
 
-Install the binary first, for example to `/usr/sbin/edgedesk-supervisor`.
-The persistent state directory `/var/lib/edgedesk-supervisor` must be on a
-writable persistent filesystem; on a read-only rootfs move `--database` and
-`--log-dir` to the writable data partition and keep the same permissions
-(0700 directories, 0600 files).
+`--source` points at the directory containing `edgedesk` and
+`edgedesk-supervisor`. When omitted, the script looks next to itself, then in
+the repository build directories. `--web-root` is only needed for disk builds;
+`release-embed` already contains the frontend.
 
-## systemd
+## Detection
+
+`--detect` prints machine-readable lines and exits:
+
+```text
+init=systemd
+pid1=systemd
+uid=0
+systemd=yes
+openrc=no
+busybox=no
+inittab=no
+```
+
+Detection checks the service manager, not only PID 1, because Alpine can run
+OpenRC with a BusyBox `init`. Order: systemd (`systemctl` + `/run/systemd/system`),
+OpenRC (`rc-update` + `rc-service`), then BusyBox (`busybox` + `/etc/inittab`).
+Override with `--init systemd|openrc|busybox|none` when running in a container
+or a non-standard image.
+
+## What gets installed
+
+| Path | Content |
+| --- | --- |
+| `/opt/edgedesk/bin/edgedesk` | Web backend |
+| `/opt/edgedesk/bin/edgedesk-supervisor` | Process supervisor (unless `--no-supervisor`) |
+| `/opt/edgedesk/web/` | Frontend, only when `--web-root` is passed |
+| `/etc/edgedesk/edgedesk.conf` | Generated `key = value` configuration, `0640 root:<service-group>` |
+| `/var/lib/edgedesk` | Persistent data, `0700 <service-user>` |
+| `/var/lib/edgedesk/apps` | Extension platform root, `0700 <service-user>` |
+| `/run/edgedesk` | Runtime state; recreated by systemd `RuntimeDirectory` or the boot wrapper |
+| `/var/lib/edgedesk-supervisor` | Supervisor SQLite and logs, `0700 root` |
+
+Init adapters:
+
+- **systemd**: `edgedesk.service` and `edgedesk-supervisor.service` under
+  `/etc/systemd/system`, both enabled and started. The web unit uses
+  `ProtectSystem=strict`, `NoNewPrivileges=yes`, `StateDirectory` and
+  `RuntimeDirectory`. The supervisor keeps `KillMode=process` and
+  `NoNewPrivileges=no` because it must switch service identities.
+- **OpenRC**: `/etc/init.d/edgedesk` and `/etc/init.d/edgedesk-supervisor`,
+  both using `supervise-daemon` (OpenRC >= 0.21), added to `default`.
+- **BusyBox init**: `edgedesk-boot` and `edgedesk-supervisor-boot` wrappers plus
+  one marked block in `/etc/inittab`; `SIGHUP` reloads init. The web wrapper
+  drops to the service account with `setpriv`, then `su`, and only falls back
+  to running as root when neither exists (with a warning on stderr).
+
+The generated configuration uses the existing `--config` file support:
+
+```ini
+host = 127.0.0.1
+port = 8080
+file-root = /srv/edgedesk-files
+data-dir = /var/lib/edgedesk
+state-dir = /run/edgedesk
+apps-root = /var/lib/edgedesk/apps
+audit-log = /var/lib/edgedesk/audit.log
+supervisor-socket = /run/edgedesk-supervisor.sock
+```
+
+## Safety rules enforced by the installer
+
+- **Loopback by default.** A non-loopback `--host` is refused unless
+  `--allow-non-loopback` is given (or confirmed interactively). The warning
+  requires TLS or a trusted VPN/gateway and `--cookie-secure` for HTTPS.
+- No credential, password or token is written by the installer.
+- Values that end up in unit files are validated first: numeric port,
+  restricted host character set, absolute paths without `..`, no whitespace,
+  quotes or `#`.
+- Existing files are not overwritten without `--force`; a `.bak` copy is kept.
+- `--dry-run` and `--destdir` do not need root and never modify the running
+  system.
+
+## Uninstall
+
+```sh
+sudo deploy/install.sh --uninstall              # keeps /var/lib/edgedesk*
+sudo deploy/install.sh --uninstall --purge      # also removes data and supervisor state
+```
+
+Uninstall stops and unregisters the detected init system, removes the binaries,
+init files and `/etc/edgedesk`, and preserves persistent data unless `--purge`
+is given. The service account is not removed automatically. `--purge` refuses
+a broad prefix such as `/`, `/usr`, `/opt` or `/var/lib`.
+
+## Manual installation
+
+The generated files are intentionally close to the checked-in reference units.
+Manual installation is still possible when the host has an unusual layout.
+
+Install the binaries first, for example to `/opt/edgedesk/bin`. The persistent
+state directory `/var/lib/edgedesk-supervisor` must be on a writable persistent
+filesystem; on a read-only rootfs move `--database` and `--log-dir` to the
+writable data partition and keep the same permissions (0700 directories, 0600
+files).
+
+### systemd
 
 ```sh
 install -m 0644 deploy/systemd/edgedesk-supervisor.service \
@@ -32,16 +146,17 @@ systemctl status edgedesk-supervisor
 
 `KillMode=process` is deliberate: `systemctl stop` sends SIGTERM to the
 Supervisor, which forwards it to each managed process group, waits for the
-per-service stop timeout, escalates to SIGKILL, and only then exits. `Restart=always`
-restarts the Supervisor after a crash. Managed processes keep running during
-that gap and are adopted on restart if their identity can be verified.
+per-service stop timeout, escalates to SIGKILL, and only then exits.
+`Restart=always` restarts the Supervisor after a crash. Managed processes keep
+running during that gap and are adopted on restart if their identity can be
+verified.
 
 Point the EdgeDesk web service at the same socket with
 `--supervisor-socket /run/edgedesk-supervisor.sock` (the default). If the web
 backend starts before the Supervisor, process-management APIs return
 `503 supervisor_unavailable`; the rest of EdgeDesk remains available.
 
-## OpenRC
+### OpenRC
 
 ```sh
 install -m 0755 deploy/openrc/edgedesk-supervisor \
@@ -56,7 +171,7 @@ provides the foreground process supervision and respawn. Override
 `EDGEDESK_SUPERVISOR_*` variables in `/etc/conf.d/edgedesk-supervisor` if the
 binary, socket, database or log paths differ.
 
-## BusyBox init
+### BusyBox init
 
 ```sh
 install -m 0755 deploy/busybox/edgedesk-supervisor-boot \
@@ -72,8 +187,9 @@ stdout/stderr to the available logger.
 
 ## Verification
 
-Only files and commands that were actually executed on a platform count as a
-verification record; installing a script is not acceptance. See
-`docs/testing.md` for the commands and the current record. The host-side unit
-tests exercise the daemon directly but do not substitute for systemd, OpenRC or
-BusyBox runtime validation.
+Only files and commands actually executed on a platform count as a
+verification record; installing a script is not acceptance. `docs/testing.md`
+records the commands that were run and the remaining gaps. The host-side tests
+in `tests/install/install_test.sh` stage all three adapters, syntax-check the
+generated scripts, and assert the safety rules; they do not replace running
+the init systems for real.

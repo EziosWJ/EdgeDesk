@@ -72,6 +72,7 @@ src/
     └── embedded_assets.hpp   由 tools/gen_embed.py 生成的索引接口
 
 deploy/
+├── install.sh                POSIX sh 安装器（检测 init、生成配置、注册服务）
 ├── systemd/                  edgedesk-supervisor.service
 ├── openrc/                   OpenRC supervise-daemon 脚本
 └── busybox/                  inittab 示例与 boot wrapper
