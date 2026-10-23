@@ -5,6 +5,7 @@
 - 基线：[SPEC-0009：本机进程托管](0009-process-supervisor.md)
 - 相关决策：[ADR-0015](../adr/0015-process-supervisor-architecture.md)、[ADR-0016](../adr/0016-process-supervisor-security.md)
 - 实施计划：[SPEC-0010 实施计划与 Ticket 拆分](../tasks/0010-process-supervisor-hardening.md)
+- 总跟踪 Issue：[ #45 Process Supervisor 安全与可靠性加固](https://github.com/EziosWJ/EdgeDesk/issues/45)
 - 验证依据：[测试与验证矩阵](../testing.md)
 
 ## 1. 目标
