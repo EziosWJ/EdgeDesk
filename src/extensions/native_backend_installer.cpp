@@ -18,8 +18,15 @@
 namespace edgedesk::extensions {
 namespace {
 
-constexpr mode_t kExecutableMode = 0755;
+constexpr mode_t kExecutableMode = 0555;
+// The native root is traversable but not listable by other users. The program
+// directory stays owner-writable (unlink/atomic replace by the host); the
+// backend identity must be a different UID, so ownership — not the mode bits —
+// is the isolation boundary. The executable itself is read-only.
+constexpr mode_t kNativeRootMode = 0711;
 constexpr mode_t kProgramDirMode = 0755;
+// Owner-writable only while an atomic replace is in progress.
+constexpr mode_t kProgramDirInstallMode = 0755;
 constexpr mode_t kDataDirMode = 0700;
 constexpr std::size_t kCopyChunk = 64 * 1024;
 
@@ -68,6 +75,29 @@ Error open_or_create_subdir(int parent_fd, std::string_view name, mode_t mode, b
         return system_error(ErrorCode::permission_denied, "cannot set " + description + " permissions");
     }
     out = std::move(opened);
+    return Error::none();
+}
+
+// Program files must belong to the host identity (root when EdgeDesk runs as
+// root). A directory or file owned by a different account could be replaced by
+// that account, so installation refuses rather than tightening someone else's
+// path.
+Error require_host_owned(int fd, const std::string& description) {
+    struct stat info {};
+    if (::fstat(fd, &info) != 0) {
+        return system_error(ErrorCode::io_error, "cannot stat " + description);
+    }
+    if (info.st_uid != ::geteuid()) {
+        if (::geteuid() == 0) {
+            if (::fchown(fd, 0, 0) != 0) {
+                return system_error(ErrorCode::permission_denied,
+                                    "cannot take ownership of " + description);
+            }
+            return Error::none();
+        }
+        return Error::make(ErrorCode::permission_denied,
+                           description + " is not owned by the host identity");
+    }
     return Error::none();
 }
 
@@ -200,10 +230,10 @@ bool arch_from_name(std::string_view name, ElfArch& out) {
 }
 
 // Opens the declared executable through the revision sandbox, rejects hard
-// links and non-regular files, and applies the mode check used by the stable
-// program path. ZIP extraction deliberately normalizes file modes to 0600, so
-// the extracted staging copy is made executable here before inspection; the
-// installed program is always written with 0755 regardless of package mode.
+// links and non-regular files, and requires the package itself to carry an
+// execute bit. ZIP extraction preserves the package's Unix execute bits (it
+// never invents one), so this check rejects a 0644/0600 ELF instead of
+// silently making it executable during installation.
 Error inspect_revision_executable(const std::string& revision_root, const std::string& executable_rel,
                                   ElfArch expected, ElfArch& actual) {
     Error sandbox_error;
@@ -225,10 +255,9 @@ Error inspect_revision_executable(const std::string& revision_root, const std::s
         return Error::make(ErrorCode::invalid_argument, "backend executable has multiple hard links");
     }
     if ((info.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0) {
-        const mode_t mode = static_cast<mode_t>((info.st_mode & 0777) | 0111);
-        if (::fchmod(source.get(), mode) != 0) {
-            return system_error(ErrorCode::permission_denied, "cannot mark backend executable as executable");
-        }
+        return Error::make(ErrorCode::invalid_argument,
+                           "backend executable is not executable in the package (set the "
+                           "executable bit before packing)");
     }
     std::string inspect_error;
     if (!inspect_elf(join_path(revision_root, executable_rel), expected, actual, inspect_error)) {
@@ -287,13 +316,24 @@ Error NativeBackendInstaller::install(const std::string& revision_root, const Ma
     if (!error.ok()) return error;
 
     UniqueFd native_root;
-    error = open_or_create_subdir(root.get(), "native", kProgramDirMode, true, "native program root",
+    error = open_or_create_subdir(root.get(), "native", kNativeRootMode, true, "native program root",
                                   native_root);
     if (!error.ok()) return error;
+    error = require_host_owned(native_root.get(), "native program root");
+    if (!error.ok()) return error;
+    // The program directory is temporarily owner-writable for the atomic
+    // replace. The guard restores the final read-only mode on every exit path,
+    // including failures that leave the previous executable in place.
     UniqueFd program_dir;
-    error = open_or_create_subdir(native_root.get(), manifest.id, kProgramDirMode, true,
+    error = open_or_create_subdir(native_root.get(), manifest.id, kProgramDirInstallMode, true,
                                   "application program directory", program_dir);
     if (!error.ok()) return error;
+    error = require_host_owned(program_dir.get(), "application program directory");
+    if (!error.ok()) return error;
+    struct ProgramDirGuard {
+        int fd;
+        ~ProgramDirGuard() { (void)::fchmod(fd, kProgramDirMode); }
+    } program_dir_guard{program_dir.get()};
 
     // Persistent data lives outside the program directory and survives
     // upgrades. It is created 0700 here; identity-specific ownership is applied
@@ -369,6 +409,11 @@ Error NativeBackendInstaller::install(const std::string& revision_root, const Ma
         return system_error(ErrorCode::io_error, "cannot activate backend executable");
     }
     cleanup.active = false;
+    // Restore the read-only program directory before making the rename durable.
+    if (::fchmod(program_dir.get(), kProgramDirMode) != 0) {
+        return system_error(ErrorCode::permission_denied,
+                            "cannot restrict application program directory permissions");
+    }
     if (::fsync(program_dir.get()) != 0) {
         return system_error(ErrorCode::io_error, "cannot flush application program directory");
     }

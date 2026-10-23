@@ -82,28 +82,84 @@ bool valid_app_id(const std::string& app_id) {
     return true;
 }
 
-// "/", "/a", "/a/b" only. Absolute URLs, protocol-relative paths, query
-// strings, fragments, traversal segments and control bytes are rejected. The
-// path is forwarded verbatim; the proxy never normalizes it.
-Error validate_path(const std::string& path) {
-    if (path.empty()) return invalid("path is required");
-    if (path.size() > kMaxPathBytes) return invalid("path exceeds 2048 bytes");
-    if (path.front() != '/') return invalid("path must start with '/'");
-    if (path.size() > 1 && path[1] == '/') {
+int hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// Decodes percent escapes for validation only. Returns false for a malformed
+// escape; the original target string is always what gets forwarded.
+bool percent_decode(std::string_view input, std::string& out) {
+    out.clear();
+    out.reserve(input.size());
+    for (std::size_t index = 0; index < input.size(); ++index) {
+        if (input[index] != '%') {
+            out.push_back(input[index]);
+            continue;
+        }
+        if (index + 2 >= input.size()) return false;
+        const int high = hex_digit(input[index + 1]);
+        const int low = hex_digit(input[index + 2]);
+        if (high < 0 || low < 0) return false;
+        out.push_back(static_cast<char>((high << 4) | low));
+        index += 2;
+    }
+    return true;
+}
+
+// "/", "/a", "/a/b" or a path with a normal query ("/a?x=1"). Absolute URLs,
+// protocol-relative paths, fragments, traversal segments, encoded path
+// separators and control bytes are rejected. The target is forwarded verbatim;
+// the proxy never normalizes or re-encodes it.
+Error validate_path(const std::string& target) {
+    if (target.empty()) return invalid("path is required");
+    if (target.size() > kMaxPathBytes) return invalid("path exceeds 2048 bytes");
+    if (target.front() != '/') return invalid("path must start with '/'");
+    if (target.size() > 1 && target[1] == '/') {
         return invalid("path must not be protocol-relative");
     }
-    for (unsigned char c : path) {
+    // A fragment is never part of an HTTP request target.
+    if (target.find('#') != std::string::npos) {
+        return invalid("path must not contain a fragment");
+    }
+    for (unsigned char c : target) {
         if (c < 0x20 || c == 0x7f) return invalid("path must not contain control characters");
         if (c == '\\') return invalid("path must not contain backslashes");
-        if (c == '?' || c == '#') return invalid("path must not contain a query or fragment");
         if (c == ' ') return invalid("path must not contain spaces");
     }
+
+    const std::size_t query = target.find('?');
+    const std::string_view path =
+        query == std::string::npos ? std::string_view(target)
+                                   : std::string_view(target).substr(0, query);
+    const std::string_view query_text =
+        query == std::string::npos ? std::string_view()
+                                   : std::string_view(target).substr(query + 1);
+    if (query_text.find('\0') != std::string_view::npos) {
+        return invalid("path must not contain a NUL byte");
+    }
+
     std::size_t start = 0;
     while (start <= path.size()) {
         const std::size_t slash = path.find('/', start);
-        const std::string segment =
-            path.substr(start, slash == std::string::npos ? std::string::npos : slash - start);
-        if (segment == "." || segment == "..") {
+        const std::string_view raw =
+            path.substr(start, slash == std::string::npos ? std::string_view::npos
+                                                          : slash - start);
+        std::string decoded;
+        if (!percent_decode(raw, decoded)) {
+            return invalid("path contains a malformed percent escape");
+        }
+        // Encoded path separators would let a backend re-segment the path
+        // after the host validated it, so they are refused outright.
+        if (decoded.find('/') != std::string::npos || decoded.find('\\') != std::string::npos) {
+            return invalid("path must not contain encoded path separators");
+        }
+        if (decoded.find('\0') != std::string::npos) {
+            return invalid("path must not contain a NUL byte");
+        }
+        if (decoded == "." || decoded == "..") {
             return invalid("path must not contain '.' or '..' segments");
         }
         if (slash == std::string::npos) break;
@@ -649,6 +705,7 @@ Error open_socket(const std::string& path, Clock::time_point deadline, int& out_
 struct BackendProxy::Impl {
     struct Job {
         std::string app_id;
+        std::string token;
         std::string method;
         std::string path;
         std::string body;
@@ -660,6 +717,7 @@ struct BackendProxy::Impl {
     std::string apps_root;
     int timeout_ms = 10000;
     std::size_t queue_limit = 32;
+    SessionValidator validator;
 
     mutable std::mutex mutex;
     std::condition_variable wakeup;
@@ -727,6 +785,31 @@ struct BackendProxy::Impl {
     }
 
     Error perform(const Job& job, BackendHttpResponse& out) {
+        SessionValidator validate;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            validate = validator;
+        }
+        // A request can sit in the queue while its application is disabled,
+        // upgraded or uninstalled. Revalidate the exact session that submitted
+        // it so an invalidated instance never reaches the backend.
+        if (validate) {
+            RuntimeSession current;
+            const Error session_error = validate(job.token, current);
+            if (!session_error.ok() || current.app_id != job.app_id) {
+                return Error::make(ErrorCode::permission_denied,
+                                   "runtime_session_invalid: runtime session is no longer valid");
+            }
+        }
+        AppRecord app;
+        bool app_found = false;
+        Error app_error = store.get_app(job.app_id, app, app_found);
+        if (!app_error.ok()) return app_error;
+        if (!app_found || app.status != app_status::enabled) {
+            return Error::make(ErrorCode::conflict,
+                               "backend_app_disabled: the application is not enabled");
+        }
+
         BackendRecord record;
         bool found = false;
         Error error = store.get_backend(job.app_id, record, found);
@@ -775,6 +858,11 @@ struct BackendProxy::Impl {
         std::lock_guard<std::mutex> lock(mutex);
         return queue.size();
     }
+
+    void set_validator(SessionValidator value) {
+        std::lock_guard<std::mutex> lock(mutex);
+        validator = std::move(value);
+    }
 };
 
 BackendProxy::BackendProxy(ExtensionStore& store, std::string apps_root, std::size_t workers,
@@ -783,6 +871,10 @@ BackendProxy::BackendProxy(ExtensionStore& store, std::string apps_root, std::si
                                    timeout_ms)) {}
 
 BackendProxy::~BackendProxy() = default;
+
+void BackendProxy::set_session_validator(SessionValidator validator) {
+    impl_->set_validator(std::move(validator));
+}
 
 bool BackendProxy::submit(const RuntimeSession& session, nlohmann::json params,
                           Callback callback) {
@@ -794,6 +886,7 @@ bool BackendProxy::submit(const RuntimeSession& session, nlohmann::json params,
     }
     Impl::Job job;
     job.app_id = session.app_id;
+    job.token = session.token;
     job.method = std::move(request.method);
     job.path = std::move(request.path);
     job.body = std::move(request.body);

@@ -61,6 +61,12 @@ private:
     // Deletes the Supervisor service definition created for a native backend.
     // service_not_found is treated as success.
     Error remove_backend_service(std::string_view service_id);
+    // Synchronizes or suppresses autostart on an existing Supervisor service.
+    Error sync_backend_service(std::string_view app_id, bool suppress_autostart);
+    // Stops a mismatched backend and clears its boot autostart.
+    Error fail_safe_backend_service(std::string_view app_id);
+    // Deletes a Supervisor service whose id could not be persisted.
+    Error remove_orphan_backend_service(std::string_view service_id, std::string& detail);
     // Signals the maintenance thread and makes the periodic wait return
     // immediately, so process shutdown never waits out a full interval.
     void request_stop();

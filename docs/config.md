@@ -128,12 +128,16 @@ edgedesk --reset-admin-password --data-dir /var/lib/edgedesk
 - 数据根目录 `--apps-root` 默认 `/var/lib/edgedesk/apps`，权限 `0700`：
   - `extensions.db`（SQLite WAL，`0600`）保存应用状态、修订、权限、完整性索引、原生后端映射、操作日志与 KV；
   - `revisions/<appId>/<revisionId>/` 保存不可变静态资源；
-  - `native/<appId>/backend` 保存可选原生后端的稳定程序文件（0755，原子覆盖）；
+  - `native/<appId>/backend` 保存可选原生后端的稳定程序文件（`0555`，宿主身份所有，原子覆盖）；
+  - `native/` 根为 `0711`、应用程序目录为 `0755`，均归 EdgeDesk 主机身份；属主是隔离边界，模式位只是纵深防御；
   - `data/<appId>/` 保存平台托管数据目录（原生后端通过 `EDGEDESK_APP_DATA_DIR` 写入）；
   - `run/<appId>/backend.sock` 是宿主创建的运行目录与 Unix Socket（通过 `EDGEDESK_APP_SOCKET` 传入）；
   - `tmp/` 保存未完成安装与扩展上传恢复日志，启动时幂等清理。
 - 存在非 root 原生后端身份时，`apps/`、`apps/data/`、`apps/run/` 使用 `0711` 遍历权限；
   每次启动只保留该精确模式，更宽权限会被收紧。程序目录不向普通后端用户开放写权限。
+- 非 root EdgeDesk 与后端 `run_user` 同 UID 时无法隔离程序文件，身份保存与启动会被拒绝
+  （`backend_program_not_isolated`）。生产部署应让 EdgeDesk/Supervisor 以 root 运行、后端使用
+  独立的非 root `run_user`；root 后端是显式主机级例外。
 - 原生后端运行身份、`allow_root` 与 autostart 由管理员在应用管理界面配置，不由
   `--apps-root` 或 manifest 指定；Supervisor 需通过 `--supervisor-socket` 可访问。
 - 扩展平台是 SQLite 的**局部范围例外**；认证/设置仍用 JSON 文件，终端与指标不迁移。

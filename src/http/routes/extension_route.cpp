@@ -1,8 +1,10 @@
 #include "http/routes/extension_route.hpp"
 
+#include "app/supervisor_service.hpp"
 #include "core/types.hpp"
 #include "core/util.hpp"
 #include "extensions/extension_runtime.hpp"
+#include "extensions/native_backend.hpp"
 #include "extensions/native_backend_lifecycle.hpp"
 #include "extensions/package_manager.hpp"
 #include "http/upload_state.hpp"
@@ -30,6 +32,7 @@ constexpr std::size_t kStaticBufferHighWater = 1024 * 1024;
 constexpr int kStaticStallGuardMs = 60 * 1000;
 
 using extensions::AppRecord;
+using extensions::BackendRecord;
 using edgedesk::ExtensionUploadRequestState;
 using extensions::InstallOptions;
 using extensions::InstallResult;
@@ -224,6 +227,8 @@ int handle_detail(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     return http::write_json(resp, 200, body);
 }
 
+void restore_backend_autostart(RouteContext& ctx, const std::string& app_id);
+
 int handle_approve(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     if (!manager_ready(ctx, resp)) return 503;
     hv::Json body;
@@ -242,10 +247,49 @@ int handle_approve(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     ctx.audit->record("extension.approve", "ok",
                       "permissions=" + std::to_string(permissions.size()) + " enable=" + (enable ? "1" : "0"),
                       http::client_ip(*ctx.config, req), app_id);
+    if (enable) restore_backend_autostart(ctx, app_id);
     hv::Json out;
     out["ok"] = true;
     out["app"] = app_json(app);
     return http::write_json(resp, 200, out);
+}
+
+int write_app_json_to(const HttpResponseWriterPtr& writer, int status, const AppRecord& app) {
+    hv::Json out;
+    out["ok"] = true;
+    out["app"] = app_json(app);
+    return http::write_json_to(writer, status, out);
+}
+
+int write_supervisor_result_error(const HttpResponseWriterPtr& writer,
+                                  const SupervisorResult& result) {
+    const int status = result.status >= 400 ? result.status : 502;
+    return http::write_json_to(
+        writer, status,
+        hv::Json{{"ok", false},
+                 {"error", result.code.empty() ? "supervisor_error" : result.code},
+                 {"message", result.message.empty() ? "the process supervisor request failed"
+                                                    : result.message}});
+}
+
+// Restores the saved autostart preference after an application is re-enabled.
+// A successful disable clears both the extension record and the Supervisor
+// value, so re-enabling never starts a backend implicitly; the administrator
+// must enable autostart again deliberately.
+void restore_backend_autostart(RouteContext& ctx, const std::string& app_id) {
+    if (ctx.supervisor == nullptr || !ctx.supervisor->configured() || ctx.packages == nullptr) {
+        return;
+    }
+    BackendRecord record;
+    bool found = false;
+    if (!ctx.packages->store().get_backend(app_id, record, found).ok() || !found) return;
+    const std::string service_id =
+        record.service_id.empty() ? extensions::backend_service_id(app_id) : record.service_id;
+    // A missing service is expected before the first start/identity save; the
+    // update then fails with service_not_found and there is nothing to restore.
+    (void)ctx.supervisor->submit(
+        "service.update", {{"id", service_id}, {"autostart", record.autostart}},
+        [](SupervisorResult) {});
 }
 
 int handle_enable(RouteContext& ctx, HttpRequest* req, HttpResponse* resp, bool enable) {
@@ -259,12 +303,164 @@ int handle_enable(RouteContext& ctx, HttpRequest* req, HttpResponse* resp, bool 
         return http::write_error(resp, error);
     }
     if (!enable) ctx.extension_runtime->invalidate_app(app_id);
+    if (enable) restore_backend_autostart(ctx, app_id);
     ctx.audit->record(enable ? "extension.enable" : "extension.disable", "ok", "",
                       http::client_ip(*ctx.config, req), app_id);
     hv::Json out;
     out["ok"] = true;
     out["app"] = app_json(app);
     return http::write_json(resp, 200, out);
+}
+
+// Disabling an application that owns a native backend must stop the process
+// and disarm boot autostart before the status flips to disabled. The stop is
+// acknowledged only after the Supervisor confirms the operation and the final
+// state; a failure leaves the application enabled and returns the Supervisor
+// error instead of pretending the backend is gone. This runs on the bounded
+// Supervisor worker, never on the libhv event loop.
+void handle_disable_async(RouteContext& ctx, const HttpRequestPtr& req,
+                          const HttpResponseWriterPtr& writer) {
+    if (ctx.packages == nullptr || ctx.extension_runtime == nullptr) {
+        http::write_json_to(writer, 503,
+                            hv::Json{{"ok", false},
+                                     {"error", "extensions_unavailable"},
+                                     {"message", "extension platform is unavailable"}});
+        return;
+    }
+    const std::string app_id = req->GetParam("app_id");
+    const std::string ip = http::client_ip(*ctx.config, req.get());
+    AppRecord app;
+    bool found = false;
+    Error error = ctx.packages->get_app(app_id, app, found);
+    if (!error.ok()) {
+        http::write_error_to(writer, error);
+        return;
+    }
+    if (!found || app.status == extensions::app_status::uninstalled) {
+        http::write_json_to(writer, 404,
+                            hv::Json{{"ok", false},
+                                     {"error", "app_not_found"},
+                                     {"message", "application not found"}});
+        return;
+    }
+    BackendRecord record;
+    bool has_backend = false;
+    error = ctx.packages->store().get_backend(app_id, record, has_backend);
+    if (!error.ok()) {
+        http::write_error_to(writer, error);
+        return;
+    }
+
+    const auto finish = [&ctx, writer, app_id, ip](AppRecord updated) {
+        ctx.extension_runtime->invalidate_app(app_id);
+        ctx.audit->record("extension.disable", "ok", "", ip, app_id);
+        write_app_json_to(writer, 200, updated);
+    };
+
+    if (!has_backend) {
+        error = ctx.packages->set_enabled(app_id, false, app);
+        if (!error.ok()) {
+            ctx.audit->record("extension.disable", "denied", error.message, ip, app_id);
+            http::write_error_to(writer, error);
+            return;
+        }
+        finish(app);
+        return;
+    }
+
+    if (ctx.native_backends == nullptr) {
+        const std::string message =
+            "the native backend lifecycle is unavailable; the application remains enabled";
+        ctx.audit->record("extension.disable", "denied", message, ip, app_id);
+        http::write_json_to(writer, 503,
+                            hv::Json{{"ok", false},
+                                     {"error", "native_backend_unavailable"},
+                                     {"message", message}});
+        return;
+    }
+
+    if (ctx.supervisor == nullptr || !ctx.supervisor->configured()) {
+        const std::string message =
+            "cannot confirm the native backend is stopped because the process supervisor is "
+            "not configured; the application remains enabled";
+        ctx.audit->record("extension.disable", "denied", message, ip, app_id);
+        http::write_json_to(writer, 503,
+                            hv::Json{{"ok", false},
+                                     {"error", "supervisor_unavailable"},
+                                     {"message", message}});
+        return;
+    }
+
+    const bool previous_autostart = record.autostart;
+    const std::string record_state = record.state;
+    const std::string service_id =
+        record.service_id.empty() ? extensions::backend_service_id(app_id) : record.service_id;
+    // Persist "autostart=false" before stopping so a Supervisor crash in the
+    // middle of disable cannot resurrect a disabled app at the next boot.
+    error = ctx.native_backends->set_autostart(app_id, false);
+    if (!error.ok()) {
+        ctx.audit->record("extension.disable", "denied", error.message, ip, app_id);
+        http::write_error_to(writer, error);
+        return;
+    }
+    const auto restore_autostart = [&ctx, app_id, service_id, previous_autostart]() {
+        if (!previous_autostart) return;
+        (void)ctx.native_backends->set_autostart(app_id, true);
+        if (ctx.supervisor != nullptr && ctx.supervisor->configured()) {
+            (void)ctx.supervisor->submit(
+                "service.update", {{"id", service_id}, {"autostart", true}},
+                [](SupervisorResult) {});
+        }
+    };
+
+    // Invalidate runtime sessions before the stop so requests already queued
+    // in the backend proxy cannot reach a backend that is being shut down.
+    ctx.extension_runtime->invalidate_app(app_id);
+    const bool queued = ctx.supervisor->submit_stop_and_lock(
+        service_id, [&ctx, writer, app_id, ip, finish, restore_autostart,
+                     record_state](SupervisorResult result) {
+            if (result.status < 200 || result.status >= 300) {
+                restore_autostart();
+                ctx.audit->record("extension.disable", "denied",
+                                  result.code + (result.message.empty() ? ""
+                                                                        : " " + result.message),
+                                  ip, app_id);
+                write_supervisor_result_error(writer, result);
+                return;
+            }
+            AppRecord updated;
+            // A normal stop clears the extension-side lifecycle state. A
+            // failed-upgrade marker is terminal and is intentionally preserved.
+            if (record_state != extensions::backend_state::upgrade_failed) {
+                const Error state_error =
+                    ctx.native_backends->set_state(app_id, extensions::backend_state::stopped,
+                                                   "");
+                if (!state_error.ok()) {
+                    restore_autostart();
+                    ctx.audit->record("extension.disable", "denied", state_error.message, ip,
+                                      app_id);
+                    http::write_error_to(writer, state_error);
+                    return;
+                }
+            }
+            const Error disable_error = ctx.packages->set_enabled(app_id, false, updated);
+            if (!disable_error.ok()) {
+                restore_autostart();
+                ctx.audit->record("extension.disable", "denied", disable_error.message, ip,
+                                  app_id);
+                http::write_error_to(writer, disable_error);
+                return;
+            }
+            finish(updated);
+        });
+    if (!queued) {
+        restore_autostart();
+        ctx.audit->record("extension.disable", "denied", "supervisor queue is full", ip, app_id);
+        http::write_json_to(writer, 503,
+                            hv::Json{{"ok", false},
+                                     {"error", "supervisor_busy"},
+                                     {"message", "too many supervisor operations are pending; try again"}});
+    }
 }
 
 int handle_permissions(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
@@ -301,6 +497,9 @@ int handle_uninstall(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     }
     const bool keep = action == "keep";
     const std::string app_id = req->GetParam("app_id");
+    // Invalidate before the uninstall stop hook so queued proxy requests can
+    // never reach a backend whose files are about to be removed.
+    ctx.extension_runtime->invalidate_app(app_id);
     Error error = ctx.packages->uninstall(app_id, keep);
     if (!error.ok()) {
         ctx.audit->record("extension.uninstall", "denied", error.message, http::client_ip(*ctx.config, req),
@@ -489,6 +688,12 @@ int handle_extension_upload_state(RouteContext& ctx, const HttpContextPtr& http,
                     options.restore_retained_data = scope->restore_data;
                     options.overwrite_same_version = scope->overwrite_same_version;
                     options.allow_downgrade = scope->allow_downgrade;
+                    // Upgrade stops/replaces a running native backend. Invalidate
+                    // sessions first so already-queued proxy work cannot reach
+                    // the process during the stop/replace window.
+                    if (!scope->app_id.empty()) {
+                        ctx.extension_runtime->invalidate_app(scope->app_id);
+                    }
                     error = ctx.packages->install(scope->temp_path, options, result);
                 }
             }
@@ -1369,9 +1574,10 @@ void register_extension_routes(hv::HttpService& router, RouteContext& ctx) {
     router.POST("/api/extensions/:app_id/enable", [&ctx](HttpRequest* req, HttpResponse* resp) {
         return handle_enable(ctx, req, resp, true);
     });
-    router.POST("/api/extensions/:app_id/disable", [&ctx](HttpRequest* req, HttpResponse* resp) {
-        return handle_enable(ctx, req, resp, false);
-    });
+    router.POST("/api/extensions/:app_id/disable",
+                [&ctx](const HttpRequestPtr& req, const HttpResponseWriterPtr& writer) {
+                    handle_disable_async(ctx, req, writer);
+                });
     router.POST("/api/extensions/:app_id/permissions", [&ctx](HttpRequest* req, HttpResponse* resp) {
         return handle_permissions(ctx, req, resp);
     });

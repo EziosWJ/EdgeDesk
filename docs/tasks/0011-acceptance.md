@@ -1,6 +1,6 @@
 # SPEC-0011 验收矩阵（APPX-07）
 
-- 状态：**宿主 x86_64 已执行（2026-10-23）；跨架构、musl、root 与 init 未验证**
+- 状态：**宿主 x86_64 已执行并完成 2026-10-23 审查加固（同 UID 拒绝、禁用生命周期、升级同步、ELF 模式、查询串）；root+跨 UID、跨架构、musl 与 init 未验证**
 - 实际证据：[docs/testing.md](../testing.md) 的“2026-10-23 SPEC-0011 原生应用包实际执行记录”。
 - 需求：[SPEC-0011](../spec/0011-native-application-packages.md) 第 11 节
 - 共享契约：[0011-workstreams.md](0011-workstreams.md)
@@ -35,6 +35,9 @@ libc：ldd --version
 | --- | --- | --- |
 | 有效 ELF 后端包 | 安装成功，`state=stopped`、`autostart=false`，未启动进程 | 宿主已执行（见 docs/testing.md 2026-10-23 记录） |
 | 脚本 / 非 ELF / 不可执行 / 错误架构 | 安装前拒绝，现有应用不变 | 宿主已执行（见 docs/testing.md 2026-10-23 记录） |
+| ZIP mode `0644/0600/0` 的 ELF | 安装前拒绝；安装器不补执行位 | 宿主已执行（`extension_package_test`） |
+| 同 UID 非 root 身份 | 身份保存/启动拒绝（`backend_program_not_isolated`） | 宿主已执行（单元 + 非 root 集成） |
+| Supervisor 程序属主门禁 | 应用服务程序树可被后端 UID 写入时拒绝启动 | 宿主已执行（`process_control_test`） |
 | 绝对路径 / 路径穿越 / 符号链接 backend | 拒绝 | 宿主已执行（见 docs/testing.md 2026-10-23 记录） |
 | SHA-256 不符 / ZIP 损坏 / 重复路径 / 磁盘不足 / 安装中断 | 失败且不登记半成品 | 宿主已执行（见 docs/testing.md 2026-10-23 记录） |
 | 安装阶段不执行后端 | 无子进程、无审计执行记录 | 宿主已执行（见 docs/testing.md 2026-10-23 记录） |
@@ -48,6 +51,10 @@ libc：ldd --version
 | `EDGEDESK_APP_SOCKET` / `EDGEDESK_APP_DATA_DIR` 由宿主传入 | backend 读取到宿主路径；manifest 无法覆盖 | 宿主已执行（见 docs/testing.md 2026-10-23 记录） |
 | autostart 独立、默认关闭 | 启停不改 autostart；安装不打开 | 宿主已执行（见 docs/testing.md 2026-10-23 记录） |
 | 身份未配置 / 解析失败 / 程序不可执行 / 架构不匹配 / Socket 权限失败 / Supervisor 不可用 | 启动返回明确错误，不报告成功 | 宿主已执行（见 docs/testing.md 2026-10-23 记录） |
+| 禁用含后端应用 | 关自启→失效会话→停止→确认终态→disabled；失败返回错误且保持 enabled | 无服务路径已执行；运行中路径需 root+跨 UID（未执行） |
+| 升级同步服务定义 | 提交前关自启，安装后 `service.update`；失败 `upgrade_failed` 且自启关闭 | 单元已执行（注入 hook）；真实 Supervisor 同步未执行 |
+| 服务 ID 持久化失败 | 删除孤儿；失败记录 `backend_orphan` 并启动重试 | 单元已执行（恢复 hook）；真实 Supervisor 未执行 |
+| 仅切换 Web 修订 | 含后端应用返回冲突，版本只能随完整包移动 | 单元已执行 |
 | 崩溃恢复尊重 desired_state | 依赖 SPEC-0010 PSH-05；引用其证据 | 前置已完成（见 docs/testing.md） |
 | root 身份切换、init/reboot/autostart | 需真实环境；未执行即标记未验证 | 未执行 |
 
@@ -60,6 +67,8 @@ libc：ldd --version
 | 未启动 / Socket 权限错误 / 无效响应 | `backend_not_running` / permission / `backend_protocol_error` | 宿主已执行（见 docs/testing.md 2026-10-23 记录） |
 | 浏览器不能直接访问 Socket/TCP | 无新增 TCP listener；前端无 socket 参数 | 宿主已执行（见 docs/testing.md 2026-10-23 记录） |
 | 关闭/禁用/升级后旧实例请求 | `runtime_session_invalid` | 宿主已执行（见 docs/testing.md 2026-10-23 记录） |
+| 已排队代理请求在失效后执行 | 不建立后端连接，返回 `runtime_session_invalid`/`backend_app_disabled` | 单元已执行（`backend_proxy_test`） |
+| 正常查询串 / 片段 / 穿越 | 查询串原样转发；`#`、绝对 URL、编码穿越/分隔符拒绝 | 单元已执行；root 集成路径未执行 |
 
 ## 6. 升级、卸载与数据（SPEC 11.5）
 

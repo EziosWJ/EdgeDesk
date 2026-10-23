@@ -146,7 +146,7 @@ apps/
 ├── extensions.db               SQLite 元数据与 KV（0600）
 ├── revisions/<appId>/<revisionId>/
 │                              不可变静态资源与 manifest
-├── native/<appId>/backend     可选原生后端稳定程序路径（0755，原子覆盖）
+├── native/<appId>/backend     可选原生后端稳定程序路径（0555，宿主身份所有，原子覆盖）
 ├── data/<appId>/              平台托管的应用数据目录（原生后端可写）
 ├── run/<appId>/backend.sock   宿主创建的每应用运行目录与 Unix Socket
 └── tmp/
@@ -184,18 +184,27 @@ apps/
 
 ### 原生后端（SPEC-0011）
 
-- manifest 可选 `backend`（仅包内相对可执行路径 + argv 数组）。安装器只读取 ELF 头校验架构，
-  校验通过后才原子覆盖 `native/<appId>/backend`；安装、升级与卸载都不执行包内程序。
+- manifest 可选 `backend`（仅包内相对可执行路径 + argv 数组）。ZIP 解压保留包内执行位，
+  安装器据此校验 ELF 并原子覆盖 `native/<appId>/backend`（`0555`，宿主身份所有）；安装、升级与
+  卸载都不执行包内程序。
+- 程序树归 EdgeDesk 主机身份：`native/` 为 `0711`、应用目录 `0755`、可执行文件 `0555`。
+  非 root 同 UID 后端会被拒绝（`backend_program_not_isolated`）；可靠部署为 root Supervisor +
+  非 root `run_user`。Supervisor 在 `fork` 前对带 `EDGEDESK_APP_SOCKET` 的服务再次校验属主/可写性。
 - 每个含后端的应用在 `app_backends` 保存一行稳定映射。管理员保存身份后创建 Supervisor 服务
-  （不启动）；Supervisor 分配的 serviceId 立即回写。启动时重新生成完整服务配置并 `service.update`，
-  避免升级后沿用旧参数。运行用户/组、`allow_root`、autostart 只由管理员设置，manifest 不能覆盖。
+  （不启动，创建时先 `autostart=false`，映射成功后再恢复偏好）；Supervisor 分配的 serviceId 立即回写。
+  升级在提交前关闭自启、提交后以 `service.update` 同步完整配置；同步失败进入 `upgrade_failed`
+  并关闭自启。运行用户/组、`allow_root`、autostart 只由管理员设置，manifest 不能覆盖。
+- 禁用含后端应用先关闭自启、失效会话、停止并确认终态，再写入 `disabled`；失败返回错误且保持 enabled。
 - 运行目录与 Socket 由宿主创建，`EDGEDESK_APP_SOCKET` / `EDGEDESK_APP_DATA_DIR` 通过服务环境传入。
   `describe` 只报告配置；进程存活状态始终来自 Supervisor。
 - 前端 `backend.request` 经宿主桥接调用 `POST /api/extensions/runtime/backend/request`；
   路由只从 `X-EdgeDesk-Runtime` 会话解析 appId，`BackendProxy` 在固定大小 worker 池中通过该应用
-  自己的 Unix Socket 发送受限 HTTP/1.1 请求。没有按应用开放 TCP 端口，也不支持 WebSocket/流式代理。
-- 升级前用有界同步停止钩子确认进程已停止；失败则不覆盖程序。升级失败保持停止并标记
-  `upgrade_failed`，无自动回滚。卸载先停止并删除 Supervisor 服务，默认保留数据。
+  自己的 Unix Socket 发送受限 HTTP/1.1 请求（允许正常查询串，拒绝片段/绝对 URL/路径穿越）。
+  执行前重新校验运行时会话与应用状态，失效的排队请求不会触达后端。没有按应用开放 TCP 端口，
+  也不支持 WebSocket/流式代理。
+- 升级前用有界同步停止钩子确认进程已停止并关闭 Supervisor 自启；失败则不提交、不覆盖程序。
+  安装成功后同步服务定义。升级失败保持停止、关闭自启并标记 `upgrade_failed`，无自动回滚。
+  禁用/卸载先停止并删除 Supervisor 服务，默认保留数据。含后端的应用不得仅切换 Web 历史修订。
 
 ### SQLite 范围
 

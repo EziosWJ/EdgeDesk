@@ -1,6 +1,6 @@
 # ADR-0018：原生应用包与后端运行时集成
 
-- 状态：**Accepted（宿主 x86_64 已实现；跨架构、musl、root 身份与 init 验证未完成）**
+- 状态：**Accepted（宿主 x86_64 已实现；2026-10-23 完成程序隔离、禁用生命周期与升级一致性加固；跨架构、musl、root/跨 UID 与 init 验证未完成）**
 - 日期：2026-10-23
 - 关联：[SPEC-0011](../spec/0011-native-application-packages.md)、[SPEC-0007](../spec/0007-extension-applications.md)、[ADR-0011](0011-extension-runtime-and-packages.md)、[ADR-0012](0012-extension-security-and-communication.md)、[ADR-0015](0015-process-supervisor-architecture.md)、[ADR-0016](0016-process-supervisor-security.md)、[ADR-0017](0017-root-operations-profile.md)
 
@@ -29,6 +29,17 @@ EdgeDesk 已有静态 Web 应用包、沙箱 iframe、JSON-RPC/MessagePort、SQL
 - 以管理员指定的 OS 身份运行，兼容不同设备与部署环境；不引入无法在所有嵌入式内核上保证可用的容器/namespace 依赖。
 - 覆盖升级、默认保留数据和单后端约束控制 V1 实现量。
 - 旧 Web 包保持原有运行时、静态资源版本与缓存语义。
+
+## 2026-10-23 审查加固
+
+代码审查确认仅靠 `0555/0755` 不能阻止同 UID 后端改写程序文件。补充决策见
+[ADR-0020](0020-native-backend-isolation-and-upgrade-consistency.md)：
+
+- 程序树归宿主身份所有；非 root 同 UID 后端被拒绝，可靠部署为 root Supervisor + 非 root 运行身份；root 后端保持主机级例外。
+- 禁用应用先关闭自启并停止后端，失败返回错误；升级在提交前关闭自启、提交后同步 Supervisor 服务，失败进入 `UPGRADE_FAILED`。
+- 禁止仅切换 Web 历史修订；原生版本只能随完整包移动。
+- ZIP 执行位被保留并用于校验，安装器不再补执行位。
+- Supervisor 服务 ID 持久化失败时清理孤儿服务，失败则记录并在启动时重试。
 
 ## 后果与风险
 

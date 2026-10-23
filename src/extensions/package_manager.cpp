@@ -555,6 +555,23 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
                                                                 : stop_error.code,
                                message);
         }
+        // The old service definition is still consistent but its autostart must
+        // be disarmed before the metadata/binary switch. A crash or failure
+        // after this point can therefore never boot an old/new mismatch.
+        if (!backend_sync_hook_) {
+            const std::string message =
+                "cannot synchronize the native backend Supervisor service; configure the process "
+                "supervisor before upgrading a native package";
+            fail_operation(operation_id, temp_path, "", message);
+            return Error::make(ErrorCode::unavailable, message);
+        }
+        const Error suppress_error = backend_sync_hook_(manifest.id, true);
+        if (!suppress_error.ok()) {
+            const std::string message =
+                "cannot disarm native backend autostart before upgrade: " + suppress_error.message;
+            fail_operation(operation_id, temp_path, "", message);
+            return Error::make(ErrorCode::unavailable, message);
+        }
     }
     // A native -> Web-only upgrade removes the backend entirely. Drop the
     // Supervisor service definition before touching the package so a stale
@@ -575,8 +592,24 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
             return Error::make(service_error.code, message);
         }
     }
+    // Mark the persisted backend as upgrading before any irreversible change.
+    // A crash after this point is recovered as upgrade_failed instead of
+    // starting a binary/metadata combination that was never synchronized.
+    if (previous_backend_found) {
+        BackendRecord upgrading = previous_backend;
+        upgrading.state = backend_state::upgrading;
+        upgrading.error.clear();
+        const Error upgrading_error = store_->upsert_backend(upgrading);
+        if (!upgrading_error.ok()) {
+            fail_operation(operation_id, temp_path, "", upgrading_error.message);
+            return upgrading_error;
+        }
+    }
     error = move_into_place(temp_path, destination);
     if (!error.ok()) {
+        if (previous_backend_found) {
+            (void)store_->upsert_backend(previous_backend);
+        }
         fail_operation(operation_id, temp_path, "", error.message);
         return error;
     }
@@ -660,6 +693,11 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
         return Error::none();
     });
     if (!error.ok()) {
+        if (previous_backend_found) {
+            // The metadata transaction rolled back; the old application and
+            // backend are still the active ones.
+            (void)store_->upsert_backend(previous_backend);
+        }
         fail_operation(operation_id, temp_path, destination, error.message);
         return error;
     }
@@ -676,25 +714,65 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
         if (!install_error.ok()) {
             const std::string message =
                 "native backend installation failed: " + install_error.message;
-            // Keep the app stopped and record the failure. There is no
-            // automatic rollback; the administrator reinstalls a good package.
+            // No automatic rollback. Keep the app stopped, disarm autostart in
+            // both records and record the failure. The administrator reinstalls
+            // a good package.
             BackendRecord failed = validated_backend;
             failed.state = backend_state::upgrade_failed;
             failed.error = message;
+            failed.autostart = false;
             failed.created_at = previous_backend_found ? previous_backend.created_at : now_unix_seconds();
             if (previous_backend_found) {
                 failed.run_user = previous_backend.run_user;
                 failed.run_group = previous_backend.run_group;
                 failed.allow_root = previous_backend.allow_root;
-                failed.autostart = previous_backend.autostart;
+                failed.service_id = previous_backend.service_id;
             }
             // The diagnostic is already in the operation row; surfacing a
             // secondary store failure would hide the install failure.
             (void)store_->upsert_backend(failed);
-            store_->update_operation(operation_id, "failed", revision_id, message);
-            return Error::make(install_error.code, message);
+            std::string safe_error;
+            if (backend_fail_safe_hook_) {
+                const Error safe = backend_fail_safe_hook_(manifest.id);
+                if (!safe.ok()) safe_error = "; safe-state enforcement failed: " + safe.message;
+            }
+            const std::string detail = message + safe_error;
+            BackendRecord updated = failed;
+            updated.error = detail;
+            (void)store_->upsert_backend(updated);
+            store_->update_operation(operation_id, "failed", revision_id, detail);
+            return Error::make(install_error.code, detail);
         }
         if (!backend_warning.empty()) warnings.push_back(backend_warning);
+
+        // The Supervisor persists a copy of the executable path, argv, env and
+        // identity. An upgrade that changes any of them must synchronize the
+        // service before it may run again, or a reboot with autostart enabled
+        // would launch a mismatched backend.
+        if (backend_sync_hook_) {
+            const Error sync_error = backend_sync_hook_(manifest.id, false);
+            if (!sync_error.ok()) {
+                const std::string message =
+                    "native backend Supervisor synchronization failed: " + sync_error.message;
+                BackendRecord failed = installed_backend;
+                failed.state = backend_state::upgrade_failed;
+                failed.error = message;
+                failed.autostart = false;
+                (void)store_->upsert_backend(failed);
+                std::string safe_error;
+                const Error safe = backend_fail_safe_hook_
+                                       ? backend_fail_safe_hook_(manifest.id)
+                                       : Error::make(ErrorCode::unavailable,
+                                                     "no backend safe-state hook is configured");
+                if (!safe.ok()) safe_error = "; safe-state enforcement failed: " + safe.message;
+                const std::string detail = message + safe_error;
+                BackendRecord updated = failed;
+                updated.error = detail;
+                (void)store_->upsert_backend(updated);
+                store_->update_operation(operation_id, "failed", revision_id, detail);
+                return Error::make(ErrorCode::unavailable, detail);
+            }
+        }
     } else if (previous_backend_found) {
         // Native -> Web-only upgrade: the backend was stopped before the
         // commit. Remove the service mapping/program/run files and keep the
@@ -1002,6 +1080,20 @@ Error PackageManager::activate_revision(std::string_view app_id, std::string_vie
     if (!found || app.status == app_status::uninstalled) {
         return Error::make(ErrorCode::not_found, "application not found");
     }
+    // Native application versions are a single package unit: the stable
+    // backend binary is overwritten only by the controlled install/upgrade
+    // flow. Switching just the Web revision would leave the front end and the
+    // native backend on different versions, so it is refused outright.
+    BackendRecord backend;
+    bool has_backend = false;
+    error = store_->get_backend(app_id, backend, has_backend);
+    if (!error.ok()) return error;
+    if (has_backend) {
+        return Error::make(
+            ErrorCode::conflict,
+            "this application has a native backend; switching only the Web revision is not "
+            "allowed. Upload the full application package to change versions");
+    }
     RevisionRecord revision;
     bool revision_found = false;
     error = store_->get_revision(revision_id, revision, revision_found);
@@ -1025,6 +1117,15 @@ Error PackageManager::activate_revision(std::string_view app_id, std::string_vie
     }
     if (!manifest.host_api_compatible()) {
         return Error::make(ErrorCode::unsupported, "revision is not compatible with this host API version");
+    }
+    if (manifest.backend.present) {
+        // A revision that declares a backend cannot be activated in isolation:
+        // its executable was never installed to the stable program path by this
+        // Web-only revision switch.
+        return Error::make(
+            ErrorCode::conflict,
+            "this revision declares a native backend; upload the full application package to "
+            "activate its backend together with the Web revision");
     }
     const std::string previous_active = app.active_revision_id;
     const auto requested = permission_names(manifest.permissions);
@@ -1333,6 +1434,10 @@ Error PackageManager::recover() {
     Error error = store_->list_pending_operations(pending);
     if (!error.ok()) return error;
     for (const auto& operation : pending) {
+        // Supervisor orphan cleanup is retried after the process assembly has
+        // wired its Supervisor client; it must not be turned into a generic
+        // "interrupted install" failure here.
+        if (operation.type == "backend_orphan") continue;
         if (!operation.temp_path.empty() && path_is_within(operation.temp_path, tmp_dir_)) {
             std::string ignored;
             remove_tree_at(operation.temp_path, ignored);
@@ -1491,14 +1596,18 @@ Error PackageManager::recover_backends() {
             continue;
         }
 
-        bool runnable = true;
-        std::string diagnostic;
+        // An interrupted upgrade was never synchronized; it must not be
+        // reported as startable even if the bytes on disk look valid.
+        bool runnable = backend.state != backend_state::upgrading;
+        std::string diagnostic =
+            runnable ? std::string()
+                     : "upgrade was interrupted before Supervisor synchronization";
         RevisionRecord revision;
         bool revision_found = false;
-        if (app.active_revision_id.empty()) {
+        if (runnable && app.active_revision_id.empty()) {
             runnable = false;
             diagnostic = "application has no active revision";
-        } else {
+        } else if (runnable) {
             error = store_->get_revision(app.active_revision_id, revision, revision_found);
             if (!error.ok()) return error;
             if (!revision_found) {
@@ -1531,6 +1640,60 @@ Error PackageManager::recover_backends() {
             const Error state_error =
                 store_->set_backend_state(backend.app_id, backend_state::upgrade_failed, message);
             if (!state_error.ok() && state_error.code != ErrorCode::not_found) return state_error;
+            // A failed backend must never be armed for boot autostart.
+            const Error autostart_error =
+                store_->set_backend_autostart(backend.app_id, false);
+            if (!autostart_error.ok() && autostart_error.code != ErrorCode::not_found) {
+                return autostart_error;
+            }
+        }
+    }
+    return Error::none();
+}
+
+Error PackageManager::recover_backend_orphans() {
+    if (!backend_orphan_cleanup_hook_) return Error::none();
+    std::vector<OperationRecord> pending;
+    Error error = store_->list_pending_operations(pending);
+    if (!error.ok()) return error;
+    for (const auto& operation : pending) {
+        if (operation.type != "backend_orphan") continue;
+        if (operation.revision_id.empty()) {
+            (void)store_->update_operation(operation.operation_id, "failed", "",
+                                           "orphan service id is missing");
+            continue;
+        }
+        std::string detail;
+        const Error cleanup =
+            backend_orphan_cleanup_hook_(operation.revision_id, detail);
+        if (cleanup.ok()) {
+            (void)store_->update_operation(operation.operation_id, "done", "", "");
+        } else {
+            // Keep it pending so the next startup retries; preserve the
+            // diagnostic in the operation row rather than losing it.
+            (void)store_->update_operation(
+                operation.operation_id, "pending", "",
+                "orphan cleanup failed: " +
+                    (detail.empty() ? cleanup.message : detail));
+        }
+    }
+    return Error::none();
+}
+
+Error PackageManager::enforce_backend_safety() {
+    if (!backend_fail_safe_hook_) return Error::none();
+    std::vector<BackendRecord> backends;
+    Error error = store_->list_backends(backends);
+    if (!error.ok()) return error;
+    for (const auto& backend : backends) {
+        if (backend.state != backend_state::upgrade_failed) continue;
+        const Error safe = backend_fail_safe_hook_(backend.app_id);
+        if (!safe.ok()) {
+            const std::string detail =
+                "safe-state enforcement failed: " + safe.message +
+                (backend.error.empty() ? std::string() : " (" + backend.error + ")");
+            (void)store_->set_backend_state(backend.app_id, backend_state::upgrade_failed,
+                                            detail);
         }
     }
     return Error::none();

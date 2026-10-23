@@ -101,9 +101,39 @@ public:
         backend_service_remove_hook_ = std::move(hook);
     }
 
+    // Synchronizes an existing Supervisor service with the current backend
+    // record. `suppress_autostart` only clears boot autostart (used before the
+    // metadata/binary switch); the full sync applies executable/argv/env/
+    // identity/autostart. Returns an error when the service exists and cannot
+    // be synchronized.
+    using BackendSyncHook = std::function<Error(std::string_view app_id, bool suppress_autostart)>;
+    void set_backend_sync_hook(BackendSyncHook hook) { backend_sync_hook_ = std::move(hook); }
+
+    // Forces a backend into a safe failure state: stop it if necessary and
+    // leave autostart disabled so a mismatched version can never be started by
+    // the Supervisor (including at boot).
+    using BackendFailSafeHook = std::function<Error(std::string_view app_id)>;
+    void set_backend_fail_safe_hook(BackendFailSafeHook hook) {
+        backend_fail_safe_hook_ = std::move(hook);
+    }
+
+    // Deletes a Supervisor service whose id could not be persisted. The
+    // detail is recorded when cleanup fails so startup recovery can retry.
+    using BackendOrphanCleanupHook =
+        std::function<Error(std::string_view service_id, std::string& detail)>;
+    void set_backend_orphan_cleanup_hook(BackendOrphanCleanupHook hook) {
+        backend_orphan_cleanup_hook_ = std::move(hook);
+    }
+
     // Cleans unfinished operations and orphan revision directories. Idempotent;
     // runs once at startup and is safe to call again.
     Error recover();
+
+    // Startup reconciliation that requires Supervisor hooks: retries orphan
+    // service cleanup and reasserts the safe failure state for backends left
+    // upgrade_failed. Called by the process assembly after hooks are wired.
+    Error recover_backend_orphans();
+    Error enforce_backend_safety();
 
     // Installs or upgrades from a validated ZIP file. The file must already be
     // on local disk (streamed uploads finish before this call).
@@ -172,6 +202,9 @@ private:
     NativeBackendInstaller* backend_installer_ = nullptr;
     BackendStopHook backend_stop_hook_;
     BackendServiceRemoveHook backend_service_remove_hook_;
+    BackendSyncHook backend_sync_hook_;
+    BackendFailSafeHook backend_fail_safe_hook_;
+    BackendOrphanCleanupHook backend_orphan_cleanup_hook_;
 };
 
 // Recursively removes a directory without following symlinks.

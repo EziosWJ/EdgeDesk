@@ -40,6 +40,14 @@ public:
     // False when the bounded queue is full or the pool is stopping.
     bool submit(std::string method, nlohmann::json params, Callback callback);
 
+    // Stops a service (when needed), waits for the stop operation to finish,
+    // then clears autostart and returns the final service record. Used by the
+    // application-disable path, which must not report success while the
+    // process may still be alive or a boot autostart remains armed. Runs as
+    // one bounded worker job; the callback receives supervisor_unavailable or
+    // the Supervisor's error slug on failure.
+    bool submit_stop_and_lock(std::string service_id, Callback callback);
+
     std::size_t pending() const;
     int request_timeout_ms() const;
 

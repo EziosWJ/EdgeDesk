@@ -222,6 +222,27 @@ void test_service_params() {
     create_app(fixture, "io.example.params", "Params App", true, true);
     write_executable(fixture, "io.example.params");
 
+    if (::geteuid() != 0) {
+        // A same-UID backend could rewrite its own (and every other app's)
+        // installed program, so the lifecycle refuses to build service
+        // parameters for it.
+        nlohmann::json params;
+        const Error error = fixture.lifecycle->service_params("io.example.params", params);
+        CHECK(!error.ok());
+        CHECK_STR_EQ(error_slug(error), "backend_program_not_isolated");
+        return;
+    }
+
+    // Root cannot be confined by DAC; it is only accepted with allow_root.
+    BackendRecord root_record;
+    bool found = false;
+    CHECK(fixture.store().get_backend("io.example.params", root_record, found).ok());
+    CHECK(found);
+    root_record.allow_root = true;
+    root_record.run_user = "0";
+    root_record.run_group = "0";
+    CHECK(fixture.store().upsert_backend(root_record).ok());
+
     nlohmann::json params;
     const Error error = fixture.lifecycle->service_params("io.example.params", params);
     CHECK(error.ok());
@@ -234,9 +255,9 @@ void test_service_params() {
                  backend_executable_path(fixture.root_path(), "io.example.params"));
     CHECK_STR_EQ(params.value("cwd", std::string()),
                  backend_program_dir(fixture.root_path(), "io.example.params"));
-    CHECK_STR_EQ(params.value("run_user", std::string()), current_user_name());
-    CHECK_STR_EQ(params.value("run_group", std::string()), current_group_name());
-    CHECK_EQ(params.value("allow_root", true), false);
+    CHECK_STR_EQ(params.value("run_user", std::string()), "0");
+    CHECK_STR_EQ(params.value("run_group", std::string()), "0");
+    CHECK_EQ(params.value("allow_root", false), true);
     CHECK_EQ(params.value("autostart", true), false);
     CHECK_STR_EQ(params.value("restart_policy", std::string()), "on-failure");
 
@@ -254,21 +275,59 @@ void test_service_params() {
              backend_data_dir(fixture.root_path(), "io.example.params"));
 }
 
+void test_same_uid_identity_is_refused() {
+    if (::geteuid() == 0) {
+        std::printf("same-UID rejection test skipped: running as root\n");
+        return;
+    }
+    Fixture fixture;
+    CHECK(fixture.ready);
+    if (!fixture.ready) return;
+    create_app(fixture, "io.example.sameuid", "Same UID", true, true);
+    write_executable(fixture, "io.example.sameuid");
+
+    // Saving the same-UID identity is refused up front instead of persisting a
+    // configuration that can never be isolated.
+    const Error identity = fixture.lifecycle->set_identity(
+        "io.example.sameuid", current_user_name(), current_group_name(), false);
+    CHECK(!identity.ok());
+    CHECK_STR_EQ(error_slug(identity), "backend_program_not_isolated");
+
+    BackendRecord record;
+    bool found = false;
+    CHECK(fixture.store().get_backend("io.example.sameuid", record, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(record.run_user, current_user_name());
+}
+
 void test_service_name_is_sanitized() {
     Fixture fixture;
     CHECK(fixture.ready);
     if (!fixture.ready) return;
     const std::string app_id = "io.example.longname";
-    // 200 bytes plus a control character and a multi-byte character.
-    std::string display(200, 'A');
-    display += "\x01";
+    // 100 ASCII bytes plus a multi-byte suffix stays inside the manifest limit
+    // while still exercising UTF-8 truncation in the service name.
+    std::string display(100, 'A');
     display += "后端";
     create_app(fixture, app_id, display, true, true);
     write_executable(fixture, app_id);
 
+    // Use the explicit root identity so name sanitization is exercised on every
+    // host; the same-UID rejection is covered separately.
+    BackendRecord record;
+    bool found = false;
+    CHECK(fixture.store().get_backend(app_id, record, found).ok());
+    CHECK(found);
+    record.run_user = "0";
+    record.run_group = "0";
+    record.allow_root = true;
+    CHECK(fixture.store().upsert_backend(record).ok());
+
     nlohmann::json params;
     const Error error = fixture.lifecycle->service_params(app_id, params);
+    if (!error.ok()) std::fprintf(stderr, "sanitize service_params: %s\n", error.message.c_str());
     CHECK(error.ok());
+    if (!error.ok()) return;
     const std::string name = params.value("name", std::string());
     CHECK(name.size() <= 128);
     CHECK(edgedesk::is_valid_utf8(name));
@@ -385,6 +444,27 @@ void test_prepare_runtime_and_stale_socket() {
     create_app(fixture, app_id, "Runtime App", true, true);
     write_executable(fixture, app_id);
 
+    if (::geteuid() != 0) {
+        // Same-UID backends are rejected before any run directory is created.
+        std::string socket_path;
+        const Error denied = fixture.lifecycle->prepare_runtime(app_id, socket_path);
+        CHECK(!denied.ok());
+        CHECK_STR_EQ(error_slug(denied), "backend_program_not_isolated");
+        CHECK(!fs::exists(backend_run_dir(fixture.root_path(), app_id)));
+        return;
+    }
+
+    // The root path is explicit; DAC cannot confine a root backend but the
+    // run-directory and socket mechanics remain covered.
+    BackendRecord root_record;
+    bool root_found = false;
+    CHECK(fixture.store().get_backend(app_id, root_record, root_found).ok());
+    CHECK(root_found);
+    root_record.run_user = "0";
+    root_record.run_group = "0";
+    root_record.allow_root = true;
+    CHECK(fixture.store().upsert_backend(root_record).ok());
+
     std::string socket_path;
     Error error = fixture.lifecycle->prepare_runtime(app_id, socket_path);
     CHECK(error.ok());
@@ -499,6 +579,69 @@ void test_permission_denied_for_other_identity() {
     CHECK_STR_EQ(error_slug(prepared), "backend_permission_denied");
 }
 
+void test_disabled_and_failed_backend_guards() {
+    Fixture fixture;
+    CHECK(fixture.ready);
+    if (!fixture.ready) return;
+    const std::string app_id = "io.example.guards";
+    create_app(fixture, app_id, "Guards App", true, true);
+    write_executable(fixture, app_id);
+
+    // Use the explicit root identity so the service-parameter assertions do not
+    // depend on the host's UID; isolation is covered separately.
+    BackendRecord record;
+    bool found = false;
+    CHECK(fixture.store().get_backend(app_id, record, found).ok());
+    CHECK(found);
+    record.run_user = "0";
+    record.run_group = "0";
+    record.allow_root = true;
+    CHECK(fixture.store().upsert_backend(record).ok());
+
+    AppRecord app;
+    CHECK(fixture.store().get_app(app_id, app, found).ok());
+    CHECK(found);
+    app.status = app_status::disabled;
+    CHECK(fixture.store().upsert_app(app).ok());
+
+    const Error enable_autostart = fixture.lifecycle->set_autostart(app_id, true);
+    CHECK(!enable_autostart.ok());
+    CHECK_STR_EQ(error_slug(enable_autostart), "backend_app_disabled");
+    CHECK(fixture.lifecycle->set_autostart(app_id, false).ok());
+
+    // Even a stale saved autostart value is suppressed in the service params
+    // while the application is disabled.
+    CHECK(fixture.store().set_backend_autostart(app_id, true).ok());
+    nlohmann::json params;
+    const Error params_error = fixture.lifecycle->service_params(app_id, params);
+    CHECK(params_error.ok());
+    if (params_error.ok()) CHECK_EQ(params.value("autostart", true), false);
+
+    // A failed upgrade is a terminal safe state until the package is
+    // reinstalled: no start parameters, no autostart, no manual state reset.
+    CHECK(fixture.store().set_backend_state(app_id, backend_state::upgrade_failed,
+                                            "upgrade failed")
+              .ok());
+    const Error failed_params = fixture.lifecycle->service_params(app_id, params);
+    CHECK(!failed_params.ok());
+    CHECK_STR_EQ(error_slug(failed_params), "backend_upgrade_failed");
+    std::string socket_path;
+    const Error failed_runtime = fixture.lifecycle->prepare_runtime(app_id, socket_path);
+    CHECK(!failed_runtime.ok());
+    CHECK_STR_EQ(error_slug(failed_runtime), "backend_upgrade_failed");
+    const Error failed_autostart = fixture.lifecycle->set_autostart(app_id, true);
+    CHECK(!failed_autostart.ok());
+    CHECK_STR_EQ(error_slug(failed_autostart), "backend_upgrade_failed");
+    const Error failed_reset =
+        fixture.lifecycle->set_state(app_id, backend_state::stopped, "");
+    CHECK(!failed_reset.ok());
+    CHECK_STR_EQ(error_slug(failed_reset), "backend_upgrade_failed");
+    const Error failed_identity =
+        fixture.lifecycle->set_identity(app_id, "0", "0", true);
+    CHECK(!failed_identity.ok());
+    CHECK_STR_EQ(error_slug(failed_identity), "backend_upgrade_failed");
+}
+
 void test_service_id_helper() {
     Fixture fixture;
     CHECK(fixture.ready);
@@ -535,6 +678,7 @@ int main() {
     test_describe_backend_manifest_without_record();
     test_describe_backend();
     test_service_params();
+    test_same_uid_identity_is_refused();
     test_service_name_is_sanitized();
     test_identity_required();
     test_arch_mismatch_and_missing_executable();
@@ -542,6 +686,7 @@ int main() {
     test_autostart_is_independent_and_defaults_off();
     test_prepare_runtime_and_stale_socket();
     test_permission_denied_for_other_identity();
+    test_disabled_and_failed_backend_guards();
     test_service_id_helper();
     test_unknown_app();
     return edgedesk::test::finish("native_backend_lifecycle_test");

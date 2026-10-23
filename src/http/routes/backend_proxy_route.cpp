@@ -19,7 +19,8 @@ bool known_slug(const std::string& slug) {
     return slug == "backend_not_configured" || slug == "backend_not_running" ||
            slug == "backend_unavailable" || slug == "backend_timeout" ||
            slug == "backend_protocol_error" || slug == "invalid_argument" ||
-           slug == "permission_denied";
+           slug == "permission_denied" || slug == "runtime_session_invalid" ||
+           slug == "backend_app_disabled";
 }
 
 std::string error_slug(const Error& error) {
@@ -39,6 +40,8 @@ int status_for_slug(const std::string& slug, ErrorCode code) {
     if (slug == "backend_unavailable") return 503;
     if (slug == "invalid_argument") return 400;
     if (slug == "permission_denied") return 403;
+    if (slug == "runtime_session_invalid") return 401;
+    if (slug == "backend_app_disabled") return 409;
     return http_status_for(code);
 }
 

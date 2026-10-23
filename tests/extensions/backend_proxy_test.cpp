@@ -295,7 +295,7 @@ struct Fixture {
         AppRecord app;
         app.app_id = app_id;
         app.display_name = app_id;
-        app.status = app_status::pending_review;
+        app.status = app_status::enabled;
         app.created_at = 1;
         CHECK(store->upsert_app(app).ok());
         if (!with_backend) return;
@@ -517,8 +517,12 @@ void test_validation_before_connect() {
     expect_invalid(proxy, session, get_params("/a/../b"), "dot-dot traversal");
     expect_invalid(proxy, session, get_params("/a/./b"), "dot traversal");
     expect_invalid(proxy, session, get_params("/a/.."), "trailing dot-dot");
-    expect_invalid(proxy, session, get_params("/x?y=1"), "query string");
+    expect_invalid(proxy, session, get_params("/%2e%2e/etc"), "encoded dot-dot traversal");
+    expect_invalid(proxy, session, get_params("/a/%2E%2e"), "mixed encoded dot-dot");
+    expect_invalid(proxy, session, get_params("/a%2fb"), "encoded path separator");
+    expect_invalid(proxy, session, get_params("/a%00b"), "encoded NUL");
     expect_invalid(proxy, session, get_params("/x#frag"), "fragment");
+    expect_invalid(proxy, session, get_params("/x?y=1#frag"), "query with fragment");
     expect_invalid(proxy, session, get_params("/back\\slash"), "backslash");
     expect_invalid(proxy, session, get_params("/bad\x01path"), "control character");
     expect_invalid(proxy, session, get_params("/" + std::string(kMaxTestPath, 'a')),
@@ -643,6 +647,108 @@ void test_timeout() {
     CHECK(elapsed < std::chrono::seconds(5));
 }
 
+void test_query_string_forwarding() {
+    Fixture fixture("query");
+    fixture.add_app("app.query", true);
+    TestBackend backend(fixture.prepare_socket_dir("app.query"));
+    BackendProxy proxy(*fixture.store, fixture.apps_root());
+    const RuntimeSession session = session_for("app.query");
+
+    const CallResult result =
+        run_request(proxy, session, get_params("/notes?limit=2&tag=a%20b&flag"));
+    CHECK(result.error.ok());
+    CHECK_EQ(result.response.status, 200);
+
+    const std::vector<RecordedRequest> requests = backend.requests();
+    CHECK_EQ(requests.size(), std::size_t{1});
+    if (!requests.empty()) {
+        CHECK_STR_EQ(requests[0].target, "/notes?limit=2&tag=a%20b&flag");
+    }
+}
+
+void test_queued_request_revalidated() {
+    Fixture fixture("revalidate");
+    fixture.add_app("app.revalidate", true);
+    TestBackend backend(fixture.prepare_socket_dir("app.revalidate"));
+    // One worker makes the second request wait behind /slow, exactly like a
+    // queue drained after an invalidation.
+    BackendProxy proxy(*fixture.store, fixture.apps_root(), 1);
+    const RuntimeSession session = session_for("app.revalidate");
+
+    struct Pending {
+        std::mutex mutex;
+        std::condition_variable finished;
+        bool done = false;
+        Error error;
+        BackendHttpResponse response;
+    };
+    auto pending = [](Pending& slot) {
+        return [&slot](Error error, BackendHttpResponse response) {
+            std::lock_guard<std::mutex> lock(slot.mutex);
+            slot.error = std::move(error);
+            slot.response = std::move(response);
+            slot.done = true;
+            slot.finished.notify_one();
+        };
+    };
+    auto wait = [](Pending& slot) {
+        std::unique_lock<std::mutex> lock(slot.mutex);
+        slot.finished.wait_for(lock, std::chrono::seconds(10), [&] { return slot.done; });
+        CHECK(slot.done);
+    };
+
+    std::atomic<bool> valid{true};
+    proxy.set_session_validator([&](std::string_view, RuntimeSession& out) {
+        if (!valid.load()) {
+            return Error::make(ErrorCode::permission_denied,
+                               "runtime_session_invalid: runtime session is no longer valid");
+        }
+        out = session;
+        return Error::none();
+    });
+
+    Pending slow;
+    Pending queued;
+    CHECK(proxy.submit(session, get_params("/slow"), pending(slow)));
+    // Wait until the worker is actually processing the first request.
+    for (int attempt = 0; attempt < 100 && backend.requests().empty(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK_EQ(backend.requests().size(), std::size_t{1});
+    CHECK(proxy.submit(session, get_params("/"), pending(queued)));
+    // Invalidate the session while the second request is still queued.
+    valid.store(false);
+    wait(slow);
+    wait(queued);
+
+    CHECK(slow.error.ok());
+    CHECK(!queued.error.ok());
+    CHECK_STR_EQ(queued.error.message.substr(0, queued.error.message.find(':')),
+                 "runtime_session_invalid");
+    // The stale queued request never reached the backend.
+    CHECK_EQ(backend.requests().size(), std::size_t{1});
+}
+
+void test_disabled_app_is_not_proxied() {
+    Fixture fixture("disabled");
+    fixture.add_app("app.disabled", true);
+    TestBackend backend(fixture.prepare_socket_dir("app.disabled"));
+    BackendProxy proxy(*fixture.store, fixture.apps_root());
+
+    AppRecord app;
+    bool found = false;
+    CHECK(fixture.store->get_app("app.disabled", app, found).ok());
+    CHECK(found);
+    app.status = app_status::disabled;
+    CHECK(fixture.store->upsert_app(app).ok());
+
+    const CallResult result = run_request(proxy, session_for("app.disabled"), get_params("/"));
+    CHECK(!result.error.ok());
+    CHECK_STR_EQ(result.error.message.substr(0, result.error.message.find(':')),
+                 "backend_app_disabled");
+    CHECK_EQ(backend.requests().size(), std::size_t{0});
+}
+
 void test_cross_app_isolation() {
     Fixture fixture("isolation");
     fixture.add_app("app.a", true);
@@ -688,6 +794,9 @@ int main() {
     test_unconfigured_and_not_running();
     test_body_framings();
     test_timeout();
+    test_query_string_forwarding();
+    test_queued_request_revalidated();
+    test_disabled_app_is_not_proxied();
     test_cross_app_isolation();
     return edgedesk::test::finish("backend_proxy_test");
 }

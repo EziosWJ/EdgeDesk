@@ -31,6 +31,11 @@ struct BackendHttpResponse {
 class BackendProxy {
 public:
     using Callback = std::function<void(Error, BackendHttpResponse)>;
+    // Revalidates a queued request's runtime session on the worker thread. A
+    // session can be invalidated (disable/upgrade/uninstall) after submission
+    // but before the request runs; the callback must then fail so the backend
+    // is never reached by a stale instance.
+    using SessionValidator = std::function<Error(std::string_view token, RuntimeSession& out)>;
 
     // `timeout_ms` bounds connect + write + read for one request. It exists as
     // an explicit parameter so tests can use a short, deterministic deadline;
@@ -41,6 +46,9 @@ public:
 
     BackendProxy(const BackendProxy&) = delete;
     BackendProxy& operator=(const BackendProxy&) = delete;
+
+    // Optional; when unset, only the persisted application status is checked.
+    void set_session_validator(SessionValidator validator);
 
     // Validates `params` (method/path/body/contentType, no other keys) and
     // submits the request to the backend bound to `session.app_id`. Invalid

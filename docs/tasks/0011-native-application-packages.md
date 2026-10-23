@@ -1,6 +1,6 @@
 # SPEC-0011 实施计划：原生应用包与后端运行时
 
-- 状态：**已实施（APPX-01～06 与宿主 x86_64 的 APPX-07 验收完成；ARM64/ARM32、musl、root 身份与 init/reboot 未验证）**
+- 状态：**宿主实现完成并完成 2026-10-23 审查加固（APPX-01～06 与宿主 x86_64 的 APPX-07 单元/L1 验收完成；root+跨 UID、ARM64/ARM32、musl、init/reboot 未验证）**
 - 需求基线：[SPEC-0011](../spec/0011-native-application-packages.md)
 - 架构决策：[ADR-0018](../adr/0018-native-application-packages.md)
 - 既有基线：[SPEC-0007 Web 扩展](../spec/0007-extension-applications.md)、[SPEC-0009 Process Supervisor](../spec/0009-process-supervisor.md)
@@ -122,11 +122,16 @@
 
 ## 5. 发布门槛
 
-- [x] APPX-01～APPX-07 在宿主 x86_64（glibc）完成实现与自动化验收。
+- [x] APPX-01～APPX-07 在宿主 x86_64（glibc）完成实现与自动化验收，并完成 2026-10-23 审查加固。
 - [x] PSH-01～PSH-05 相关阻塞项关闭（见 `docs/testing.md` 的 SPEC-0010 记录）。
-- [ ] root 身份切换与 init/reboot/autostart 有实际验证证据（本轮未执行；同 uid 普通用户已验证）。
+- [ ] root Supervisor + 跨 UID 的实际启动/禁用/升级/清理验证（本轮未执行；同 UID 非 root 现被拒绝）。
 - [x] 安装不执行后端；后端路径与参数不经 Shell。
-- [x] UDS 访问仅绑定对应应用；没有新增后端 TCP 监听。
+- [x] ZIP 执行位来自包，`0644/0600/无模式` ELF 被拒绝；稳定文件 `0555`。
+- [x] 同 UID 非 root 身份被拒绝；Supervisor 对应用服务复核程序属主/可写性。
+- [x] 禁用失败不标记 disabled；升级前关闭自启、升级后同步服务；同步失败进入 `upgrade_failed`。
+- [x] 仅切换 Web 修订被拒绝；降级必须完整包。
+- [x] 服务 ID 持久化失败有孤儿清理与启动恢复记录。
+- [x] UDS 访问仅绑定对应应用；没有新增后端 TCP 监听；查询串支持且片段/穿越拒绝。
 - [x] 升级失败保持停止且可诊断；不声称自动回滚。
 - [x] 卸载默认保留数据，彻底清理有独立确认。
 - [x] Web-only 包和现有桌面功能回归通过（L0/L1）。

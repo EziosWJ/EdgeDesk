@@ -321,6 +321,77 @@ Error verify_executable(std::string_view app_id, const BackendRecord& record,
     return Error::none();
 }
 
+// Verifies that the installed program tree cannot be written by the backend
+// identity. Mode bits alone are not sufficient: when the backend runs as the
+// same UID as EdgeDesk it can chmod or replace its own (and every other app's)
+// program files, so that combination is refused outright. A root backend is a
+// host-level identity explicitly accepted by `allow_root` and cannot be
+// confined by DAC.
+Error verify_program_isolation(const std::string& apps_root, std::string_view app_id,
+                               const ResolvedId& identity, const std::string& executable) {
+    if (::geteuid() == 0 && identity.uid == 0) return Error::none();
+    if (::geteuid() != 0 && identity.uid == ::geteuid()) {
+        return backend_error(
+            ErrorCode::permission_denied, "backend_program_not_isolated",
+            "the backend identity is the same UID as EdgeDesk, so it could modify or replace "
+            "its own and other applications' installed programs; run EdgeDesk and its "
+            "Supervisor as root with a distinct run_user");
+    }
+
+    const std::string native_root = apps_root + "/native";
+    const std::string program_dir = native_root + "/" + std::string(app_id);
+    struct Check {
+        const char* label;
+        std::string path;
+        bool directory;
+    };
+    const Check checks[] = {
+        {"application root", apps_root, true},
+        {"native program root", native_root, true},
+        {"application program directory", program_dir, true},
+        {"backend executable", executable, false},
+    };
+    for (const auto& check : checks) {
+        const int flags = check.directory ? (O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+                                          : (O_PATH | O_CLOEXEC | O_NOFOLLOW);
+        UniqueFd fd(::open(check.path.c_str(), flags));
+        if (!fd.valid()) {
+            return backend_error(ErrorCode::conflict, "backend_unavailable",
+                                 "the " + std::string(check.label) + " " + check.path +
+                                     (errno == ENOENT ? " is missing" : " cannot be opened") +
+                                     "; reinstall the application");
+        }
+        struct stat info {};
+        if (::fstat(fd.get(), &info) != 0) {
+            return backend_error(ErrorCode::io_error, "backend_unavailable",
+                                 syscall_message("cannot stat the " + std::string(check.label),
+                                                 check.path));
+        }
+        if (info.st_uid != ::geteuid()) {
+            return backend_error(
+                ErrorCode::permission_denied, "backend_program_not_isolated",
+                "the " + std::string(check.label) + " " + check.path +
+                    " is not owned by the EdgeDesk host identity; reinstall the application");
+        }
+        bool writable = (info.st_mode & S_IWOTH) != 0;
+        if (!writable && info.st_uid == identity.uid && (info.st_mode & S_IWUSR) != 0) {
+            writable = true;
+        }
+        if (!writable && contains_gid(identity.groups, info.st_gid) &&
+            (info.st_mode & S_IWGRP) != 0) {
+            writable = true;
+        }
+        if (writable) {
+            return backend_error(
+                ErrorCode::permission_denied, "backend_program_not_isolated",
+                "the " + std::string(check.label) + " " + check.path + " is writable by the "
+                "backend identity; run EdgeDesk as root with a distinct run_user and reinstall "
+                "the application");
+        }
+    }
+    return Error::none();
+}
+
 } // namespace
 
 Error backend_error(ErrorCode code, std::string_view slug, std::string message) {
@@ -423,9 +494,45 @@ Error NativeBackendLifecycle::service_params(std::string_view app_id,
                              "configure run_user and run_group before starting the backend");
     }
 
+    if (record.state == backend_state::upgrade_failed ||
+        record.state == backend_state::upgrading) {
+        return backend_error(
+            ErrorCode::conflict, "backend_upgrade_failed",
+            "the installed backend is in a failed upgrade state: " +
+                (record.error.empty() ? std::string("reinstall the application")
+                                      : record.error));
+    }
+    // Defense in depth for Web-only revision switches that bypassed the
+    // package manager: the active manifest and the installed backend record
+    // must describe the same executable and argv.
+    Manifest active;
+    const Error manifest_error = packages_.active_manifest(app_id, active);
+    if (!manifest_error.ok()) {
+        return backend_error(ErrorCode::conflict, "backend_upgrade_failed",
+                             "cannot verify the active backend manifest: " +
+                                 manifest_error.message);
+    }
+    if (!active.backend.present || active.backend.executable != record.executable_rel ||
+        active.backend.args != record.args) {
+        return backend_error(
+            ErrorCode::conflict, "backend_upgrade_failed",
+            "the active revision and the installed native backend do not match; install the "
+            "full application package to synchronize them");
+    }
+
+    ResolvedId identity;
+    error = resolve_identity(record.run_user, record.run_group, identity);
+    if (!error.ok()) return error;
+    if (identity.uid == 0 && !record.allow_root) {
+        return backend_error(ErrorCode::permission_denied, "backend_root_not_allowed",
+                             "running the backend as root requires allow_root=true");
+    }
+
     const std::string host_arch = elf_arch_name(host_elf_arch());
     const std::string executable = backend_executable_path(apps_root_, app_id);
     error = verify_executable(app_id, record, executable, host_arch);
+    if (!error.ok()) return error;
+    error = verify_program_isolation(apps_root_, app_id, identity, executable);
     if (!error.ok()) return error;
 
     params = nlohmann::json::object();
@@ -442,6 +549,10 @@ Error NativeBackendLifecycle::service_params(std::string_view app_id,
     params["run_group"] = record.run_group;
     params["allow_root"] = record.allow_root;
     params["autostart"] = record.autostart;
+    // A disabled application must never be started by the Supervisor at boot,
+    // even if its service definition already exists. A successful disable
+    // clears the saved autostart value, so re-enabling never starts implicitly.
+    if (app.status != app_status::enabled) params["autostart"] = false;
     params["restart_policy"] = "on-failure";
     // Limits use the Supervisor defaults. V1 deliberately adds no health
     // check and no WebSocket/streaming proxy configuration here.
@@ -462,12 +573,25 @@ Error NativeBackendLifecycle::prepare_runtime(std::string_view app_id,
         return backend_error(ErrorCode::conflict, "backend_not_configured",
                              "this application has no native backend");
     }
+    if (record.state == backend_state::upgrade_failed ||
+        record.state == backend_state::upgrading) {
+        return backend_error(ErrorCode::conflict, "backend_upgrade_failed",
+                             "the native backend is in a failed upgrade state; reinstall the "
+                             "application before starting it");
+    }
     if (record.run_user.empty() || record.run_group.empty()) {
         return backend_error(ErrorCode::invalid_argument, "backend_identity_required",
                              "configure run_user and run_group before starting the backend");
     }
     ResolvedId identity;
     error = resolve_identity(record.run_user, record.run_group, identity);
+    if (!error.ok()) return error;
+    if (identity.uid == 0 && !record.allow_root) {
+        return backend_error(ErrorCode::permission_denied, "backend_root_not_allowed",
+                             "running the backend as root requires allow_root=true");
+    }
+    error = verify_program_isolation(apps_root_, app_id, identity,
+                                     backend_executable_path(apps_root_, app_id));
     if (!error.ok()) return error;
 
     const std::string socket = backend_socket_path(apps_root_, app_id);
@@ -656,6 +780,12 @@ Error NativeBackendLifecycle::set_identity(std::string_view app_id,
         return backend_error(ErrorCode::conflict, "backend_not_configured",
                              "this application has no native backend");
     }
+    if (record.state == backend_state::upgrade_failed ||
+        record.state == backend_state::upgrading) {
+        return backend_error(ErrorCode::conflict, "backend_upgrade_failed",
+                             "reinstall the application before changing the identity of a "
+                             "backend in a failed upgrade state");
+    }
 
     const std::string user = trim_ascii(run_user);
     const std::string group = trim_ascii(run_group);
@@ -671,6 +801,13 @@ Error NativeBackendLifecycle::set_identity(std::string_view app_id,
         return backend_error(ErrorCode::permission_denied, "backend_root_not_allowed",
                              "running the backend as root requires allow_root=true; "
                              "choose a non-root user or confirm root explicitly");
+    }
+    if (::geteuid() != 0 && identity.uid == ::geteuid()) {
+        return backend_error(
+            ErrorCode::permission_denied, "backend_program_not_isolated",
+            "run_user resolves to the EdgeDesk UID; a same-UID backend could modify or "
+            "replace installed programs. Run EdgeDesk and its Supervisor as root and choose a "
+            "distinct run_user");
     }
 
     bool applied = false;
@@ -707,6 +844,23 @@ Error NativeBackendLifecycle::set_autostart(std::string_view app_id, bool enable
         return backend_error(ErrorCode::conflict, "backend_not_configured",
                              "this application has no native backend");
     }
+    if (enabled) {
+        if (record.state == backend_state::upgrade_failed ||
+            record.state == backend_state::upgrading) {
+            return backend_error(
+                ErrorCode::conflict, "backend_upgrade_failed",
+                "the native backend is in a failed upgrade state; reinstall the application "
+                "before enabling autostart");
+        }
+        AppRecord app;
+        bool app_found = false;
+        Error app_error = packages_.get_app(app_id, app, app_found);
+        if (!app_error.ok()) return app_error;
+        if (!app_found || app.status != app_status::enabled) {
+            return backend_error(ErrorCode::conflict, "backend_app_disabled",
+                                 "enable the application before enabling its backend autostart");
+        }
+    }
     return store_.set_backend_autostart(app_id, enabled);
 }
 
@@ -727,6 +881,12 @@ Error NativeBackendLifecycle::set_state(std::string_view app_id, std::string_vie
     if (!found) {
         return backend_error(ErrorCode::conflict, "backend_not_configured",
                              "this application has no native backend");
+    }
+    if (record.state == backend_state::upgrade_failed && state == backend_state::stopped) {
+        return backend_error(
+            ErrorCode::conflict, "backend_upgrade_failed",
+            "a failed backend cannot be marked stopped; reinstall the application to clear the "
+            "safe failure state");
     }
     return store_.set_backend_state(app_id, state, error);
 }

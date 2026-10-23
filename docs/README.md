@@ -68,8 +68,9 @@
 | [ADR-0015](adr/0015-process-supervisor-architecture.md) | 独立 Process Supervisor、Unix Socket、SQLite 与 init 适配 | 已实现（V1.0；平台矩阵部分未验证） |
 | [ADR-0016](adr/0016-process-supervisor-security.md) | root 守护进程、运行身份隔离、IPC 与执行安全 | 已实现（V1.0；root/init 真机验证待补） |
 | [ADR-0017](adr/0017-root-operations-profile.md) | 安装器 `--ops` root 运维模式：unit、Supervisor 允许列表与目录属主 | Accepted（暂存测试通过；真机手工迁移已验证，`--ops` 重装未验证） |
-| [ADR-0018](adr/0018-native-application-packages.md) | 原生应用包、单 ELF 后端、Supervisor 生命周期、HTTP over UDS 与覆盖升级 | Accepted（实施待开始） |
+| [ADR-0018](adr/0018-native-application-packages.md) | 原生应用包、单 ELF 后端、Supervisor 生命周期、HTTP over UDS 与覆盖升级 | Accepted（宿主 x86_64 已实现；跨架构/root/init 未验证） |
 | [ADR-0019](adr/0019-process-supervisor-identity-and-operations.md) | Supervisor 进程组三态身份、异步操作契约、持久化顺序、脚本执行与审计边界 | Accepted（PSH-01～08 已实现；平台项未验证） |
+| [ADR-0020](adr/0020-native-backend-isolation-and-upgrade-consistency.md) | 原生后端程序属主隔离、同 UID 拒绝、禁用生命周期、升级同步与服务 ID 补偿 | Accepted（宿主 L0/L1 已执行；root/跨 UID 未验证） |
 
 ## Spec（要做什么）
 
@@ -99,14 +100,15 @@
 | [SPEC-0010 Process Supervisor 加固计划](tasks/0010-process-supervisor-hardening.md) | PSH-01～PSH-11 独立 Ticket、依赖顺序、验收标准与发布门槛 |
 | [SPEC-0011 原生应用包实施计划](tasks/0011-native-application-packages.md) | APPX-01～APPX-07 独立 GitHub Issues、依赖顺序、验收标准与发布门槛 |
 
-## 原生应用包扩展（SPEC-0011，待实施）
+## 原生应用包扩展（SPEC-0011，宿主 x86_64 已实现；生产发布门槛未满足）
 
 - [SPEC-0011：原生应用包与后端运行时](spec/0011-native-application-packages.md)：在现有 Web 扩展包中增加可选单个 ELF 后端，复用 Process Supervisor，通过 HTTP over Unix Socket 通信。
 - [ADR-0018：原生应用包与后端运行时集成](adr/0018-native-application-packages.md)：记录包格式、运行身份、通信、覆盖升级和数据保留决策。
+- [ADR-0020：原生后端程序隔离、禁用生命周期与升级一致性](adr/0020-native-backend-isolation-and-upgrade-consistency.md)：记录程序属主边界、同 UID 拒绝、禁用/升级同步与服务 ID 失败补偿。
 - [SPEC-0011 实施计划与 Ticket 拆分](tasks/0011-native-application-packages.md)：APPX-01～APPX-07 对应独立 GitHub Issues。
 - GitHub Issues：[APPX-01 #57](https://github.com/EziosWJ/EdgeDesk/issues/57)、[APPX-02 #58](https://github.com/EziosWJ/EdgeDesk/issues/58)、[APPX-03 #59](https://github.com/EziosWJ/EdgeDesk/issues/59)、[APPX-04 #60](https://github.com/EziosWJ/EdgeDesk/issues/60)、[APPX-05 #61](https://github.com/EziosWJ/EdgeDesk/issues/61)、[APPX-06 #62](https://github.com/EziosWJ/EdgeDesk/issues/62)、[APPX-07 #63](https://github.com/EziosWJ/EdgeDesk/issues/63)。
 
-> 原生后端尚未实现。SPEC-0010 的进程身份、目录权限、持久化与恢复相关 P0/P1 修复是生产使用前置门槛。纯 Web 包继续沿用 SPEC-0007 的现有行为。
+> 宿主实现与 L0/L1 已执行，但 root Supervisor + 跨 UID 运行、ARM64/ARM32、musl 与 init/reboot 尚未验证。同 UID 部署现在会被拒绝（`backend_program_not_isolated`）；可靠的部署需要 root EdgeDesk/Supervisor 与非 root `run_user`。相关 Issue 保持 OPEN，直到有实际平台证据。
 
 ## 设计素材
 

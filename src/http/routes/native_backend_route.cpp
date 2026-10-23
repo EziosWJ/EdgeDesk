@@ -7,6 +7,7 @@
 #include "extensions/package_manager.hpp"
 #include "http/http_util.hpp"
 
+#include <cstdio>
 #include <functional>
 #include <string>
 #include <utility>
@@ -94,6 +95,14 @@ bool load_app(RouteContext& ctx, const HttpResponseWriterPtr& writer, const std:
         return false;
     }
     return true;
+}
+
+bool app_is_enabled(RouteContext& ctx, const std::string& app_id) {
+    if (ctx.packages == nullptr) return false;
+    AppRecord app;
+    bool found = false;
+    return ctx.packages->get_app(app_id, app, found).ok() && found &&
+           app.status == extensions::app_status::enabled;
 }
 
 bool load_backend(RouteContext& ctx, const HttpResponseWriterPtr& writer,
@@ -207,23 +216,108 @@ const char* start_event = "extension.backend.start";
 // Persists the Supervisor-generated service id. The Supervisor assigns ids on
 // create; the extension platform stores that stable id so every later call uses
 // the same mapping (SPEC-0011 section 6.1).
-bool persist_service_id(RouteContext& ctx, const HttpResponseWriterPtr& writer,
-                        const std::string& app_id, const std::string& service_id) {
+Error persist_service_id(RouteContext& ctx, const std::string& app_id,
+                         const std::string& service_id) {
     BackendRecord record;
     bool found = false;
     Error error = ctx.packages->store().get_backend(app_id, record, found);
-    if (!error.ok() || !found) {
-        write_error_slug(writer, 500, "backend_not_configured",
-                         "the backend record disappeared while registering its service");
-        return false;
+    if (!error.ok()) return error;
+    if (!found) {
+        return Error::make(ErrorCode::not_found,
+                           "backend_not_configured: the backend record disappeared while "
+                           "registering its service");
     }
     record.service_id = service_id;
-    error = ctx.packages->store().upsert_backend(record);
+    return ctx.packages->store().upsert_backend(record);
+}
+
+// The Supervisor may already have created the service even though its id could
+// not be stored. Persist a durable marker so startup recovery can retry, then
+// remove the service immediately when possible. A leftover service with
+// autostart enabled would otherwise start without any application metadata.
+void record_orphan_service(RouteContext& ctx, const std::string& app_id,
+                           const std::string& service_id, const std::string& reason) {
+    if (ctx.packages == nullptr || service_id.empty()) return;
+    extensions::OperationRecord operation;
+    operation.type = "backend_orphan";
+    operation.phase = "pending";
+    operation.app_id = app_id;
+    operation.revision_id = service_id;
+    operation.error = reason;
+    const Error error = ctx.packages->store().create_operation(operation);
     if (!error.ok()) {
-        write_lifecycle_error(writer, error);
-        return false;
+        std::fprintf(stderr,
+                     "edgedesk: cannot record orphan Supervisor service %s for %s: %s\n",
+                     service_id.c_str(), app_id.c_str(), error.message.c_str());
     }
-    return true;
+}
+
+void finish_orphan_cleanup(RouteContext& ctx, const HttpResponseWriterPtr& writer,
+                           const std::string& app_id, const std::string& service_id,
+                           const Error& persist_error, const char* event,
+                           const std::string& ip, bool cleaned, const std::string& detail) {
+    audit(ctx, event, false,
+          persist_error.message + (cleaned ? "" : " cleanup_failed=" + detail), ip, app_id);
+    if (cleaned) {
+        write_lifecycle_error(writer, persist_error);
+        return;
+    }
+    nlohmann::json body;
+    body["ok"] = false;
+    body["error"] =
+        extensions::backend_error_slug(persist_error, "backend_service_orphan");
+    body["message"] =
+        extensions::backend_error_message(persist_error) +
+        "; orphan Supervisor service " + service_id +
+        " could not be removed and was recorded for recovery: " + detail;
+    http::write_json_to(writer, 500, body);
+}
+
+void cleanup_orphan_service(RouteContext& ctx, const HttpResponseWriterPtr& writer,
+                            const std::string& app_id, const std::string& service_id,
+                            const Error& persist_error, const char* event,
+                            const std::string& ip) {
+    if (ctx.supervisor == nullptr || !ctx.supervisor->configured() || service_id.empty()) {
+        record_orphan_service(ctx, app_id, service_id,
+                              "the process supervisor is not configured");
+        finish_orphan_cleanup(ctx, writer, app_id, service_id, persist_error, event, ip, false,
+                              "the process supervisor is not configured");
+        return;
+    }
+    const bool queued = ctx.supervisor->submit(
+        "service.update", {{"id", service_id}, {"autostart", false}},
+        [&ctx, writer, app_id, service_id, persist_error, event,
+         ip](SupervisorResult) {
+            // The update is best effort; the delete below is the real cleanup.
+            const bool delete_queued = ctx.supervisor->submit(
+                "service.delete", {{"id", service_id}},
+                [&ctx, writer, app_id, service_id, persist_error, event,
+                 ip](SupervisorResult removed) {
+                    if (removed.status == 200 || removed.code == "service_not_found") {
+                        finish_orphan_cleanup(ctx, writer, app_id, service_id, persist_error,
+                                              event, ip, true, "");
+                        return;
+                    }
+                    const std::string detail =
+                        removed.code.empty() ? removed.message
+                                             : removed.code + " " + removed.message;
+                    record_orphan_service(ctx, app_id, service_id, detail);
+                    finish_orphan_cleanup(ctx, writer, app_id, service_id, persist_error,
+                                          event, ip, false, detail);
+                });
+            if (!delete_queued) {
+                record_orphan_service(ctx, app_id, service_id,
+                                      "the supervisor queue is full during cleanup");
+                finish_orphan_cleanup(ctx, writer, app_id, service_id, persist_error, event,
+                                      ip, false, "the supervisor queue is full");
+            }
+        });
+    if (!queued) {
+        record_orphan_service(ctx, app_id, service_id,
+                              "the supervisor queue is full during cleanup");
+        finish_orphan_cleanup(ctx, writer, app_id, service_id, persist_error, event, ip, false,
+                              "the supervisor queue is full");
+    }
 }
 
 void complete_start(RouteContext& ctx, const HttpResponseWriterPtr& writer,
@@ -251,6 +345,14 @@ void complete_start(RouteContext& ctx, const HttpResponseWriterPtr& writer,
 void submit_start(RouteContext& ctx, const HttpResponseWriterPtr& writer,
                   const std::string& app_id, const std::string& service_id,
                   const std::string& ip) {
+    // Re-check at the last moment: a concurrent disable may have committed
+    // after the original request validation.
+    if (!app_is_enabled(ctx, app_id)) {
+        audit(ctx, start_event, false, "application is not enabled", ip, app_id);
+        write_error_slug(writer, 409, "backend_app_disabled",
+                         "the application is not enabled");
+        return;
+    }
     submit_or_busy(ctx, writer, "service.start", {{"id", service_id}},
                    [&ctx, writer, app_id, ip](SupervisorResult result) {
                        complete_start(ctx, writer, app_id, ip, std::move(result));
@@ -299,27 +401,51 @@ void submit_create(RouteContext& ctx, const HttpResponseWriterPtr& writer,
     // The Supervisor assigns the id on create; the placeholder in the params is
     // only meaningful for updates.
     params.erase("id");
+    const bool desired_autostart = params.value("autostart", false);
+    // Create with autostart off: until the id is durably mapped an orphan
+    // service must not be able to start at boot.
+    params["autostart"] = false;
     submit_or_busy(
         ctx, writer, "service.create", std::move(params),
-        [&ctx, writer, app_id, ip, event, detail](SupervisorResult created) {
+        [&ctx, writer, app_id, ip, event, detail,
+         desired_autostart](SupervisorResult created) {
             if (created.status < 200 || created.status >= 300) {
                 audit(ctx, event.c_str(), false, created.code, ip, app_id);
                 write_supervisor_failure(writer, created);
                 return;
             }
             const std::string created_id = created.value.value("id", std::string());
-            if (created_id.empty() ||
-                !persist_service_id(ctx, writer, app_id, created_id)) {
-                if (created_id.empty()) {
-                    audit(ctx, event.c_str(), false, "service.create returned no id", ip, app_id);
-                    write_error_slug(writer, 502, "supervisor_error",
-                                     "the Supervisor created a service without an id");
-                }
+            if (created_id.empty()) {
+                audit(ctx, event.c_str(), false, "service.create returned no id", ip, app_id);
+                write_error_slug(writer, 502, "supervisor_error",
+                                 "the Supervisor created a service without an id");
                 return;
             }
-            audit(ctx, event.c_str(), true, detail, ip, app_id);
-            nlohmann::json snapshot = supervisor_snapshot(created.value);
-            write_backend(ctx, writer, app_id, 200, true, &snapshot);
+            const Error persisted = persist_service_id(ctx, app_id, created_id);
+            if (!persisted.ok()) {
+                cleanup_orphan_service(ctx, writer, app_id, created_id, persisted, event.c_str(),
+                                       ip);
+                return;
+            }
+            // The mapping is durable; now apply the administrator's autostart
+            // preference. A failure leaves a mapped, stopped service. A
+            // concurrent disable wins: a disabled app never gets autostart.
+            const bool apply_autostart = desired_autostart && app_is_enabled(ctx, app_id);
+            if (!submit_or_busy(
+                    ctx, writer, "service.update",
+                    {{"id", created_id}, {"autostart", apply_autostart}},
+                    [&ctx, writer, app_id, ip, event, detail](SupervisorResult updated) {
+                        if (updated.status < 200 || updated.status >= 300) {
+                            audit(ctx, event.c_str(), false, updated.code, ip, app_id);
+                            write_supervisor_failure(writer, updated);
+                            return;
+                        }
+                        audit(ctx, event.c_str(), true, detail, ip, app_id);
+                        nlohmann::json snapshot = supervisor_snapshot(updated.value);
+                        write_backend(ctx, writer, app_id, 200, true, &snapshot);
+                    })) {
+                return;
+            }
         });
 }
 
@@ -346,6 +472,9 @@ void prepare_and_start(RouteContext& ctx, const HttpResponseWriterPtr& writer,
         write_lifecycle_error(writer, configured);
         return;
     }
+    // A concurrent disable must not leave autostart armed on the service that
+    // is being refreshed just before start.
+    if (!app_is_enabled(ctx, app_id)) params["autostart"] = false;
     if (service_exists) {
         submit_or_busy(ctx, writer, "service.update", std::move(params),
                        [&ctx, writer, app_id, service_id, ip](SupervisorResult updated) {
@@ -363,24 +492,46 @@ void prepare_and_start(RouteContext& ctx, const HttpResponseWriterPtr& writer,
     // service.create must not receive "id": the Supervisor assigns it. The
     // placeholder id is only used by service.update.
     params.erase("id");
-    submit_or_busy(ctx, writer, "service.create", std::move(params),
-                   [&ctx, writer, app_id, ip](SupervisorResult created) {
-                       if (created.status < 200 || created.status >= 300) {
-                           audit(ctx, start_event, false, created.code, ip, app_id);
-                           write_supervisor_failure(writer, created);
-                           return;
-                       }
-                       const std::string created_id = created.value.value("id", std::string());
-                       if (created_id.empty()) {
-                           audit(ctx, start_event, false,
-                                 "service.create returned no id", ip, app_id);
-                           write_error_slug(writer, 502, "supervisor_error",
-                                            "the Supervisor created a service without an id");
-                           return;
-                       }
-                       if (!persist_service_id(ctx, writer, app_id, created_id)) return;
-                       submit_start(ctx, writer, app_id, created_id, ip);
-                   });
+    const bool desired_autostart = params.value("autostart", false);
+    params["autostart"] = false;
+    submit_or_busy(
+        ctx, writer, "service.create", std::move(params),
+        [&ctx, writer, app_id, ip, desired_autostart](SupervisorResult created) {
+            if (created.status < 200 || created.status >= 300) {
+                audit(ctx, start_event, false, created.code, ip, app_id);
+                write_supervisor_failure(writer, created);
+                return;
+            }
+            const std::string created_id = created.value.value("id", std::string());
+            if (created_id.empty()) {
+                audit(ctx, start_event, false, "service.create returned no id", ip, app_id);
+                write_error_slug(writer, 502, "supervisor_error",
+                                 "the Supervisor created a service without an id");
+                return;
+            }
+            const Error persisted = persist_service_id(ctx, app_id, created_id);
+            if (!persisted.ok()) {
+                cleanup_orphan_service(ctx, writer, app_id, created_id, persisted, start_event,
+                                       ip);
+                return;
+            }
+            if (!submit_or_busy(
+                    ctx, writer, "service.update",
+                    {{"id", created_id}, {"autostart", desired_autostart}},
+                    [&ctx, writer, app_id, created_id,
+                     ip](SupervisorResult updated) {
+                        if (updated.status < 200 || updated.status >= 300) {
+                            audit(ctx, start_event, false, updated.code, ip, app_id);
+                            write_supervisor_failure(writer, updated,
+                                                     "cannot apply the current backend "
+                                                     "configuration: ");
+                            return;
+                        }
+                        submit_start(ctx, writer, app_id, created_id, ip);
+                    })) {
+                return;
+            }
+        });
 }
 
 // Re-reads the service after stop/restart (both return an operation, not the
@@ -582,6 +733,10 @@ void register_native_backend_routes(hv::HttpService& router, RouteContext& ctx) 
                    const bool enabled = body["enabled"].get<bool>();
                    const std::string detail = std::string("enabled=") + (enabled ? "1" : "0");
 
+                   // Autostart is a runnable-application setting. A disabled or
+                   // pending-review app must not arm a boot-time launch.
+                   AppRecord app;
+                   if (!load_app(ctx, writer, app_id, enabled, app)) return;
                    const Error error = ctx.native_backends->set_autostart(app_id, enabled);
                    if (!error.ok()) {
                        audit(ctx, "extension.backend.autostart", false, error.message, ip, app_id);
@@ -807,7 +962,7 @@ void register_native_backend_routes(hv::HttpService& router, RouteContext& ctx) 
                     const std::string ip = http::client_ip(*ctx.config, req.get());
 
                     AppRecord app;
-                    if (!load_app(ctx, writer, app_id, false, app)) return;
+                    if (!load_app(ctx, writer, app_id, true, app)) return;
                     BackendRecord record;
                     if (!load_backend(ctx, writer, app_id, record)) return;
                     if (!supervisor_ready(ctx, writer)) return;

@@ -1,6 +1,7 @@
 #include "app/supervisor_service.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -122,34 +123,155 @@ struct SupervisorService::Impl {
         return queue.size();
     }
 
-    void execute(std::string method, nlohmann::json params, Callback callback) {
+    SupervisorResult call_rpc(std::string method, nlohmann::json params) {
+        SupervisorResult result;
         if (!client) {
-            if (callback) callback(unavailable("process supervisor is not configured"));
-            return;
+            result.status = 503;
+            result.code = "supervisor_unavailable";
+            result.message = "process supervisor is not configured";
+            return result;
         }
         nlohmann::json value;
         supervisor::SupervisorRpcError rpc_error;
         const Error error = client->call(method, params, value, rpc_error);
         if (!error.ok()) {
-            SupervisorResult result;
             result.status = error.code == ErrorCode::unavailable ? 503 : 502;
             result.code = error.code == ErrorCode::unavailable ? "supervisor_unavailable"
                                                               : "supervisor_error";
             result.message = error.message;
-            if (callback) callback(std::move(result));
-            return;
+            return result;
         }
         if (rpc_error.code != 0) {
-            if (callback) {
-                callback(map_rpc_error(rpc_error.code, std::move(rpc_error.message),
-                                       std::move(rpc_error.slug)));
-            }
-            return;
+            return map_rpc_error(rpc_error.code, std::move(rpc_error.message),
+                                 std::move(rpc_error.slug));
         }
-        SupervisorResult result;
         result.status = 200;
         result.value = std::move(value);
+        return result;
+    }
+
+    void execute(std::string method, nlohmann::json params, Callback callback) {
+        if (!client) {
+            if (callback) callback(unavailable("process supervisor is not configured"));
+            return;
+        }
+        SupervisorResult result = call_rpc(std::move(method), std::move(params));
         if (callback) callback(std::move(result));
+    }
+
+    void execute_stop_and_lock(const std::string& id, Callback callback) {
+        const auto finish = [&callback](SupervisorResult result) {
+            if (callback) callback(std::move(result));
+        };
+        const auto absent_result = [&id]() {
+            SupervisorResult result;
+            result.status = 200;
+            result.value = {{"id", id}, {"state", "STOPPED"}, {"absent", true}};
+            return result;
+        };
+        const auto not_found = [](const SupervisorResult& result) {
+            return result.status == 404 || result.code == "service_not_found";
+        };
+
+        SupervisorResult current = call_rpc("service.get", {{"id", id}});
+        if (not_found(current)) {
+            finish(absent_result());
+            return;
+        }
+        if (current.status < 200 || current.status >= 300) {
+            finish(std::move(current));
+            return;
+        }
+
+        // Disarm autostart before touching the process: if the Supervisor dies
+        // mid-disable, the next boot must not start a disabled application.
+        SupervisorResult lock_error = call_rpc(
+            "service.update", {{"id", id}, {"autostart", false}});
+        if (not_found(lock_error)) {
+            finish(absent_result());
+            return;
+        }
+        const bool locked = lock_error.status >= 200 && lock_error.status < 300;
+
+        // Always submit stop, including STOPPED/FAILED/BACKOFF: the Supervisor
+        // persists desired_state=stopped and cancels a pending backoff restart.
+        SupervisorResult stopped = call_rpc("service.stop", {{"id", id}});
+        if (not_found(stopped)) {
+            finish(absent_result());
+            return;
+        }
+        if (stopped.status < 200 || stopped.status >= 300) {
+            if (stopped.code != "service_stopping") {
+                finish(std::move(stopped));
+                return;
+            }
+        } else {
+            const std::string operation = stopped.value.value("operation_id", std::string());
+            if (!operation.empty()) {
+                const auto deadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(30);
+                for (;;) {
+                    SupervisorResult operation_state =
+                        call_rpc("service.operation.get", {{"operation_id", operation}});
+                    if (operation_state.status < 200 || operation_state.status >= 300) {
+                        finish(std::move(operation_state));
+                        return;
+                    }
+                    const std::string operation_result =
+                        operation_state.value.value("state", std::string());
+                    if (operation_result == "failed") {
+                        SupervisorResult failure;
+                        failure.status = 502;
+                        failure.code = "supervisor_error";
+                        failure.message = "the Supervisor could not stop the service";
+                        if (operation_state.value.contains("error") &&
+                            operation_state.value["error"].is_object()) {
+                            const auto& detail = operation_state.value["error"];
+                            failure.code = detail.value("slug", failure.code);
+                            failure.message = detail.value("message", failure.message);
+                        }
+                        finish(std::move(failure));
+                        return;
+                    }
+                    if (operation_result == "succeeded") break;
+                    if (std::chrono::steady_clock::now() >= deadline) {
+                        SupervisorResult timeout;
+                        timeout.status = 504;
+                        timeout.code = "supervisor_timeout";
+                        timeout.message = "timed out waiting for the service to stop";
+                        finish(std::move(timeout));
+                        return;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+            }
+        }
+
+        SupervisorResult after = call_rpc("service.get", {{"id", id}});
+        if (not_found(after)) {
+            finish(absent_result());
+            return;
+        }
+        if (after.status < 200 || after.status >= 300) {
+            finish(std::move(after));
+            return;
+        }
+        const std::string state = after.value.value("state", std::string("UNKNOWN"));
+        if (state != "STOPPED" && state != "FAILED") {
+            SupervisorResult failure;
+            failure.status = 409;
+            failure.code = state == "UNKNOWN" ? "service_unknown" : "service_stopping";
+            failure.message = "the service is not confirmed stopped (state " + state + ")";
+            finish(std::move(failure));
+            return;
+        }
+        if (!locked) {
+            // The process is gone but autostart could not be cleared. Report
+            // failure so the caller does not mark a boot-startable app disabled.
+            finish(std::move(lock_error));
+            return;
+        }
+        finish(std::move(after));
     }
 };
 
@@ -168,6 +290,13 @@ bool SupervisorService::submit(std::string method, nlohmann::json params,
          callback = std::move(callback)]() mutable {
             impl_->execute(std::move(method), std::move(params), std::move(callback));
         });
+}
+
+bool SupervisorService::submit_stop_and_lock(std::string service_id, Callback callback) {
+    return impl_->submit([this, service_id = std::move(service_id),
+                          callback = std::move(callback)]() mutable {
+        impl_->execute_stop_and_lock(service_id, std::move(callback));
+    });
 }
 
 std::size_t SupervisorService::pending() const { return impl_->pending(); }

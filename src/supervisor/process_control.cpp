@@ -382,6 +382,42 @@ SpawnOutcome spawn_service(const ServiceConfig& config, const ResolvedIdentity& 
         return outcome;
     }
 
+    // Native application services are identified by the host-owned socket
+    // environment variable. Their program tree must not be writable by the
+    // configured backend identity, otherwise the process could replace its own
+    // or another application's executable. This check covers Supervisor
+    // autostart, recovery and services edited through the generic API, all of
+    // which bypass the extension lifecycle validation. A root backend is a
+    // host-level identity explicitly accepted by allow_root and cannot be
+    // confined by DAC; non-root identities are checked here.
+    constexpr const char* kAppSocketEnv = "EDGEDESK_APP_SOCKET";
+    if (config.env.find(kAppSocketEnv) != config.env.end() && identity.uid != 0) {
+        const auto forbidden_owner = [&](const struct stat& info) {
+            return info.st_uid == identity.uid || (info.st_mode & (S_IWGRP | S_IWOTH)) != 0;
+        };
+        struct stat cwd_stat {};
+        if (::fstat(cwd_fd, &cwd_stat) != 0 || forbidden_owner(cwd_stat)) {
+            outcome.error = Error::make(
+                ErrorCode::permission_denied,
+                "native application program directory is writable by the backend identity: " +
+                    config.cwd);
+            if (script_fd >= 0) ::close(script_fd);
+            ::close(cwd_fd);
+            ::close(exec_fd);
+            return outcome;
+        }
+        if (forbidden_owner(exec_stat)) {
+            outcome.error = Error::make(
+                ErrorCode::permission_denied,
+                "native application executable is writable by the backend identity: " +
+                    config.executable);
+            if (script_fd >= 0) ::close(script_fd);
+            ::close(cwd_fd);
+            ::close(exec_fd);
+            return outcome;
+        }
+    }
+
     int log_pipe[2] = {-1, -1};
     int err_pipe[2] = {-1, -1};
     int handshake_pipe[2] = {-1, -1};

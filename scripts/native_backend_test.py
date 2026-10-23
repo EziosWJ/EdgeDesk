@@ -182,11 +182,21 @@ def main():
 
     with open(args.binary, "rb") as handle:
         binary = handle.read()
-    user = pwd.getpwuid(os.geteuid()).pw_name
-    group = grp.getgrgid(os.getegid()).gr_name
-    # The integration harness may run as root (CI containers). Root is only
-    # accepted with the explicit allow_root confirmation, never implicitly.
-    allow_root = os.geteuid() == 0
+    # A same-UID backend can rewrite its own (and other apps') installed
+    # programs; the lifecycle therefore refuses it. Secure native backends need
+    # a root Supervisor plus a distinct run_user, which the root CI container
+    # can exercise with the "nobody" account.
+    same_uid_unprivileged = os.geteuid() != 0
+    if same_uid_unprivileged:
+        user = pwd.getpwuid(os.geteuid()).pw_name
+        group = grp.getgrgid(os.getegid()).gr_name
+        allow_root = False
+    else:
+        backend_pw = pwd.getpwnam("nobody")
+        user = backend_pw.pw_name
+        group = grp.getgrgid(backend_pw.pw_gid).gr_name
+        allow_root = False
+    can_run = not same_uid_unprivileged
     service_id = ""
     work = tempfile.mkdtemp(prefix="edgedesk-native-test-")
     cookie = login(args.password)
@@ -208,9 +218,18 @@ def main():
     check(bool(placeholder_service_id), "backend record has no service id placeholder")
     check(os.path.isfile(program), "stable backend executable was not installed")
     if os.path.isfile(program):
-        check(os.stat(program).st_mode & 0o111 != 0, "installed backend is not executable")
+        mode = os.stat(program).st_mode
+        check(mode & 0o111 != 0, "installed backend is not executable")
+        check(mode & 0o222 == 0, f"installed backend is writable: {oct(mode)}")
         with open(program, "rb") as handle:
             check(handle.read() == binary, "installed backend bytes differ from the package")
+        if os.geteuid() != 0:
+            try:
+                os.open(program, os.O_WRONLY)
+            except PermissionError:
+                pass
+            else:
+                check(False, "installed program is writable through its path")
     status, services, _ = request("GET", "/api/supervisor/services?limit=1000", cookie=cookie)
     listed = json_body(services).get("services", [])
     check(all(item.get("id") != placeholder_service_id for item in listed),
@@ -220,6 +239,41 @@ def main():
     status, payload, _ = request("POST", f"/api/extensions/{APP_ID}/approve",
                                  {"permissions": [], "enable": True}, cookie=cookie)
     check(status == 200, f"approve/enable failed: {status} {payload[:200]!r}")
+
+    if not can_run:
+        # Same-UID isolation: the identity is refused before any Supervisor
+        # service exists, and the application cannot be started.
+        status, payload, _ = request(
+            "PUT", f"/api/extensions/{APP_ID}/backend/identity",
+            {"run_user": user, "run_group": group, "allow_root": allow_root},
+            cookie=cookie)
+        check(status == 403,
+              f"same-UID identity must be refused, got {status} {payload[:300]!r}")
+        check(json_body(payload).get("error") == "backend_program_not_isolated",
+              f"unexpected identity error: {payload[:300]!r}")
+        status, backend = backend_info(cookie)
+        check(status == 200 and backend.get("run_user") == "",
+              "refused identity must not be persisted")
+        status, payload, _ = request("POST", f"/api/extensions/{APP_ID}/backend/start", {},
+                                     cookie=cookie)
+        check(status == 400, f"start without an identity must fail, got {status}")
+        check(json_body(payload).get("error") == "backend_identity_required",
+              f"unexpected start error: {payload[:300]!r}")
+
+        # Disabling still works: there is no Supervisor service, so the
+        # orchestration confirms absence and disables the application.
+        status, payload, _ = request("POST", f"/api/extensions/{APP_ID}/disable", {},
+                                     cookie=cookie)
+        check(status == 200, f"disable without a service failed: {status} {payload[:300]!r}")
+        status, payload, _ = request("GET", f"/api/extensions/{APP_ID}", cookie=cookie)
+        check(json_body(payload).get("app", {}).get("status") == "disabled",
+              "disable did not update the application status")
+        status, payload, _ = request("POST", f"/api/extensions/{APP_ID}/enable", {},
+                                     cookie=cookie)
+        check(status == 200, f"re-enable failed: {status} {payload[:200]!r}")
+        check(os.path.isfile(program), "disable/re-enable removed the installed program")
+        shutil.rmtree(work, ignore_errors=True)
+        return finish()
 
     # ---- identity creates the service but does not start it --------------
     status, payload, _ = request("PUT", f"/api/extensions/{APP_ID}/backend/identity",
@@ -281,7 +335,13 @@ def main():
     check(notes == ["hello"], f"backend data not persisted through the UDS proxy: {notes!r}")
 
     status, payload, _ = proxy(cookie, token, "GET", "/health?x=1")
-    check(status == 400, f"query strings must be rejected, got {status}")
+    body = json_body(payload)
+    check(status == 200 and body.get("status") == 200,
+          f"query string proxy failed: {status} {payload[:200]!r}")
+    check((body.get("body") or {}).get("ok") is True,
+          "query-string request did not reach the backend")
+    status, payload, _ = proxy(cookie, token, "GET", "/health#frag")
+    check(status == 400, f"fragment must be rejected, got {status}")
     status, payload, _ = request(
         "POST", "/api/extensions/runtime/backend/request",
         {"method": "GET", "path": "/health", "app_id": "other.app"},
@@ -292,6 +352,37 @@ def main():
         {"method": "GET", "path": "/health"},
         cookie=cookie, headers={"X-EdgeDesk-Runtime": "not-a-session"})
     check(status == 401, f"invalid runtime session must be 401, got {status}")
+
+    # ---- disable stops the backend, disarms autostart and revokes sessions -
+    status, payload, _ = request("POST", f"/api/extensions/{APP_ID}/disable", {},
+                                 cookie=cookie)
+    check(status == 200, f"disable failed: {status} {payload[:300]!r}")
+    stopped, backend = wait_backend_state(cookie, "STOPPED")
+    check(stopped, f"disable left the backend running: {backend}")
+    status, service = supervisor_service(cookie, service_id)
+    check(status == 200 and service.get("state") == "STOPPED",
+          "disable did not stop the Supervisor service")
+    check(service.get("autostart") is False, "disable left autostart armed")
+    status, payload, _ = request("GET", f"/api/extensions/{APP_ID}", cookie=cookie)
+    check(json_body(payload).get("app", {}).get("status") == "disabled",
+          "disable did not update the application status")
+    status, payload, _ = proxy(cookie, token, "GET", "/health")
+    check(status == 401, f"disabled session must be revoked, got {status}")
+    status, payload, _ = request("POST", f"/api/extensions/{APP_ID}/backend/start", {},
+                                 cookie=cookie)
+    check(status == 409, f"start while disabled must fail, got {status}")
+    check(json_body(payload).get("error") == "backend_app_disabled",
+          f"unexpected start error: {payload[:200]!r}")
+
+    # Re-enable, then start explicitly for the upgrade-while-running phase.
+    status, payload, _ = request("POST", f"/api/extensions/{APP_ID}/enable", {},
+                                 cookie=cookie)
+    check(status == 200, f"re-enable failed: {status} {payload[:200]!r}")
+    status, payload, _ = request("POST", f"/api/extensions/{APP_ID}/backend/start", {},
+                                 cookie=cookie)
+    check(status == 200, f"start after re-enable failed: {status} {payload[:300]!r}")
+    running, _ = wait_backend_state(cookie, "RUNNING")
+    check(running, "backend did not restart after re-enable")
 
     # ---- upgrade while running: stop hook + data retention ---------------
     upgrade = make_package(work, "notes-2.zip", "1.1.0", binary, "<h1>v2</h1>")
