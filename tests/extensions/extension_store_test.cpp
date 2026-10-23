@@ -400,7 +400,7 @@ void test_schema_version_after_migration(const fs::path& root) {
     }
     if (stmt != nullptr) sqlite3_finalize(stmt);
     sqlite3_close(db);
-    CHECK_EQ(version, 2);
+    CHECK_EQ(version, 3);
 }
 
 void test_recovery_after_process_crash(const fs::path& root) {

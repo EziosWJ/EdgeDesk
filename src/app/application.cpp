@@ -2,7 +2,11 @@
 #include "app/supervisor_service.hpp"
 
 #include "core/util.hpp"
+#include "extensions/backend_proxy.hpp"
 #include "extensions/extension_runtime.hpp"
+#include "extensions/native_backend.hpp"
+#include "extensions/native_backend_installer.hpp"
+#include "extensions/native_backend_lifecycle.hpp"
 #include "extensions/package_manager.hpp"
 #include "file/file_lock.hpp"
 #include "file/file_service.hpp"
@@ -23,11 +27,13 @@
 
 #include <csignal>
 #include <condition_variable>
+#include <chrono>
 #include <iostream>
 #include <mutex>
 #include <pthread.h>
 #include <sys/stat.h>
 #include <stdexcept>
+#include <thread>
 
 namespace edgedesk {
 namespace {
@@ -129,6 +135,19 @@ void Application::initialize() {
         // Two workers keep the libhv loop responsive while preserving a strict
         // upper bound on concurrent privileged requests.
         supervisor_service_ = std::make_unique<SupervisorService>(std::move(client), 2, 32);
+        // Upgrade needs to prove the backend stopped before replacing the
+        // stable executable. This call is bounded and only used by install,
+        // which already performs synchronous package work.
+        supervisor::SupervisorClientOptions stop_options;
+        stop_options.socket_path = config_.supervisor_socket;
+        stop_options.connect_timeout_ms = 1500;
+        stop_options.request_timeout_ms = 15000;
+        Error stop_client_error;
+        backend_stop_client_ = supervisor::SupervisorClient::create(stop_options, stop_client_error);
+        if (!backend_stop_client_) {
+            throw std::runtime_error("cannot configure supervisor stop client: " +
+                                     stop_client_error.message);
+        }
     }
 
     Error extension_error;
@@ -155,6 +174,87 @@ void Application::initialize() {
         extension_files_->set_lock_manager(file_locks_.get());
         extension_runtime_ = std::make_unique<extensions::ExtensionRuntime>(
             packages_->store(), *packages_, *extension_files_, terminals_.get());
+        // SPEC-0011: one optional native backend per application. Installing an
+        // installer is what turns an otherwise Web-only package manager into
+        // one that accepts `backend` packages; it still never executes them.
+        native_installer_ =
+            std::make_unique<extensions::NativeBackendInstaller>(packages_->store(), config_.apps_root);
+        packages_->set_backend_installer(native_installer_.get());
+        packages_->set_backend_stop_hook(
+            [this](std::string_view app_id) { return stop_backend_for_upgrade(app_id); });
+        native_lifecycle_ = std::make_unique<extensions::NativeBackendLifecycle>(
+            packages_->store(), *packages_, *native_installer_, config_.apps_root);
+        backend_proxy_ =
+            std::make_unique<extensions::BackendProxy>(packages_->store(), config_.apps_root);
+    }
+}
+
+Error Application::stop_backend_for_upgrade(std::string_view app_id) {
+    if (!packages_) return Error::none();
+    extensions::BackendRecord record;
+    bool found = false;
+    Error error = packages_->store().get_backend(app_id, record, found);
+    if (!error.ok()) return error;
+    if (!found) return Error::none();
+    if (!backend_stop_client_) {
+        return Error::make(ErrorCode::unavailable,
+                           "process supervisor is not configured; cannot confirm the native "
+                           "backend is stopped before upgrading");
+    }
+
+    using supervisor::SupervisorRpcError;
+    const auto query_state = [&](std::string& state, bool& exists) -> Error {
+        nlohmann::json result;
+        SupervisorRpcError rpc;
+        Error call_error =
+            backend_stop_client_->call("service.get", {{"id", record.service_id}}, result, rpc);
+        if (!call_error.ok()) return call_error;
+        if (rpc.code != 0) {
+            if (rpc.slug == "service_not_found") {
+                exists = false;
+                state.clear();
+                return Error::none();
+            }
+            return Error::make(ErrorCode::unavailable,
+                               "supervisor rejected service.get: " + rpc.message);
+        }
+        exists = true;
+        state = result.value("state", "");
+        return Error::none();
+    };
+
+    std::string state;
+    bool exists = false;
+    error = query_state(state, exists);
+    if (!error.ok()) return error;
+    if (!exists || state == "stopped" || state == "failed" || state == "backoff") {
+        return Error::none();
+    }
+
+    nlohmann::json operation;
+    SupervisorRpcError rpc;
+    error = backend_stop_client_->call("service.stop", {{"id", record.service_id}}, operation, rpc);
+    if (!error.ok()) return error;
+    if (rpc.code != 0 && rpc.slug != "service_not_found") {
+        return Error::make(ErrorCode::unavailable,
+                           "supervisor rejected service.stop: " + rpc.message);
+    }
+
+    // service.stop is asynchronous in the Supervisor. Poll the authoritative
+    // state for a short bounded period; never overwrite a possibly running ELF.
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    for (;;) {
+        error = query_state(state, exists);
+        if (!error.ok()) return error;
+        if (!exists || state == "stopped" || state == "failed" || state == "backoff") {
+            return Error::none();
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return Error::make(ErrorCode::unavailable,
+                               "native backend did not stop within 10 seconds; upgrade aborted");
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 }
 
@@ -284,6 +384,8 @@ int Application::run() {
     context.transfer_gate = transfer_gate_.get();
     context.packages = packages_.get();
     context.extension_runtime = extension_runtime_.get();
+    context.native_backends = native_lifecycle_.get();
+    context.backend_proxy = backend_proxy_.get();
     context.supervisor = supervisor_service_.get();
 
     Server server(context, config_);

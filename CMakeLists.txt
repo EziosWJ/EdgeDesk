@@ -120,9 +120,14 @@ add_library(edgedesk_core STATIC
   src/core/types.cpp
   src/core/utf8.cpp
   src/core/util.cpp
+  src/extensions/backend_proxy.cpp
+  src/extensions/elf_info.cpp
   src/extensions/extension_runtime.cpp
   src/extensions/extension_store.cpp
   src/extensions/manifest.cpp
+  src/extensions/native_backend.cpp
+  src/extensions/native_backend_installer.cpp
+  src/extensions/native_backend_lifecycle.cpp
   src/extensions/package_manager.cpp
   src/extensions/semver.cpp
   src/extensions/zip_reader.cpp
@@ -224,9 +229,11 @@ if(EDGEDESK_BUILD_SERVER)
     src/http/middleware.cpp
     src/http/server.cpp
     src/http/routes/auth_route.cpp
+    src/http/routes/backend_proxy_route.cpp
     src/http/routes/extension_route.cpp
     src/http/routes/file_route.cpp
     src/http/routes/health_route.cpp
+    src/http/routes/native_backend_route.cpp
     src/http/routes/settings_route.cpp
     src/http/routes/supervisor_route.cpp
     src/http/routes/system_route.cpp
@@ -286,6 +293,10 @@ if(EDGEDESK_BUILD_TESTS)
     extension_package_test:extensions/extension_package_test.cpp
     extension_runtime_test:extensions/extension_runtime_test.cpp
     extension_memory_test:extensions/extension_memory_test.cpp
+    elf_info_test:extensions/elf_info_test.cpp
+    native_backend_test:extensions/native_backend_test.cpp
+    native_backend_lifecycle_test:extensions/native_backend_lifecycle_test.cpp
+    backend_proxy_test:extensions/backend_proxy_test.cpp
     file_lock_test:file/file_lock_test.cpp
   )
   foreach(entry IN LISTS EDGEDESK_TEST_TARGETS)

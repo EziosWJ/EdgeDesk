@@ -1,5 +1,6 @@
 #pragma once
 
+#include "extensions/backend_spec.hpp"
 #include "extensions/semver.hpp"
 
 #include <cstdint>
@@ -63,9 +64,13 @@ struct Manifest {
     std::vector<Permission> permissions;       // sorted, unique, includes network when origins exist
     std::vector<NetworkOrigin> origins;
     WindowSpec window;
+    // Optional native backend (SPEC-0011). `present == false` keeps the
+    // package a pure Web application with the SPEC-0007 behavior.
+    BackendSpec backend;
     nlohmann::json raw;
 
     bool has_permission(Permission permission) const;
+    bool has_backend() const { return backend.present; }
     bool host_api_compatible() const;
     // Emits a same-origin policy with no external sources. Callers that serve
     // an application with an effective network grant must use the overload

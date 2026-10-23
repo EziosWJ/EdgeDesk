@@ -255,6 +255,24 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 | `POST` | `/api/extensions/runtime/terminal/sessions` | 创建 PTY；body `title/cwd/cols/rows`。 |
 | `POST` | `/api/extensions/runtime/terminal/close` | body `{"session_id":"..."}`。 |
 | `POST` | `/api/extensions/runtime/errors` | 应用错误上报；只写应用/实例/修订、类型、截断消息与栈到审计。type/message/stack 先脱敏、按 UTF-8 边界截断并作为带引号的 `key="value"` 字段编码；审计 sink 再次脱敏 detail/path，并将单字段限制在 8192 字节（超出追加 `[TRUNCATED]`）。不记录原始请求正文。 |
+| `POST` | `/api/extensions/runtime/backend/request` | 原生后端 HTTP-over-UDS 代理（SPEC-0011）。body `{"token","method","path","body"?,"contentType"?}`；身份只取自 token 对应运行实例；成功返回宿主 `200` 与 `{"status","headers","body"}`；不代理 WebSocket/流式响应/任意 URL。 |
+
+### 原生后端管理（SPEC-0011）
+
+纯 Web 应用（manifest 无 `backend`）不产生 Supervisor 服务，以上后端端点返回
+`409 backend_not_configured`。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/extensions/{app_id}/backend` | 后端状态、架构、稳定程序/数据/运行路径、运行身份、自启、持久化状态与 Supervisor 运行状态。 |
+| `PUT` | `/api/extensions/{app_id}/backend/identity` | body `{"run_user","run_group","allow_root"}`；只修改管理员身份配置，不允许改可执行文件或参数。 |
+| `PUT` | `/api/extensions/{app_id}/backend/autostart` | body `{"enabled":bool}`；独立于手动启动/停止。 |
+| `POST` | `/api/extensions/{app_id}/backend/start\|stop\|restart` | 经 Supervisor 执行；安装不会自动启动。前置条件不满足时返回明确错误，不报告成功。 |
+| `POST` | `/api/extensions/{app_id}/data/purge` | body `{"confirm":true,"app_id":"<same>"}`；只删除该 appId 的专用数据目录与 KV 命名空间。 |
+
+后端错误 slug：`backend_not_configured`、`backend_not_running`、`backend_unavailable`、
+`backend_timeout`、`backend_protocol_error`、`backend_identity_required`、`backend_arch_mismatch`、
+`backend_upgrade_failed`。运行身份、Socket 权限、架构或 Supervisor 不可用均不得返回成功。
 
 终端输入/输出仍通过宿主页面已有的 `/ws/terminal` 中继到应用；`terminal.access` 权限快照由
 宿主桥接与运行时端点共同检查。会话创建/关闭/列表写审计，不记录原始终端输入输出。

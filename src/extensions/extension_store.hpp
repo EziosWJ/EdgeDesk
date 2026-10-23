@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/error.hpp"
+#include "extensions/native_backend.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -153,6 +154,19 @@ public:
     Error replace_network_origins(std::string_view app_id, const std::vector<std::string>& origins);
     Error list_network_origins(std::string_view app_id, std::vector<std::string>& out) const;
     Error clear_network_origins(std::string_view app_id);
+
+    // Optional native backend metadata (SPEC-0011, schema v3). One row per app;
+    // the row is the stable appId -> serviceId mapping and stores only
+    // administrator/host-owned values. Process liveness lives in the Supervisor.
+    Error upsert_backend(const BackendRecord& record);
+    Error get_backend(std::string_view app_id, BackendRecord& out, bool& found) const;
+    Error list_backends(std::vector<BackendRecord>& out) const;
+    Error set_backend_state(std::string_view app_id, std::string_view state,
+                            const std::string& error_message);
+    Error set_backend_identity(std::string_view app_id, const std::string& run_user,
+                               const std::string& run_group, bool allow_root);
+    Error set_backend_autostart(std::string_view app_id, bool autostart);
+    Error delete_backend(std::string_view app_id);
 
     // integrity manifests
     Error replace_integrity_entries(std::string_view revision_id,

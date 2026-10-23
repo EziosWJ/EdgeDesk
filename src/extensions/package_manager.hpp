@@ -6,6 +6,7 @@
 #include "extensions/manifest.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -18,6 +19,8 @@ class PathSandbox;
 }
 
 namespace edgedesk::extensions {
+
+class NativeBackendInstaller;
 
 struct InstallOptions {
     // When set, the manifest id must match (used by /apps/{id}/upgrade).
@@ -75,6 +78,20 @@ public:
     ExtensionStore& store() { return *store_; }
     const std::string& root() const { return root_; }
     const std::string& temporary_directory() const { return tmp_dir_; }
+
+    // Installed by the process-level assembly (Application). Null keeps the
+    // package manager fully Web-only: a package that declares `backend` is then
+    // rejected instead of silently installing an unused executable.
+    void set_backend_installer(NativeBackendInstaller* installer) {
+        backend_installer_ = installer;
+    }
+    NativeBackendInstaller* backend_installer() const { return backend_installer_; }
+
+    // Bounded, synchronous stop used by upgrade before the executable is
+    // replaced. It is installed only when a Supervisor is configured and must
+    // return an error rather than overwrite a possibly running program.
+    using BackendStopHook = std::function<Error(std::string_view app_id)>;
+    void set_backend_stop_hook(BackendStopHook hook) { backend_stop_hook_ = std::move(hook); }
 
     // Cleans unfinished operations and orphan revision directories. Idempotent;
     // runs once at startup and is safe to call again.
@@ -140,6 +157,8 @@ private:
     std::string data_dir_;
     mutable std::mutex sandbox_mutex_;
     mutable std::unordered_map<std::string, std::shared_ptr<PathSandbox>> sandboxes_;
+    NativeBackendInstaller* backend_installer_ = nullptr;
+    BackendStopHook backend_stop_hook_;
 };
 
 // Recursively removes a directory without following symlinks.

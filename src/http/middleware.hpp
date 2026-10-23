@@ -22,7 +22,9 @@
 namespace edgedesk {
 
 namespace extensions {
+class BackendProxy;
 class ExtensionRuntime;
+class NativeBackendLifecycle;
 class PackageManager;
 } // namespace extensions
 
@@ -43,6 +45,10 @@ struct RouteContext {
     ConcurrencyGate* transfer_gate = nullptr;
     extensions::PackageManager* packages = nullptr;
     extensions::ExtensionRuntime* extension_runtime = nullptr;
+    // Optional native backend support (SPEC-0011). Both are null when the
+    // extension platform is unavailable; routes report a stable 503 then.
+    extensions::NativeBackendLifecycle* native_backends = nullptr;
+    extensions::BackendProxy* backend_proxy = nullptr;
     // Null when process management is disabled; routes must report
     // supervisor_unavailable instead of assuming a daemon exists.
     SupervisorService* supervisor = nullptr;

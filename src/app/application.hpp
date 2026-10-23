@@ -1,11 +1,13 @@
 #pragma once
 
 #include "core/config.hpp"
+#include "core/error.hpp"
 
 #include <atomic>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <thread>
 
 namespace edgedesk {
@@ -24,9 +26,16 @@ class FileLockManager;
 class SupervisorService;
 
 namespace extensions {
+class BackendProxy;
 class ExtensionRuntime;
+class NativeBackendInstaller;
+class NativeBackendLifecycle;
 class PackageManager;
 } // namespace extensions
+
+namespace supervisor {
+class SupervisorClient;
+} // namespace supervisor
 
 // Application owns every service for the process lifetime and wires them into
 // the HTTP server. Dependencies are explicit; no service singletons.
@@ -46,6 +55,9 @@ private:
     void initialize();
     void print_banner() const;
     void start_maintenance();
+    // Bounded stop used before an upgrade overwrites the stable backend
+    // executable. Returns an error when it cannot prove the process stopped.
+    Error stop_backend_for_upgrade(std::string_view app_id);
     // Signals the maintenance thread and makes the periodic wait return
     // immediately, so process shutdown never waits out a full interval.
     void request_stop();
@@ -71,6 +83,16 @@ private:
     std::unique_ptr<FileLockManager> file_locks_;
     std::unique_ptr<extensions::PackageManager> packages_;
     std::unique_ptr<extensions::ExtensionRuntime> extension_runtime_;
+    // SPEC-0011 native backend support. Installer/lifecycle are null when the
+    // extension platform is unavailable; all three are optional and never
+    // required by the pure Web application platform.
+    std::unique_ptr<extensions::NativeBackendInstaller> native_installer_;
+    std::unique_ptr<extensions::NativeBackendLifecycle> native_lifecycle_;
+    std::unique_ptr<extensions::BackendProxy> backend_proxy_;
+    // Dedicated client for the bounded upgrade stop hook. Kept separate from
+    // the async SupervisorService so upgrade can prove the process is stopped
+    // before overwriting the stable executable path.
+    std::unique_ptr<supervisor::SupervisorClient> backend_stop_client_;
     std::unique_ptr<SupervisorService> supervisor_service_;
 
     std::thread maintenance_;
