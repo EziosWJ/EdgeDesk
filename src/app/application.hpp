@@ -3,7 +3,9 @@
 #include "core/config.hpp"
 
 #include <atomic>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 namespace edgedesk {
@@ -44,6 +46,9 @@ private:
     void initialize();
     void print_banner() const;
     void start_maintenance();
+    // Signals the maintenance thread and makes the periodic wait return
+    // immediately, so process shutdown never waits out a full interval.
+    void request_stop();
 
     Config config_;
     std::unique_ptr<Auth> auth_;
@@ -69,6 +74,8 @@ private:
     std::unique_ptr<SupervisorService> supervisor_service_;
 
     std::thread maintenance_;
+    std::mutex maintenance_mutex_;
+    std::condition_variable maintenance_wakeup_;
     std::atomic<bool> stopping_{false};
     std::int64_t last_audit_prune_ = 0;
 };

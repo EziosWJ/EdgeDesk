@@ -435,20 +435,60 @@ file out/build/arm64-disk/bin/edgedesk   # ELF 64-bit ... ARM aarch64
 | 前端目视 | Playwright headless Chromium，`processes-1440.png` / `processes-390.png` | 1440×900 与 390×844 均已打开检查：进程列表、状态、PID、指标、配置与日志无溢出；窄屏 ID/时间行已修复为单行 |
 | init 静态检查 | `sh -n deploy/openrc/...`、`sh -n deploy/busybox/...`、`systemd-analyze verify ...` | 两个 shell 脚本语法通过；systemd 单元仅报告“二进制尚未安装”，未发现语法错误 |
 
-### 安装器实际执行记录（2026-10-22）
+### 安装器实际执行记录（2026-10-23）
+
+本地暂存与自动化测试：
 
 | 验证 | 命令 | 实际结果 |
 | --- | --- | --- |
 | 语法 | `sh -n deploy/install.sh`、`dash -n deploy/install.sh` | 两种 shell 均通过 |
 | init 探测 | `deploy/install.sh --detect` | 本机输出 `init=systemd`、`pid1=systemd`、`uid=1000`、`systemd=yes` |
-| 暂存安装测试 | `ctest -R install_script_test` | **23 项断言通过**：systemd/OpenRC/BusyBox 暂存安装、配置与 unit 内容、inittab `--force` 幂等、覆盖保护、`--no-supervisor`、端口/host/路径校验、dry-run 不落盘、uninstall/`--purge`、过宽 prefix 拒绝 |
-| L0 全量 | `scripts/test-fast.sh` | **25/25 通过**（新增 `install_script_test`），31 s |
-| L1 全量 | `scripts/test-pr.sh` | 前端 **153 个测试** + 构建、`dev-disk` 构建、**25/25 ctest**、完整集成套件通过，最终提交上 **155 s** |
-| systemd 静态校验 | `systemd-analyze verify`（仅把 `ExecStart` 临时指向暂存二进制） | 生成的 `edgedesk.service` 与 `edgedesk-supervisor.service` 无告警 |
+| 暂存安装测试 | `ctest -R install_script_test` | **24 项断言通过**：systemd/OpenRC/BusyBox 暂存安装、配置与 unit 内容、inittab `--force` 幂等、覆盖保护、`--no-supervisor`、端口/host/路径校验、dry-run 不落盘、uninstall/`--purge`、过宽 prefix 拒绝 |
+| script + bin/ 布局 | 测试用例与真机 dry-run | 无需 `--source`/`--force`；预置在目标目录的二进制被就地采用 |
+| L0 全量 | `scripts/test-fast.sh` | **25/25 通过**（含 `install_script_test`） |
+| L1 全量 | `scripts/test-pr.sh` | 前端 **153 个测试** + 构建、`dev-disk` 构建、**25/25 ctest**、完整集成套件通过 |
+| systemd 静态校验 | `systemd-analyze verify`（暂存二进制） | 生成的 web/supervisor unit 无告警 |
 | OpenRC/BusyBox 生成物 | `sh -n` 暂存的 init 脚本与 wrapper | 通过；`/etc/inittab` 仅生成一个受管块 |
 
-仍未执行：以 root 运行安装器、创建服务账号、`systemctl start` 后的真实监听与健康检查、
-OpenRC/BusyBox 真机启动/停止/respawn。当前会话没有免密 sudo，以上项目不得宣称通过。
+真机验证（Ubuntu 26.04 LTS，systemd，`root@192.168.1.74`）：
+
+| 验证 | 命令 | 实际结果 |
+| --- | --- | --- |
+| 真实安装 | `sh /opt/edgedesk/install.sh --force --yes --source /opt/edgedesk/bin --host 127.0.0.1 --port 8080` | 创建 `edgedesk` 系统账号；生成配置文件与两个 unit；两个服务 `enabled` 且 `active (running)` |
+| init 探测 | `install.sh --detect` | 主机装有 busybox 但 `inittab=no`，仍正确选择 `init=systemd` |
+| 健康检查 | `curl http://127.0.0.1:8080/api/health`；`curl /` | 200，`status=ok`、`service=edgedesk`、`phase=1`、`version=1.3.0`；`/` 返回 200（assets: embed） |
+| 运行身份 | `ps -o user,pid,cmd` | Web 后端为 `edgedesk`；Supervisor 为 `root` |
+| 权限与监听 | `stat`、`ss -ltnp` | 配置 `0640 root:edgedesk`；data/apps/state `0700 edgedesk`；Supervisor 状态 `0700 root`；socket `srw-rw---- root edgedesk`；仅监听 `127.0.0.1:8080` |
+| 重启韧性 | `systemctl restart edgedesk`、`systemctl restart edgedesk-supervisor` | 两次重启后 `/api/health` 均 200，两个服务均 `active` |
+| 安装后 unit 校验 | `systemd-analyze verify /etc/systemd/system/edgedesk*.service` | exit 0，无告警 |
+| 布局修复真机验证 | 上传新版脚本到 `/tmp/edgedesk-fix` 后 `--dry-run --init none` | 输出 `binary already at target: ...`，未写系统文件 |
+
+仍未执行：OpenRC/BusyBox 真机启动、停止与 respawn；systemd 真机 `--uninstall`
+（测试机保持安装状态）；ARM64/musl 目标上的安装器运行。安装器本身是 POSIX shell，
+但仍依赖目标机的 `useradd`/`addgroup`、`awk`、`sed` 等命令集，不能由 x86_64 结果外推。
+
+### 优雅退出耗时修复（2026-10-23）
+
+现象：前台 Ctrl+C 或 `systemctl stop/restart` 需要约 30 秒才退出。根因是
+`Application::start_maintenance()` 使用**局部** `condition_variable` 等待 30 秒维护周期，
+退出时只设置 `stopping_` 而没有 `notify`，`maintenance_.join()` 必须等满整个周期。
+
+修复：维护线程改用 `Application` 成员 `maintenance_mutex_`/`maintenance_wakeup_`，
+`request_stop()` 置位并 `notify_all`；周期工作不持锁执行，避免关停等待 sweep。
+启动横幅同时改为 “starting on”，绑定失败时额外打印
+“EdgeDesk failed to listen on <host>:<port> (error <n>)”。
+
+| 验证 | 命令 | 实际结果 |
+| --- | --- | --- |
+| 修复前复现（测试机） | 发送 `SIGINT` 并计时 | `shutdown_ms=29903` |
+| 修复后（宿主） | 同一脚本、`127.0.0.1:18081` | `shutdown_ms=9`～`10` |
+| 修复后（测试机 Ubuntu 26.04） | 上传新二进制到 `/tmp` 后同一脚本 | `shutdown_ms=13` |
+| 集成回归守卫 | `scripts/integration_test.sh`（新增 “graceful shutdown is prompt”） | 优雅退出 < 3 s 断言通过；`ctest` 25/25 |
+| 绑定失败诊断 | 非 root 绑定 `127.0.0.1:80` | 输出 `bind: Permission denied` 与新的失败说明；进程退出 |
+
+30 秒等待问题与低端口绑定无关：端口 80 失败是因为生成的服务以 `User=edgedesk`
+运行，Linux 要求 root 或 `CAP_NET_BIND_SERVICE` 才能绑定 1024 以下端口。
+安装器仍只允许回环地址；`0.0.0.0` 不会在未经安全设计评审时启用。
 
 Supervisor 集成测试（`scripts/supervisor_test.py`）实际覆盖：
 
@@ -478,9 +518,9 @@ Supervisor 集成测试（`scripts/supervisor_test.py`）实际覆盖：
 - **root 身份切换**：集成测试以 `uid=1000` 运行，未实际以 root 启动 Supervisor，也未验证
   跨 UID/GID 的 `setgroups`/`setgid`/`setuid` 失败清理。相关配置校验与拒绝路径有原生测试，
   但运行时身份切换没有证据。
-- **init 真机**：systemd、OpenRC、BusyBox 仅提供文件并做语法检查；安装器也只完成
-  暂存安装、生成物语法检查和 systemd 静态校验。未在真实 init 环境执行
-  启动、停止、Supervisor 崩溃后的 respawn，也未以 root 验证服务账号创建。不得视为平台验收通过。
+- **init 真机**：systemd 已在 Ubuntu 26.04 测试机完成真实安装、启停与重启验证
+  （见“安装器实际执行记录”）；OpenRC 与 BusyBox 仍只有生成物和语法检查，未在真实
+  init 环境执行启动、停止、Supervisor 崩溃后的 respawn。不得视为平台验收通过。
 - **真实 reboot**：未执行系统重启；boot ID 变化后的 `autostart` 行为只有代码路径和单元级
   构造测试，没有真实断电/重启证据。
 - **Buildroot/真实硬件、ARM32**：未构建、未运行。

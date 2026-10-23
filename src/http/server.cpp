@@ -143,10 +143,17 @@ int Server::run() {
     server.setThreadNum(config_.http_threads);
     server_handle_ = &server;
 
-    std::cout << "EdgeDesk " EDGEDESK_VERSION << " listening on http://" << config_.host << ":" << config_.port
+    std::cout << "EdgeDesk " EDGEDESK_VERSION << " starting on http://" << config_.host << ":" << config_.port
               << " (auth: " << auth_state_name(context_.auth->state()) << ", assets: "
               << (context_.web_root->embedded() ? "embed" : "disk") << ")" << std::endl;
     const int result = server.run();
+    if (result < 0) {
+        // libhv returns -errno when the listen socket cannot be created, for
+        // example EACCES for a privileged port opened by an unprivileged user.
+        std::cerr << "EdgeDesk failed to listen on " << config_.host << ":" << config_.port
+                  << " (error " << result
+                  << "); check port privileges and whether another process is using it" << std::endl;
+    }
     server_handle_ = nullptr;
     return result;
 }
