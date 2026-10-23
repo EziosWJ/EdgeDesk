@@ -145,7 +145,7 @@ private:
     std::string record_completed_operation(ServiceHandle& handle, std::string kind,
                                            std::int64_t now_ms, bool ok,
                                            std::string slug, std::string message);
-    void prune_operations();
+    void prune_operations(std::string_view keep = {});
     GroupProbe probe_group(const ServiceHandle& handle) const;
     bool group_alive(const ServiceHandle& handle) const;
     bool group_verifiable(const ServiceHandle& handle) const;

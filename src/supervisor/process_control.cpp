@@ -875,8 +875,8 @@ SpawnOutcome spawn_service(const ServiceConfig& config, const ResolvedIdentity& 
     for (int attempt = 0; attempt < 50; ++attempt) {
         ProcStat anchor_stat;
         if (read_proc_stat(anchor_pid, anchor_stat)) {
-            if (anchor_stat.start_ticks == 0 || anchor_stat.pgrp != pid ||
-                anchor_stat.session != pid) {
+            if (anchor_stat.start_ticks == 0 || anchor_stat.state == 'Z' ||
+                anchor_stat.pgrp != pid || anchor_stat.session != pid) {
                 break;
             }
             anchor_start_ticks = anchor_stat.start_ticks;

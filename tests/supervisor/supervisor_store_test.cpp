@@ -98,6 +98,17 @@ void expect_metadata_unchanged(const fs::path& path, const FileMetadata& before)
     CHECK(before.mtime_nsec == after.mtime_nsec);
 }
 
+// Permission-only comparison for shared ancestors such as /tmp, whose mtime
+// legitimately changes when concurrent tests create and remove temp entries.
+void expect_permissions_unchanged(const fs::path& path, const FileMetadata& before) {
+    const FileMetadata after = capture_metadata(path);
+    CHECK(before.valid);
+    CHECK(after.valid);
+    CHECK_EQ(static_cast<unsigned>(before.mode), static_cast<unsigned>(after.mode));
+    CHECK_EQ(static_cast<unsigned>(before.uid), static_cast<unsigned>(after.uid));
+    CHECK_EQ(static_cast<unsigned>(before.gid), static_cast<unsigned>(after.gid));
+}
+
 void rejected(const std::string& path, std::string& error,
               const std::string& expected_fragment = std::string()) {
     error.clear();
@@ -252,7 +263,7 @@ void test_private_directory_rejects_root_and_relative_paths() {
     rejected("///", error);
 
     expect_metadata_unchanged("/var", var_before);
-    expect_metadata_unchanged("/tmp", tmp_before);
+    expect_permissions_unchanged("/tmp", tmp_before);
 }
 
 void test_private_directory_rejects_dot_components() {
@@ -273,7 +284,7 @@ void test_private_directory_rejects_dot_components() {
     CHECK(!fs::exists("/tmp/edgedesk-psh03-nonexistent"));
 
     expect_metadata_unchanged("/var", var_before);
-    expect_metadata_unchanged("/tmp", tmp_before);
+    expect_permissions_unchanged("/tmp", tmp_before);
 
     std::error_code ignored;
     fs::remove_all(root, ignored);
@@ -308,7 +319,7 @@ void test_private_directory_rejects_symlink_components() {
     CHECK(!fs::exists(root / "missing"));
     expect_metadata_unchanged(real, real_before);
     expect_metadata_unchanged("/var", var_before);
-    expect_metadata_unchanged("/tmp", tmp_before);
+    expect_permissions_unchanged("/tmp", tmp_before);
 
     std::error_code ignored;
     fs::remove_all(root, ignored);
@@ -334,7 +345,7 @@ void test_private_directory_rejects_regular_files() {
     CHECK(fs::is_regular_file(file));
     expect_metadata_unchanged(file, file_before);
     expect_metadata_unchanged("/var", var_before);
-    expect_metadata_unchanged("/tmp", tmp_before);
+    expect_permissions_unchanged("/tmp", tmp_before);
 
     std::error_code ignored;
     fs::remove_all(root, ignored);
@@ -374,7 +385,7 @@ void test_private_directory_creates_nested_and_reopens() {
     check_permissions(root, 0755, ::geteuid());
 
     expect_metadata_unchanged("/var", var_before);
-    expect_metadata_unchanged("/tmp", tmp_before);
+    expect_permissions_unchanged("/tmp", tmp_before);
 
     std::error_code ignored;
     fs::remove_all(root, ignored);
@@ -423,7 +434,7 @@ void test_private_directory_rejects_wrong_owner() {
     std::string error;
     // /tmp is a directory owned by root; the helper must refuse without chmod.
     rejected("/tmp", error, "owned");
-    expect_metadata_unchanged("/tmp", tmp_before);
+    expect_permissions_unchanged("/tmp", tmp_before);
 }
 
 // PSH-03/PSH-04: the runtime row carries the sentinel identity, the durable

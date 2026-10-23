@@ -1113,6 +1113,15 @@ Error SupervisorEngine::spawn_locked(ServiceHandle& handle, std::int64_t now_ms)
     runtime.boot_id = boot_id_;
     clear_identity(handle);
     remove_exec_staging(handle);
+    // Automatic restarts call spawn_locked directly, so a still-open log pipe
+    // from the previous instance must be drained and released before the new
+    // descriptors overwrite it (otherwise the FD and the tail of its output are
+    // leaked on every restart).
+    if (handle.log_fd >= 0) {
+        drain_log(handle, kLogDrainBudget);
+        close_fd(handle.log_fd);
+    }
+    close_fd(handle.exec_fd);
     runtime.last_error.clear();
     error = save(handle);
     if (!error.ok()) {
@@ -1351,6 +1360,23 @@ void SupervisorEngine::complete_stop(ServiceHandle& handle, std::int64_t now_ms)
 void SupervisorEngine::schedule_restart(ServiceHandle& handle, std::int64_t now_ms) {
     auto& runtime = handle.record.runtime;
     const auto& config = handle.record.config;
+    if (runtime.desired_state != "running") {
+        // A stop request (including one that raced an UNKNOWN transition) wins
+        // over the restart policy; never resurrect a service the operator
+        // stopped.
+        runtime.state = ServiceState::stopped;
+        runtime.last_error.clear();
+        handle.pending_auto_restart = false;
+        handle.backoff_deadline_ms = 0;
+        handle.cleanup_deadline_ms = 0;
+        (void)save(handle);
+        return;
+    }
+    if (runtime.state == ServiceState::unknown) {
+        handle.pending_auto_restart = false;
+        handle.backoff_deadline_ms = 0;
+        return;
+    }
     if (handle.persistence_degraded) {
         // A previous runtime write failed; do not launch a replacement from a
         // record whose durable state may not match memory (PSH-04).
@@ -1486,6 +1512,8 @@ void SupervisorEngine::apply_exit(ServiceHandle& handle, bool failed, int exit_c
     }
 
     const bool want_restart =
+        runtime.desired_state == "running" &&
+        runtime.state != ServiceState::unknown &&
         restart_policy_wants_restart(handle.record.config.restart_policy, failed) &&
         !handle.persistence_degraded;
     if (!want_restart) {
@@ -1540,8 +1568,25 @@ void SupervisorEngine::handle_child_exit(ServiceHandle& handle, int status,
     auto& runtime = handle.record.runtime;
     const int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
     const int exit_signal = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
+    // poll() drains the exec pipe before waitpid, but it can see EAGAIN if the
+    // child fails execve after that drain and exits before the reap. The child
+    // is gone here, so a blocking read only returns buffered errno or EOF.
+    if (handle.exec_fd >= 0) {
+        unsigned char buffer[sizeof(int)] = {0};
+        ssize_t count = -1;
+        do {
+            count = ::read(handle.exec_fd, buffer, sizeof(buffer));
+        } while (count < 0 && errno == EINTR);
+        if (count == static_cast<ssize_t>(sizeof(int))) {
+            int value = 0;
+            std::memcpy(&value, buffer, sizeof(int));
+            handle.exec_failed = true;
+            handle.exec_error = "cannot start service: " + exec_error_message(value);
+            runtime.last_error = handle.exec_error;
+        }
+        close_fd(handle.exec_fd);
+    }
     runtime.pid = 0;
-    close_fd(handle.exec_fd);
     handle.adopted = false;
     handle.cpu_available = false;
     handle.rss_available = false;
@@ -1832,17 +1877,17 @@ std::string SupervisorEngine::record_completed_operation(ServiceHandle& handle,
     const std::string id = operation.id;
     operations_.emplace(id, std::move(operation));
     operation_order_.push_back(id);
-    prune_operations();
+    prune_operations(id);
     return id;
 }
 
-void SupervisorEngine::prune_operations() {
+void SupervisorEngine::prune_operations(std::string_view keep) {
     // Completed operations are evicted oldest-first even when an older pending
-    // operation sits at the front of the queue. The previous implementation
-    // stopped at the first pending entry, so a long-lived stop let every later
-    // completed operation accumulate without bound (PSH-06).
+    // operation sits at the front of the queue. The operation created by the
+    // current call is protected: removing it would make the caller's
+    // operations_.at(id) throw and terminate the daemon when all older entries
+    // are pending.
     if (operations_.size() <= kMaxRetainedOperations) {
-        // Still drop queue entries whose operation object is already gone.
         operation_order_.erase(
             std::remove_if(operation_order_.begin(), operation_order_.end(),
                            [this](const std::string& id) {
@@ -1858,10 +1903,7 @@ void SupervisorEngine::prune_operations() {
             it = operation_order_.erase(it);
             continue;
         }
-        if (found->second.state == "pending") {
-            // Necessary in-flight operations are never discarded. There are at
-            // most one stop and one restart per service, so this cannot grow
-            // without a corresponding service record.
+        if (found->second.state == "pending" || *it == keep) {
             ++it;
             continue;
         }
@@ -1905,7 +1947,6 @@ void SupervisorEngine::complete_pending(std::string_view id, std::int64_t now_ms
         }
         it = pending_.erase(it);
     }
-    prune_operations();
 }
 
 void SupervisorEngine::fail_pending(std::string_view id, std::string slug,
@@ -1921,7 +1962,6 @@ void SupervisorEngine::fail_pending(std::string_view id, std::string slug,
         }
         it = pending_.erase(it);
     }
-    prune_operations();
 }
 
 bool SupervisorEngine::unverified_process_may_exist(const ServiceHandle& handle) const {
@@ -2072,6 +2112,50 @@ void SupervisorEngine::run_timers(std::int64_t now_ms) {
                     runtime.state = ServiceState::stopped;
                     clear_identity(handle);
                     (void)save(handle);
+                }
+                continue;
+            }
+            // A stop intent or a runtime persistence failure must not re-arm the
+            // backoff cleanup on every poll. Move to an explicit cleanup or
+            // terminal state instead; a failing save resets the backoff
+            // deadlines, which would otherwise make poll_timeout_ms return 0
+            // and spin the event loop.
+            if (runtime.desired_state != "running" || handle.persistence_degraded) {
+                const GroupProbe probe = probe_group(handle);
+                handle.pending_auto_restart = false;
+                handle.cleanup_deadline_ms = 0;
+                handle.backoff_deadline_ms = 0;
+                if (probe.state == GroupState::verified) {
+                    runtime.state = ServiceState::stopping;
+                    handle.restart_after_stop = false;
+                    handle.stop_kill_sent = false;
+                    handle.stop_term_deadline_ms =
+                        now_ms + handle.record.config.stop_timeout_ms;
+                    handle.stop_verify_deadline_ms =
+                        handle.stop_term_deadline_ms + kStopKillGraceMs;
+                    std::string signal_error;
+                    (void)signal_service_group(probe, SIGTERM, signal_error);
+                    (void)save(handle);
+                } else if (probe.state == GroupState::anchor_only) {
+                    runtime.state = ServiceState::stopping;
+                    handle.restart_after_stop = false;
+                    handle.stop_kill_sent = false;
+                    handle.stop_term_deadline_ms = now_ms;
+                    handle.stop_verify_deadline_ms = now_ms + kStopKillGraceMs;
+                    (void)save(handle);
+                } else if (probe.state == GroupState::absent) {
+                    runtime.state = ServiceState::stopped;
+                    clear_identity(handle);
+                    remove_exec_staging(handle);
+                    (void)save(handle);
+                } else {
+                    runtime.state = ServiceState::unknown;
+                    runtime.desired_state = "stopped";
+                    runtime.last_error =
+                        "cannot verify the process group while disabling restart: " +
+                        probe.detail;
+                    (void)save(handle);
+                    fail_pending(item.first, "service_unknown", runtime.last_error);
                 }
                 continue;
             }

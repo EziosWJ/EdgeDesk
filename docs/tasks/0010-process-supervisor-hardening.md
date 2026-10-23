@@ -82,5 +82,6 @@ PSH-01 与 PSH-03 可以并行；PSH-07 与 PSH-08 可独立实施。涉及进�
 以下内容仍不可宣称完成：
 
 - OpenRC、BusyBox init 的真实启动、停止、Supervisor 崩溃 respawn 与 reboot 语义。
-- ARM64/QEMU 与 Bootlin musl 交叉构建在本轮未重跑；本轮仅验证 x86_64 musl static-pie。
+- ARM64/QEMU 已由 CI `arm64-cross`（Bootlin musl + qemu 集成套件）在 commit `8cf3ac2`
+  通过；未在真实 ARM64 硬件运行。
 - 真实硬件断电、文件系统损坏与磁盘满故障注入（只做了 SQLite 写入失败的注入测试）。

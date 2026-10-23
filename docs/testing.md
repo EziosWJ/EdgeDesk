@@ -549,6 +549,8 @@ Supervisor 集成测试（`scripts/supervisor_test.py`）实际覆盖：
 | `test_incomplete_start_is_not_auto_started` | PSH-04 | `STARTING` 且无身份的重启行被标记 `FAILED`，不会因陈旧 `desired_state` 自动启动 |
 | `test_persistence_marker_blocks_autostart` | PSH-04 | 持久化标记抑制新 boot 的 autostart；归一成功后标记清除 |
 | `test_persistence_failure_disables_auto_restart` | PSH-04 | 运行期写失败后自动重启被禁用；下一次 Supervisor 启动不恢复陈旧 running 意图 |
+| `test_persistent_failure_does_not_spin` | PSH-04 | 持续写失败 + TERM 免疫后代时转入 STOPPING/终态，不反复 SIGTERM/空转，后代被清理 |
+| `test_unknown_is_not_auto_restarted` | PSH-02/05 | anchor 丢失进入 UNKNOWN（desired=stopped）后 leader 退出，policy=always 不启动替代实例 |
 | `test_operation_pruning_with_pending_front` | PSH-06 | 队首 pending 不会阻塞旧的已完成操作裁剪 |
 | `test_orphan_cleanup_with_never_policy` | PSH-02 | `never` 策略下 leader 退出的忽略 TERM 后代仍被清理 |
 | `supervisor_store_test::test_marker_and_schema_v2` | PSH-03/04 | 标记文件、anchor 列持久化、v1→v2 前向迁移 |
@@ -577,8 +579,10 @@ OpenRC/BusyBox、ARM64/QEMU 与 Bootlin musl 交叉构建仍未执行，不得�
 - **真实 reboot（PSH-10）**：已执行真实 `systemctl reboot` 并验证 boot ID 变化后的
   autostart 与人工停止语义。
 - **Buildroot/真实硬件、ARM32**：未构建、未运行。
-- **qemu-user aarch64**：CI 交叉构建并运行集成套件；本机无 qemu，未在本地重跑。
-  sentinel 在 `CLONE_PARENT` 返回 EINVAL 时回退为 `fork()`（见 ADR-0019 §1）。
+- **qemu-user aarch64**：CI 交叉构建并运行完整集成套件；commit `8cf3ac2` 的
+  `arm64-cross` job 已通过。早期 `74b0030` 的该 job 暴露 qemu-user 拒绝
+  `CLONE_PARENT`（EINVAL），已加入 `fork()` 回退（见 ADR-0019 §1）。本机无 qemu，
+  未在本地重跑。
 - **压力（PSH-11）**：已在隔离实例执行 30 分钟 / 1,000+ 生命周期操作；真实硬件长期
   运行与文件系统损坏注入仍未执行。
 - **systemd/OpenRC/BusyBox 之外的发行版与容器环境**：未验证。
@@ -609,7 +613,8 @@ OpenRC/BusyBox、ARM64/QEMU 与 Bootlin musl 交叉构建仍未执行，不得�
 | 最终二进制部署 | `/bin/sleep`（Ubuntu coreutils multicall）+ anchor FD 检查 | 13/13：staging 0711、`AT_EXECFN` 保留、anchor 提交后 0 FD、comm=`edgedesk-anchor` |
 | systemd（B，最终二进制） | `systemctl restart/stop/start`、`kill -9` Supervisor | 24/24：graceful restart 重启服务；SIGKILL 后 2 s respawn 并以原 PID 接管；stop/start 恢复 `desired_state=running` |
 | 真实 reboot（最终二进制） | `systemctl reboot`，SSH 恢复后重新验证 | 19/19：新 boot ID `f80646e8-…`、autostart 启动、人工停止保持、DB v2/quick_check、anchor 重建 |
-| 压力（C） | 隔离实例，7 类并发 worker，1,000+ 操作 / 30 分钟 | 结果见 SPEC-0010 §6；结束后无测试进程、无 anchor、SQLite 完整、资源有界 |
+| 压力（C，隔离实例） | 隔离实例，7 类并发 worker，1,000+ 操作 / 30 分钟 | 结果见 SPEC-0010 §6；结束后无测试进程、无 anchor、SQLite 完整、资源有界 |
+| CI（GitHub Actions） | run `39974939274`（commit `8cf3ac2`） | frontend、host-build、x86_64-musl-static、gcc15-embed、arm64-cross 全部 `success` |
 
 ### root/权限验收细节
 

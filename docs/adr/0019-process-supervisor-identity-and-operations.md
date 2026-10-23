@@ -78,7 +78,8 @@ aarch64 CI 返回 EINVAL）上，sentinel 用普通 `fork()` 创建。它仍继�
 
 停止/重启同样先持久化 `desired_state=stopped`（或重启意图）再发信号。
 持久化失败时返回错误、不发送信号、不自动拉起新实例，并在数据目录写入
-`.persistence-inconsistent` 持久标记；下一次 Supervisor 启动时按 §4 处理该标记，
+`.persistence-inconsistent` 持久标记；backoff 清理遇到持续写失败时转入显式
+STOPPING/终态（而不是每轮重新 arm），仍会按停止策略清理幸存进程组；下一次 Supervisor 启动时按 §4 处理该标记，
 成功归一所有记录后才清除。`STARTING` 且没有 PID/starttime 的记录按“中断启动”处理，
 不会因陈旧的 `desired_state=running` 自动启动。
 
@@ -104,9 +105,9 @@ aarch64 CI 返回 EINVAL）上，sentinel 用普通 `fork()` 创建。它仍继�
 - 通过 `service.operation.get` / `GET /api/supervisor/operations/{id}` 查询。
 - 同一服务同一类型的 pending 操作重复提交返回同一个 `operation_id`；
   人工 stop 会取代 pending restart。
-- 已完成的操作用于查询保留，内存中最多保留 256 条；裁剪跳过 pending 并优先驱逐最旧的
-  已完成操作。pending 数量受每个服务至多一个 stop/restart 约束；Supervisor 重启后不保留
-  历史操作。
+- 已完成的操作用于查询保留，内存中最多保留 256 条；裁剪跳过 pending、保护当前调用
+  刚创建的操作，并优先驱逐最旧的已完成操作。pending 数量受每个服务至多一个 stop/restart
+  约束；Supervisor 重启后不保留历史操作。
 - 操作超时（`operation_timeout`）只表示查询方停止等待，不表示停止/清理已失败或已取消。
   WebSocket/HTTP 断开、页面刷新、后端重启都不会取消守护进程内的清理动作。
 - 停止/清理完成前，服务保持 `STOPPING`/`BACKOFF`；成功后才回到 `STOPPED`。

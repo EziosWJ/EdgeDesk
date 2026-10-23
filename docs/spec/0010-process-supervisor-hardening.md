@@ -177,12 +177,12 @@
 
 | Ticket | 状态 | 实现要点 | 已执行证据 |
 |---|---|---|---|
-| PSH-01 | 已实现 | 每个实例创建根权限 sentinel（`CLONE_PARENT`、独立 64 KiB 栈、关闭全部继承 FD、`PR_SET_NAME=edgedesk-anchor`、屏蔽全部可捕获信号）。`probe_service_group()` 返回 `verified`/`anchor_only`/`absent`/`uncertain`；sentinel 存活期间内核无法复用 PGID，因此 `kill(-pgid)` 不再存在检查/发信号窗口。旧实例（无 anchor）只在已核验 leader 存活时允许发信号，后代单独存活时 fail closed | `process_control_test`（leader/PID 复用、boot ID、anchor 身份不匹配、anchor_only 仅允许 SIGKILL、sentinel FD/comm）；`supervisor_engine_test` 的恢复/后代/竞态用例 |
-| PSH-02 | 已实现 | leader 退出后保留组身份；`never`/`on-failure`/`always`、人工 stop 与 shutdown 都先清理后代；anchor_only 立即 SIGKILL 回收 sentinel；清理完成前不启动第二实例 | `test_descendant_cleanup_before_restart`、`test_orphan_cleanup_with_never_policy`、`test_operation_contract`；VM 孤儿脚本（TERM 免疫后代） |
+| PSH-01 | 已实现 | 每个实例创建根权限 sentinel（`CLONE_PARENT`，不支持时回退 `fork()`；独立 64 KiB 栈、关闭全部继承 FD、`PR_SET_NAME=edgedesk-anchor`、屏蔽全部可捕获信号）。`probe_service_group()` 返回 `verified`/`anchor_only`/`absent`/`uncertain`；sentinel 存活期间内核无法复用 PGID，因此 `kill(-pgid)` 不再存在检查/发信号窗口。旧实例（无 anchor）只在已核验 leader 存活时允许发信号，后代单独存活时 fail closed | `process_control_test`（leader/PID 复用、boot ID、anchor 身份不匹配、anchor_only 仅允许 SIGKILL、sentinel FD/comm）；`supervisor_engine_test` 的恢复/后代/竞态用例；arm64 qemu CI 覆盖 `fork()` 回退 |
+| PSH-02 | 已实现 | leader 退出后保留组身份；`never`/`on-failure`/`always`、人工 stop 与 shutdown 都先清理后代；anchor_only 立即 SIGKILL 回收 sentinel；`desired_state=stopped` 或 `UNKNOWN` 的服务即使 policy=always 也不会被自动拉起；清理完成前不启动第二实例 | `test_descendant_cleanup_before_restart`、`test_orphan_cleanup_with_never_policy`、`test_unknown_is_not_auto_restarted`、`test_operation_contract`；VM 孤儿脚本（TERM 免疫后代） |
 | PSH-03 | 已实现 | 数据目录逐级 `openat`/`mkdirat`/`O_NOFOLLOW`；SQLite 通过 `/proc/self/fd/<dirfd>/<basename>` 打开（目录 inode 固定；打开后重命名只会 fail closed，绝不会写入替换路径）；日志全部使用 `openat`/`renameat`/`unlinkat`，拒绝符号链接/非普通文件/FIFO；组/世界可写目录失败 | `supervisor_store_test`（系统祖先不变、符号链接/普通文件/FIFO、v1→v2、目录替换）、`supervisor_log_store_test`（目录替换、FIFO、轮转）、VM 权限检查 |
-| PSH-04 | 已实现 | 启动意图→阻塞子进程→持久化 leader+anchor 身份→释放；停止先持久化意图；`save()` 失败触发 `.persistence-inconsistent` 持久标记与 `persistence_degraded`，禁止自动重启；重启时 `STARTING` 且无身份视为中断启动，不因陈旧 `desired_state` 自动拉起；标记在全部记录成功归一后清除 | `test_persistence_failure_is_fail_closed`、`test_incomplete_start_is_not_auto_started`、`test_persistence_marker_blocks_autostart`、`test_persistence_failure_disables_auto_restart`、`test_marker_and_schema_v2` |
+| PSH-04 | 已实现 | 启动意图→阻塞子进程→持久化 leader+anchor 身份→释放；停止先持久化意图；`save()` 失败触发 `.persistence-inconsistent` 持久标记与 `persistence_degraded`，禁止自动重启；持续写失败时 backoff 清理转入显式 STOPPING/终态，避免每轮重新 arm 造成总线循环；`STARTING` 且无身份视为中断启动；重启后不因陈旧 `desired_state` 自动拉起；标记在全部记录成功归一后清除 | `test_persistence_failure_is_fail_closed`、`test_incomplete_start_is_not_auto_started`、`test_persistence_marker_blocks_autostart`、`test_persistence_failure_disables_auto_restart`、`test_persistent_failure_does_not_spin`、`test_marker_and_schema_v2` |
 | PSH-05 | 已实现 | 同 boot 优先 `desired_state`；中断的 STOPPING/BACKOFF 继续清理；身份不可验证→`UNKNOWN`；anchor 身份参与恢复 | `test_interrupted_stop_recovery`、`test_recovery_unverifiable_identity`、`test_manual_stop_survives_supervisor_restart`、集成 `after-supervisor-restart` |
-| PSH-06 | 已实现 | stop/restart 返回 `operation_id`；`service.operation.get`；重复提交幂等；清理裁剪会跳过 pending 并驱逐最旧已完成操作；pending 数量受每个服务至多一个 stop/restart 约束 | `test_operation_contract`、`test_operation_retention_bound`、`test_operation_pruning_with_pending_front`、VM 320 次已完成操作 + 长 pending 检查 |
+| PSH-06 | 已实现 | stop/restart 返回 `operation_id`；`service.operation.get`；重复提交幂等；清理裁剪会跳过 pending、保护当前调用刚创建的操作并驱逐最旧已完成操作；pending 数量受每个服务至多一个 stop/restart 约束 | `test_operation_contract`、`test_operation_retention_bound`、`test_operation_pruning_with_pending_front`、VM 320 次已完成操作 + 长 pending 检查；审查修复了 >256 pending 时裁剪新操作的崩溃路径 |
 | PSH-07 | 已实现 | 只打开一次可执行文件，检查与执行使用同一 inode；为保留 `AT_EXECFN`/comm 语义，在私有 root 所属 staging 目录创建以原 basename 命名的符号链接，目标为该已验证 FD（`fexecve` 会让 multicall 程序看到 FD 号）；解释器缺失/过长 shebang/非绝对/组或世界可写、FIFO、目录均在 fork 前失败 | `test_shebang_script_start`、`test_script_inode_and_argv`（参数数组中带空格/元字符、解释器参数、长 shebang、FIFO）、VM 上 Ubuntu coreutils multicall 的 `sleep`/`true` |
 | PSH-08 | 已实现 | 只读日志轮询不写审计；管理操作与 root 拒绝仍审计 | 集成 `supervisor_test.py` 40 次轮询断言、`integration_test.sh` 审计检查 |
 | PSH-09 | **已验证（Ubuntu 26.04）** | root Supervisor 切换 UID/GID/补充组；非 root 服务、root 服务显式确认、无效用户拒绝、SIGTERM/SIGKILL、子进程清理 | 46/46 VM 检查：`/proc/<pid>/status` Uid/Gid、`id -G`、cwd、anchor Uid=0、unrelated 进程存活、socket 0660 root:pshclients、`SO_PEERCRED` 拒绝 uid=994/gid=1000 |
@@ -200,6 +200,11 @@
   supervisor 日志审计）全部通过，86 s。
 - `cmake --build --preset release-embed` + `ctest --preset release-embed`：26/26 通过，
   生成的 `edgedesk`/`edgedesk-supervisor` 为 static-pie。
+- `cmake --build --preset release-embed-arm64`：交叉构建通过；CI `arm64-cross`
+  在 commit `8cf3ac2` 完成 qemu 集成套件（早期 `74b0030` 暴露的 `CLONE_PARENT`
+  EINVAL 已由 `fork()` 回退修复）。
+- GitHub Actions run `39974939274`（commit `8cf3ac2`）：frontend、host-build、
+  x86_64-musl-static、gcc15-embed、arm64-cross 五个 job 全部 `success`。
 
 虚拟机：
 
@@ -223,6 +228,7 @@
 
 - OpenRC 与 BusyBox init 的真实启停/respawn/reboot 未在目标机执行（虚拟机为 systemd）；
   对应适配器只有安装器静态/暂存测试，不能据此宣称通过。
-- ARM64/QEMU、Bootlin musl 与 `release-embed-arm64` 未在本轮重跑；本轮只验证了
-  x86_64 musl static-pie 与宿主 glibc 构建。
+- ARM64/QEMU：CI `arm64-cross`（Bootlin aarch64 musl + qemu 集成套件）已在 commit
+  `8cf3ac2` 通过；未在真实 ARM64 硬件运行。本地验证了 `release-embed-arm64` 交叉
+  构建，未本地运行 qemu。
 - 真实硬件重启、电源故障和文件系统损坏注入未执行。
