@@ -32,17 +32,23 @@ class BackendProxy {
 public:
     using Callback = std::function<void(Error, BackendHttpResponse)>;
 
+    // `timeout_ms` bounds connect + write + read for one request. It exists as
+    // an explicit parameter so tests can use a short, deterministic deadline;
+    // production uses the V1 default of 10 s.
     BackendProxy(ExtensionStore& store, std::string apps_root, std::size_t workers = 2,
-                 std::size_t queue_limit = 32);
+                 std::size_t queue_limit = 32, int timeout_ms = 10000);
     ~BackendProxy();
 
     BackendProxy(const BackendProxy&) = delete;
     BackendProxy& operator=(const BackendProxy&) = delete;
 
-    // Validates `params` (method/path/body/contentType) and submits the request
-    // to the backend bound to `session.app_id`. Returns false only when the
-    // bounded queue is full or the pool is stopping. Never trusts a caller
-    // supplied appId, socket path, host or port.
+    // Validates `params` (method/path/body/contentType, no other keys) and
+    // submits the request to the backend bound to `session.app_id`. Invalid
+    // input completes the callback with ErrorCode::invalid_argument and still
+    // returns true; false means only "queue full" or "pool stopping". The
+    // callback runs on a worker, except for validation failures, which are
+    // reported synchronously before anything is enqueued. Never trusts a
+    // caller supplied appId, socket path, host or port.
     bool submit(const RuntimeSession& session, nlohmann::json params, Callback callback);
 
     std::size_t pending() const;
