@@ -19,6 +19,15 @@ class ExtensionStore;
 class PackageManager;
 class NativeBackendInstaller;
 
+// Lifecycle failures carry a stable machine-readable slug as a message
+// prefix ("<slug>: <actionable text>"). This keeps the shared Error type while
+// letting HTTP routes report stable codes such as backend_identity_required
+// instead of a generic "conflict"/"invalid_argument". backend_error() builds
+// such an Error; the two accessors split it again.
+Error backend_error(ErrorCode code, std::string_view slug, std::string message);
+std::string backend_error_slug(const Error& error, std::string_view fallback);
+std::string backend_error_message(const Error& error);
+
 class NativeBackendLifecycle {
 public:
     NativeBackendLifecycle(ExtensionStore& store, PackageManager& packages,

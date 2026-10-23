@@ -259,7 +259,8 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 
 ### 原生后端管理（SPEC-0011）
 
-纯 Web 应用（manifest 无 `backend`）不产生 Supervisor 服务，以上后端端点返回
+纯 Web 应用（manifest 无 `backend`）不产生 Supervisor 服务；`GET .../backend` 返回
+`200 {"backend":{"present":false,"reason":"..."}}`，其余后端管理端点返回
 `409 backend_not_configured`。
 
 | 方法 | 路径 | 说明 |
@@ -272,7 +273,8 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 
 后端错误 slug：`backend_not_configured`、`backend_not_running`、`backend_unavailable`、
 `backend_timeout`、`backend_protocol_error`、`backend_identity_required`、`backend_arch_mismatch`、
-`backend_upgrade_failed`。运行身份、Socket 权限、架构或 Supervisor 不可用均不得返回成功。
+`backend_upgrade_failed`、`backend_permission_denied`、`backend_running`、`backend_app_disabled`、
+`backend_root_not_allowed`、`supervisor_busy`。运行身份、Socket 权限、架构或 Supervisor 不可用均不得返回成功。
 
 终端输入/输出仍通过宿主页面已有的 `/ws/terminal` 中继到应用；`terminal.access` 权限快照由
 宿主桥接与运行时端点共同检查。会话创建/关闭/列表写审计，不记录原始终端输入输出。
