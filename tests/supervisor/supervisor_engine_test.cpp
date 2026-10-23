@@ -332,13 +332,21 @@ void test_backoff_delay_grows() {
     std::vector<std::int64_t> backoff_durations;
     std::int64_t backoff_started = 0;
     std::string previous_state;
+    // Drive poll() with a synthetic clock. Measuring the BACKOFF window with
+    // real time makes the assertion depend on scheduler latency: if the test
+    // thread is descheduled just before it observes BACKOFF, the measured
+    // window collapses below the configured delay. The engine derives every
+    // timer from the now_ms passed to poll(), so advancing a fixed step per
+    // iteration makes the measurement deterministic under any load.
+    std::int64_t synthetic_now = steady_millis();
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(kPollTimeoutMs);
     while (std::chrono::steady_clock::now() < deadline) {
-        (void)harness.engine->poll(steady_millis());
+        synthetic_now += 5;
+        (void)harness.engine->poll(synthetic_now);
         const json record = get_record(harness, id);
         const std::string state = record.value("state", std::string());
-        const std::int64_t now = steady_millis();
+        const std::int64_t now = synthetic_now;
         if (state == "BACKOFF" && previous_state != "BACKOFF") {
             backoff_started = now;
         } else if (state != "BACKOFF" && previous_state == "BACKOFF" &&
