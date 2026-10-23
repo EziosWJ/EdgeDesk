@@ -1,5 +1,7 @@
 # EdgeDesk deployment adapters and installer
 
+> 中文版：[README.zh-CN.md](README.zh-CN.md)
+
 `deploy/install.sh` is the supported way to install EdgeDesk on a Linux host.
 It is a POSIX `sh` script (runs under dash, bash and BusyBox ash) and performs
 only four kinds of work:
