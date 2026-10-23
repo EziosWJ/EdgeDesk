@@ -44,6 +44,7 @@ export type FileSystemMock = {
   deleted: string[];
   renames: { from: string; to: string }[];
   createdDirs: string[];
+  createdFiles: string[];
   /** Fail every listing of this path until cleared. */
   failListing(path: string, message: string): void;
   clearListingFailure(path: string): void;
@@ -57,6 +58,7 @@ export function createFileSystemMock(tree: Record<string, MockNode[]>): FileSyst
   const deleted: string[] = [];
   const renames: { from: string; to: string }[] = [];
   const createdDirs: string[] = [];
+  const createdFiles: string[] = [];
   const listingFailures = new Map<string, string>();
   let deleteFailure: string | null = null;
 
@@ -107,6 +109,22 @@ export function createFileSystemMock(tree: Record<string, MockNode[]>): FileSyst
       tree[target] = tree[target] ?? [];
       createdDirs.push(target);
       return { status: 201, payload: { ok: true, path: target } };
+    }
+    if (parsed.pathname === '/api/files/create' && method === 'POST') {
+      const target = String((JSON.parse(body ?? '{}') as { path?: string }).path ?? '');
+      const dir = parentPath(target);
+      const name = baseName(target);
+      const siblings = tree[dir] ?? [];
+      if (siblings.some((node) => node.name === name)) {
+        return {
+          status: 409,
+          payload: { ok: false, error: 'already_exists', message: `file already exists: ${target}` },
+        };
+      }
+      const node: MockNode = { name, type: 'file', size: 0 };
+      tree[dir] = [...siblings, node];
+      createdFiles.push(target);
+      return { status: 201, payload: { ok: true, path: target, entry: toEntry(dir, node) } };
     }
     if (parsed.pathname === '/api/files/rename' && method === 'POST') {
       const { from, to } = JSON.parse(body ?? '{}') as { from: string; to: string };
@@ -171,6 +189,7 @@ export function createFileSystemMock(tree: Record<string, MockNode[]>): FileSyst
     deleted,
     renames,
     createdDirs,
+    createdFiles,
     failListing: (path, message) => listingFailures.set(path, message),
     clearListingFailure: (path) => listingFailures.delete(path),
     failNextDelete: (message) => {

@@ -160,6 +160,38 @@ void test_stat(Fixture& fixture) {
     CHECK_EQ(static_cast<int>(error.code), static_cast<int>(ErrorCode::not_found));
 }
 
+void test_create_file(Fixture& fixture) {
+    FileEntry entry;
+    Error error = fixture.service->create_file("/created.txt", entry);
+    CHECK(error.ok());
+    CHECK(fs::is_regular_file(fixture.root / "created.txt"));
+    CHECK_EQ(fs::file_size(fixture.root / "created.txt"), std::uintmax_t{0});
+    CHECK_STR_EQ(entry.name, "created.txt");
+    CHECK_STR_EQ(entry.path, "/created.txt");
+    CHECK(entry.is_file);
+
+    // Creation is non-destructive: an existing entry is never replaced.
+    std::ofstream existing(fixture.root / "created.txt");
+    existing << "keep";
+    existing.close();
+    error = fixture.service->create_file("/created.txt", entry);
+    CHECK(!error.ok());
+    CHECK_EQ(static_cast<int>(error.code), static_cast<int>(ErrorCode::already_exists));
+    CHECK_EQ(fs::file_size(fixture.root / "created.txt"), std::uintmax_t{4});
+    error = fixture.service->create_file("/docs", entry);
+    CHECK(!error.ok());
+    CHECK_EQ(static_cast<int>(error.code), static_cast<int>(ErrorCode::already_exists));
+
+    // Invalid targets are rejected without creating anything.
+    error = fixture.service->create_file("/../escape.txt", entry);
+    CHECK(!error.ok());
+    CHECK(!fs::exists(fixture.root.parent_path() / "escape.txt"));
+    error = fixture.service->create_file("/missing/new.txt", entry);
+    CHECK(!error.ok());
+    error = fixture.service->create_file("/", entry);
+    CHECK(!error.ok());
+}
+
 void test_mkdir_rename_delete(Fixture& fixture) {
     Error error = fixture.service->mkdir("/newdir");
     CHECK(error.ok());
@@ -451,10 +483,12 @@ void test_protected_paths(const fs::path& root, FileService& admin) {
     denied(service.write_text("/guard-open/alias.txt", "tampered", true, entry));
     content_unchanged();
 
-    // mkdir.
+    // mkdir / create file.
     denied(service.mkdir("/guard/newdir"));
     CHECK(!fs::exists(root / "guard" / "newdir"));
     denied(service.mkdir("/guard"));
+    denied(service.create_file("/guard/newfile.txt", entry));
+    CHECK(!fs::exists(root / "guard" / "newfile.txt"));
 
     // rename: source protected, destination protected, hard-link alias.
     denied(service.rename("/guard/secret.txt", "/guard-open/moved.txt", false));
@@ -495,6 +529,8 @@ void test_protected_paths(const fs::path& root, FileService& admin) {
     // Canonical guard for a credential file that did not exist when the
     // sandbox was constructed.
     denied(service.write_text("/guard-open/lazy-token", "secret", true, entry));
+    CHECK(!fs::exists(lazy_token));
+    denied(service.create_file("/guard-open/lazy-token", entry));
     CHECK(!fs::exists(lazy_token));
     denied(service.begin_upload("/guard-open/lazy-token", upload));
     CHECK(!upload.active());
@@ -547,6 +583,7 @@ int main() {
     if (!fixture.sandbox || !fixture.service) return edgedesk::test::finish("file_service_test");
     test_list(fixture);
     test_stat(fixture);
+    test_create_file(fixture);
     test_mkdir_rename_delete(fixture);
     test_text_roundtrip(fixture);
     test_upload(fixture);

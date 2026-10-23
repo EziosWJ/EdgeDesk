@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   Download,
+  FilePlus,
   FolderPlus,
   LayoutGrid,
   List,
@@ -48,6 +49,7 @@ type Props = {
   loading: boolean;
   onRefresh: () => void;
   selection: ToolbarSelection | null;
+  onNewFile: () => void;
   onNewFolder: () => void;
   onUpload: () => void;
   onOpenTerminal: () => void;
@@ -71,6 +73,7 @@ export function FileToolbar({
   loading,
   onRefresh,
   selection,
+  onNewFile,
   onNewFolder,
   onUpload,
   onOpenTerminal,
@@ -112,7 +115,11 @@ export function FileToolbar({
         <nav className="ed-breadcrumbs" aria-label="当前路径">
           {breadcrumbs.map((crumb, index) => (
             <span key={crumb.target}>
-              {index > 0 && <span className="ed-crumb-sep">/</span>}
+              {/* The root crumb already renders as "/": a separator after it
+                  would read as a duplicated "//" before the first segment. */}
+              {index > 0 && breadcrumbs[index - 1].label !== '/' && (
+                <span className="ed-crumb-sep">/</span>
+              )}
               <button
                 type="button"
                 onClick={() => onNavigate(crumb.target)}
@@ -199,6 +206,10 @@ export function FileToolbar({
               <button type="button" className="ed-button primary ed-action-upload" onClick={onUpload}>
                 <Icon icon={Upload} size={15} />
                 上传文件
+              </button>
+              <button type="button" className="ed-button" onClick={onNewFile}>
+                <Icon icon={FilePlus} size={15} />
+                新建文件
               </button>
               <button type="button" className="ed-button" onClick={onNewFolder}>
                 <Icon icon={FolderPlus} size={15} />

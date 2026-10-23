@@ -130,6 +130,26 @@ int handle_mkdir(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     return http::write_json(resp, 201, result);
 }
 
+int handle_create_file(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
+    hv::Json body;
+    Error error;
+    if (!http::parse_json_request(req, body, error)) return http::write_error(resp, error);
+    const std::string path = body.value("path", "");
+    if (path.empty()) return http::write_error(resp, 400, "invalid_argument", "field 'path' is required");
+    FileEntry entry;
+    error = ctx.files->create_file(path, entry);
+    if (!error.ok()) {
+        ctx.audit->record("file.create", "denied", error.message, http::client_ip(*ctx.config, req), path);
+        return http::write_error(resp, error);
+    }
+    ctx.audit->record("file.create", "ok", "", http::client_ip(*ctx.config, req), path);
+    hv::Json result;
+    result["ok"] = true;
+    result["path"] = path;
+    result["entry"] = http::file_entry_json(entry);
+    return http::write_json(resp, 201, result);
+}
+
 int handle_rename(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     hv::Json body;
     Error error;
@@ -384,6 +404,8 @@ void register_file_routes(hv::HttpService& router, RouteContext& ctx) {
                [&ctx](HttpRequest* req, HttpResponse* resp) { return handle_write_text(ctx, req, resp); });
     router.POST("/api/files/mkdir",
                 [&ctx](HttpRequest* req, HttpResponse* resp) { return handle_mkdir(ctx, req, resp); });
+    router.POST("/api/files/create",
+                [&ctx](HttpRequest* req, HttpResponse* resp) { return handle_create_file(ctx, req, resp); });
     router.POST("/api/files/rename",
                 [&ctx](HttpRequest* req, HttpResponse* resp) { return handle_rename(ctx, req, resp); });
     router.POST("/api/files/delete",

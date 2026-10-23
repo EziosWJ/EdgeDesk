@@ -71,6 +71,7 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 | `GET` | `/api/files/download` | `path`，可选 `Range`/`If-Range` | 流式下载；支持单段 Range（`206`/`416`），`Accept-Ranges: bytes`，带 `ETag`/`Last-Modified`。 |
 | `HEAD` | `/api/files/download` | 同上 | 仅返回头。 |
 | `POST` | `/api/files/mkdir` | `{"path":"/a/b"}` | 新建目录；已存在 `409`。 |
+| `POST` | `/api/files/create` | `{"path":"/a/b.txt"}` | 新建空文件（`O_CREAT\|O_EXCL`）；已存在 `409`，绝不覆盖。 |
 | `POST` | `/api/files/rename` | `{"from":"/a","to":"/b","overwrite":false}` | 重命名/移动；目标存在且未允许覆盖 → `409`；跨设备 `409`。 |
 | `POST` | `/api/files/delete` | `{"paths":["/a","/b"]}` | 单项或批量删除，目录递归（深度 ≤64，条目 ≤100000）；禁止删除根。 |
 

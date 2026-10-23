@@ -42,6 +42,7 @@ import { useDirectoryListing } from './useDirectoryListing';
 
 type DialogState =
   | { type: 'mkdir' }
+  | { type: 'create-file' }
   | { type: 'rename'; entry: FileEntry }
   | { type: 'delete'; entries: FileEntry[] }
   | null;
@@ -372,6 +373,27 @@ export function FileWorkspace({
     }
   };
 
+  const handleCreateFile = async (name: string) => {
+    if (!isSafeUploadName(name)) {
+      setActionError('文件名不能包含 “/” 或 “\\” 等路径分隔符。');
+      return;
+    }
+    setActionError(null);
+    try {
+      const result = await api.createFile(joinPath(path, name));
+      setNotice(`已创建文件 ${name}，正在打开编辑器`);
+      reload();
+      setRevision((value) => value + 1);
+      windowStore.launch('editor', {
+        title: `编辑 ${result.entry.name}`,
+        payload: { path: result.entry.path },
+        instanceKey: result.entry.path,
+      });
+    } catch (caught) {
+      setActionError(describeError(caught));
+    }
+  };
+
   const handleRename = async (entry: FileEntry, newName: string) => {
     if (newName === entry.name) return;
     setActionError(null);
@@ -570,6 +592,7 @@ export function FileWorkspace({
           loading={loading}
           onRefresh={refresh}
           selection={selection}
+          onNewFile={() => setDialog({ type: 'create-file' })}
           onNewFolder={() => setDialog({ type: 'mkdir' })}
           onUpload={() => fileInputRef.current?.click()}
           onOpenTerminal={() => void openTerminalHere()}
@@ -605,10 +628,13 @@ export function FileWorkspace({
           <div className="ed-files-state">
             <img src={asset('illustrations/empty-files.svg')} alt="" />
             <strong>当前目录为空</strong>
-            <p>这里还没有文件或子目录，可以上传文件、拖入文件或新建文件夹。</p>
+            <p>这里还没有文件或子目录，可以上传文件、拖入文件、新建文件或新建文件夹。</p>
             <div className="ed-toolbar">
               <button type="button" className="ed-button primary" onClick={() => fileInputRef.current?.click()}>
                 上传文件
+              </button>
+              <button type="button" className="ed-button" onClick={() => setDialog({ type: 'create-file' })}>
+                新建文件
               </button>
               <button type="button" className="ed-button" onClick={() => setDialog({ type: 'mkdir' })}>
                 新建文件夹
@@ -688,6 +714,19 @@ export function FileWorkspace({
         onChange={(event) => handleUpload(event.target.files)}
       />
 
+      {dialog?.type === 'create-file' && (
+        <PromptDialog
+          title="新建文件"
+          label={`在 ${path} 下创建空文件`}
+          initial="新建文件.txt"
+          confirmText="创建"
+          onCancel={() => setDialog(null)}
+          onConfirm={(value) => {
+            setDialog(null);
+            void handleCreateFile(value);
+          }}
+        />
+      )}
       {dialog?.type === 'mkdir' && (
         <PromptDialog
           title="新建文件夹"
