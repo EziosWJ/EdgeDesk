@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <limits>
+#include <poll.h>
 #include <set>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -1208,7 +1209,15 @@ Error SupervisorEngine::spawn_locked(ServiceHandle& handle, std::int64_t now_ms)
         // generic handshake error.
         std::string detail = release_error;
         unsigned char buffer[sizeof(int)] = {0};
-        const ssize_t count = ::read(outcome.exec_read_fd, buffer, sizeof(int));
+        // The exec-error pipe is non-blocking; the child has already exited, but
+        // give the kernel a moment to make the buffered errno readable.
+        struct pollfd wait {};
+        wait.fd = outcome.exec_read_fd;
+        wait.events = POLLIN;
+        const int ready = ::poll(&wait, 1, 100);
+        const ssize_t count = ready > 0
+                                  ? ::read(outcome.exec_read_fd, buffer, sizeof(int))
+                                  : -1;
         if (count == static_cast<ssize_t>(sizeof(int))) {
             int value = 0;
             std::memcpy(&value, buffer, sizeof(int));

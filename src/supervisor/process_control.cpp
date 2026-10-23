@@ -817,6 +817,11 @@ SpawnOutcome spawn_service(const ServiceConfig& config, const ResolvedIdentity& 
     const int flags = ::fcntl(log_pipe[0], F_GETFL, 0);
     if (flags >= 0) (void)::fcntl(log_pipe[0], F_SETFL, flags | O_NONBLOCK);
     (void)::fcntl(log_pipe[0], F_SETFD, FD_CLOEXEC);
+    // The exec-error pipe is drained from the single-threaded event loop; a
+    // blocking read could stall it if a descriptor inheritor (the sentinel is
+    // stopped before it closes its copy) still holds the write end.
+    const int err_flags = ::fcntl(err_pipe[0], F_GETFL, 0);
+    if (err_flags >= 0) (void)::fcntl(err_pipe[0], F_SETFL, err_flags | O_NONBLOCK);
     (void)::fcntl(err_pipe[0], F_SETFD, FD_CLOEXEC);
 
     const auto abort_spawn = [&](std::string message) {
