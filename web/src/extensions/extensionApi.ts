@@ -1,11 +1,31 @@
 import { ApiError, apiRequest } from '../services/api';
 import type {
+  BackendInfo,
   ExtensionApp,
   ExtensionInstallResult,
   ExtensionIntegrityResult,
   ExtensionRevision,
   ExtensionSession,
 } from './extensionTypes';
+
+export type BackendIdentity = {
+  run_user: string;
+  run_group: string;
+  allow_root: boolean;
+};
+
+export type RuntimeBackendRequest = {
+  method: string;
+  path: string;
+  body?: unknown;
+  contentType?: string;
+};
+
+export type RuntimeBackendResponse = {
+  status: number;
+  headers: Record<string, string>;
+  body: unknown;
+};
 
 async function parseError(response: Response): Promise<never> {
   const text = await response.text();
@@ -45,7 +65,7 @@ export const extensionApi = {
   list: () => apiRequest<{ ok: true; apps: ExtensionApp[] }>('/api/extensions'),
 
   detail: (appId: string) =>
-    apiRequest<{ ok: true; app: ExtensionApp; revisions: ExtensionRevision[] }>(
+    apiRequest<{ ok: true; app: ExtensionApp; revisions: ExtensionRevision[]; backend?: BackendInfo }>(
       `/api/extensions/${encodeURIComponent(appId)}`,
     ),
 
@@ -176,6 +196,62 @@ export const extensionApi = {
       headers: { 'Content-Type': 'application/json', 'X-EdgeDesk-Runtime': token },
       body: JSON.stringify({ type, message, stack }),
     }).catch(() => undefined),
+
+  runtimeBackendRequest: (token: string, request: RuntimeBackendRequest) => {
+    const payload: Record<string, unknown> = {
+      token,
+      method: request.method,
+      path: request.path,
+    };
+    if (request.body !== undefined) payload.body = request.body;
+    if (request.contentType !== undefined) payload.contentType = request.contentType;
+    return extensionRequest<RuntimeBackendResponse>('/api/extensions/runtime/backend/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-EdgeDesk-Runtime': token },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  getBackend: (appId: string) =>
+    apiRequest<{ ok: true; backend: BackendInfo }>(
+      `/api/extensions/${encodeURIComponent(appId)}/backend`,
+    ),
+
+  setBackendIdentity: (appId: string, identity: BackendIdentity) =>
+    apiRequest<{ ok: true; backend: BackendInfo }>(
+      `/api/extensions/${encodeURIComponent(appId)}/backend/identity`,
+      { method: 'PUT', body: JSON.stringify(identity) },
+    ),
+
+  setBackendAutostart: (appId: string, enabled: boolean) =>
+    apiRequest<{ ok: true; backend: BackendInfo }>(
+      `/api/extensions/${encodeURIComponent(appId)}/backend/autostart`,
+      { method: 'PUT', body: JSON.stringify({ enabled }) },
+    ),
+
+  startBackend: (appId: string) =>
+    apiRequest<{ ok: true; backend: BackendInfo }>(
+      `/api/extensions/${encodeURIComponent(appId)}/backend/start`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
+
+  stopBackend: (appId: string) =>
+    apiRequest<{ ok: true; backend: BackendInfo }>(
+      `/api/extensions/${encodeURIComponent(appId)}/backend/stop`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
+
+  restartBackend: (appId: string) =>
+    apiRequest<{ ok: true; backend: BackendInfo }>(
+      `/api/extensions/${encodeURIComponent(appId)}/backend/restart`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
+
+  purgeAppData: (appId: string) =>
+    apiRequest<{ ok: true; purged: true }>(`/api/extensions/${encodeURIComponent(appId)}/data/purge`, {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true, app_id: appId }),
+    }),
 
   authStatus: () =>
     apiRequest<{ authenticated: boolean; method: 'cookie' | 'bearer' | 'none'; state: string }>(

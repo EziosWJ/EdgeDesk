@@ -7,16 +7,25 @@ import {
   Pin,
   Play,
   RefreshCw,
+  RotateCw,
+  ScrollText,
+  Server,
   ShieldCheck,
+  Square,
   Trash2,
   Upload,
 } from 'lucide-react';
 import { Icon } from '../components/Icon';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { ApiError, formatBytes, formatTime, apiRequest } from '../services/api';
+import { ApiError, formatBytes, formatTime } from '../services/api';
 import { windowStore } from '../stores/windowStore';
 import { extensionApi } from './extensionApi';
-import type { ExtensionApp, ExtensionIntegrityResult, ExtensionRevision } from './extensionTypes';
+import type {
+  BackendInfo,
+  ExtensionApp,
+  ExtensionIntegrityResult,
+  ExtensionRevision,
+} from './extensionTypes';
 import { permissionLabel } from './extensionTypes';
 
 type Props = {
@@ -47,6 +56,58 @@ const STATUS_LABEL: Record<string, string> = {
   uninstalled: '已卸载',
 };
 
+const BACKEND_STATE_LABEL: Record<string, string> = {
+  stopped: '已停止',
+  upgrading: '升级中',
+  upgrade_failed: '升级失败',
+};
+
+const SUPERVISOR_STATE_LABEL: Record<string, string> = {
+  STOPPED: '已停止',
+  STARTING: '启动中',
+  RUNNING: '运行中',
+  STOPPING: '停止中',
+  BACKOFF: '等待重启',
+  FAILED: '失败锁定',
+  UNKNOWN: '状态未知',
+};
+
+function supervisorState(state: string | undefined): string {
+  return (state ?? '').toUpperCase();
+}
+
+function supervisorStateLabel(state: string | undefined): string {
+  if (!state) return '—';
+  return SUPERVISOR_STATE_LABEL[supervisorState(state)] ?? state;
+}
+
+function supervisorStateClass(state: string | undefined): string {
+  const normalized = supervisorState(state);
+  if (normalized === 'RUNNING') return 'ok';
+  if (normalized === 'FAILED') return 'danger';
+  if (normalized === 'STARTING' || normalized === 'STOPPING' || normalized === 'BACKOFF' || normalized === 'UNKNOWN') {
+    return 'pending';
+  }
+  return 'muted';
+}
+
+function backendStateClass(state: string | undefined): string {
+  if (state === 'upgrade_failed') return 'danger';
+  if (state === 'upgrading') return 'pending';
+  return 'subtle';
+}
+
+function archMismatch(backend: BackendInfo | null | undefined): boolean {
+  if (!backend?.arch || !backend.host_arch) return false;
+  return backend.arch.toLowerCase() !== backend.host_arch.toLowerCase();
+}
+
+function formatBackendTime(value: number | null | undefined): string {
+  if (!value) return '—';
+  // Supervisor timestamps are milliseconds; be tolerant of seconds.
+  return formatTime(value > 1e11 ? value / 1000 : value);
+}
+
 function statusClass(status: string): string {
   if (status === 'enabled') return 'ok';
   if (status === 'pending_review') return 'pending';
@@ -71,7 +132,11 @@ function isZipFile(file: File): boolean {
 export function ExtensionManagerView({ onExtensionsChanged }: Props) {
   const [apps, setApps] = useState<ExtensionApp[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
-  const [detail, setDetail] = useState<{ app: ExtensionApp; revisions: ExtensionRevision[] } | null>(null);
+  const [detail, setDetail] = useState<{
+    app: ExtensionApp;
+    revisions: ExtensionRevision[];
+    backend?: BackendInfo;
+  } | null>(null);
   const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState('');
@@ -82,6 +147,9 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
   const [restoreData, setRestoreData] = useState(false);
   const [uninstallDialog, setUninstallDialog] = useState<ExtensionApp | null>(null);
   const [activateDialog, setActivateDialog] = useState<{ app: ExtensionApp; revision: ExtensionRevision } | null>(null);
+  const [backendForm, setBackendForm] = useState({ run_user: '', run_group: '', allow_root: false });
+  const [purgeDialog, setPurgeDialog] = useState<ExtensionApp | null>(null);
+  const [purgeConfirm, setPurgeConfirm] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [pendingDrop, setPendingDrop] = useState<PendingDrop | null>(null);
@@ -90,6 +158,7 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
   const dragDepth = useRef(0);
 
   const selected = detail?.app ?? apps.find((item) => item.app_id === selectedId) ?? null;
+  const backend = detail?.backend ?? selected?.backend ?? null;
 
   const load = useCallback(async (preferred?: string) => {
     setRefreshing(true);
@@ -100,10 +169,8 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
       const next = response.apps.find((item) => item.app_id === target) ?? response.apps[0];
       setSelectedId(next?.app_id ?? '');
       if (next) {
-        const info = await apiRequest<{ app: ExtensionApp; revisions: ExtensionRevision[] }>(
-          `/api/extensions/${encodeURIComponent(next.app_id)}`,
-        );
-        setDetail({ app: info.app, revisions: info.revisions });
+        const info = await extensionApi.detail(next.app_id);
+        setDetail({ app: info.app, revisions: info.revisions, backend: info.backend });
       } else {
         setDetail(null);
       }
@@ -127,12 +194,22 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
     setIntegrity(null);
   }, [detail?.app.app_id, detail?.app.updated_at]);
 
+  useEffect(() => {
+    setBackendForm({
+      run_user: backend?.run_user ?? '',
+      run_group: backend?.run_group ?? '',
+      allow_root: backend?.allow_root === true,
+    });
+    // Re-sync only when the server-reported identity changes, not on each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.app.app_id, backend?.run_user, backend?.run_group, backend?.allow_root]);
+
   const select = async (appId: string) => {
     setSelectedId(appId);
     setBusy('load');
     try {
       const info = await extensionApi.detail(appId);
-      setDetail({ app: info.app, revisions: info.revisions });
+      setDetail({ app: info.app, revisions: info.revisions, backend: info.backend });
       setError('');
     } catch (caught) {
       setError(errorMessage(caught));
@@ -337,6 +414,62 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
     });
   };
 
+  const saveBackendIdentity = () =>
+    selected &&
+    run('backend-identity', async () => {
+      await extensionApi.setBackendIdentity(selected.app_id, {
+        run_user: backendForm.run_user.trim(),
+        run_group: backendForm.run_group.trim(),
+        allow_root: backendForm.allow_root,
+      });
+      await afterMutation(
+        '运行身份已保存；重新启动后端后生效。',
+        selected.app_id,
+      );
+    });
+
+  const backendLifecycle = (kind: 'start' | 'stop' | 'restart') =>
+    selected &&
+    run(`backend-${kind}`, async () => {
+      if (kind === 'start') await extensionApi.startBackend(selected.app_id);
+      else if (kind === 'stop') await extensionApi.stopBackend(selected.app_id);
+      else await extensionApi.restartBackend(selected.app_id);
+      await afterMutation(
+        `已提交${kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '重启'}原生后端请求；状态以 Supervisor 为准。`,
+        selected.app_id,
+      );
+    });
+
+  const setAutostart = (enabled: boolean) =>
+    selected &&
+    run('backend-autostart', async () => {
+      await extensionApi.setBackendAutostart(selected.app_id, enabled);
+      await afterMutation(
+        enabled ? '已启用开机自启，与手动启动/停止相互独立。' : '已关闭开机自启。',
+        selected.app_id,
+      );
+    });
+
+  const openProcessLogs = () => {
+    windowStore.launch('processes');
+  };
+
+  const openPurgeDialog = (app: ExtensionApp) => {
+    setPurgeConfirm('');
+    setPurgeDialog(app);
+  };
+
+  const confirmPurge = () => {
+    if (!purgeDialog || purgeConfirm !== purgeDialog.app_id) return;
+    const target = purgeDialog;
+    setPurgeDialog(null);
+    setPurgeConfirm('');
+    void run('purge', async () => {
+      await extensionApi.purgeAppData(target.app_id);
+      await afterMutation('应用数据已彻底删除；程序文件、修订与审计历史保留。', target.app_id);
+    });
+  };
+
   const revisionList = useMemo(() => detail?.revisions ?? [], [detail]);
 
   return (
@@ -476,6 +609,11 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
                     版本 {selected.active_version || '—'}
                     <span>修订 {selected.active_revision_id ? selected.active_revision_id.slice(0, 12) : '—'}</span>
                   </p>
+                  {!selected.publisher_verified && (
+                    <p className="ed-ext-unverified" role="note">
+                      未签名包，发布者身份未验证；SHA-256 仅用于完整性检查。
+                    </p>
+                  )}
                 </div>
                 <div className="ed-ext-actions">
                   {(selected.status === 'enabled' || selected.status === 'disabled') && (
@@ -520,6 +658,219 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
               )}
 
               {selected.description && <p className="ed-ext-description">{selected.description}</p>}
+
+              {backend?.present && (
+                <section className="ed-ext-section ed-ext-backend" aria-busy={busy !== null} aria-label="原生后端">
+                  <div className="ed-ext-backend-head">
+                    <h4>
+                      <Icon icon={Server} size={14} />
+                      原生后端
+                    </h4>
+                    <span className={`ed-badge ${backendStateClass(backend.state)}`}>
+                      {BACKEND_STATE_LABEL[backend.state ?? ''] ?? backend.state ?? '状态未知'}
+                    </span>
+                    <span className={`ed-ext-backend-live ${supervisorStateClass(backend.supervisor?.state)}`}>
+                      <span
+                        className={`ed-ext-status ${supervisorStateClass(backend.supervisor?.state)}`}
+                        aria-hidden="true"
+                      />
+                      Supervisor {supervisorStateLabel(backend.supervisor?.state)}
+                    </span>
+                  </div>
+                  <p className="ed-ext-hint">
+                    原生后端由独立 Supervisor 服务托管，进程 RUNNING 不代表 HTTP API 已就绪。安装后默认停止，开机自启默认关闭。
+                  </p>
+                  <p className="ed-ext-unverified" role="note">
+                    未签名包，发布者身份未验证；SHA-256 仅用于完整性检查，不证明发布者身份。
+                  </p>
+                  {archMismatch(backend) && (
+                    <div className="ed-ext-banner warning ed-ext-banner-inline" role="alert">
+                      <Icon icon={AlertTriangle} size={15} />
+                      <span>
+                        后端架构 {backend.arch} 与主机架构 {backend.host_arch} 不匹配，启动会被拒绝。
+                      </span>
+                    </div>
+                  )}
+                  {backend.error && (
+                    <div className="ed-ext-banner danger ed-ext-banner-inline" role="status">
+                      <Icon icon={AlertTriangle} size={15} />
+                      <span>{backend.error}</span>
+                    </div>
+                  )}
+                  <dl className="ed-ext-backend-facts">
+                    <div>
+                      <dt>后端架构</dt>
+                      <dd>
+                        <code>{backend.arch || '—'}</code>
+                        {backend.host_arch && <span className="ed-ext-muted"> / 主机 {backend.host_arch}</span>}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Supervisor PID</dt>
+                      <dd>{backend.supervisor?.pid ?? '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>最近退出</dt>
+                      <dd>
+                        {backend.supervisor?.last_exit_code == null && !backend.supervisor?.last_exit_at
+                          ? '—'
+                          : `退出码 ${backend.supervisor?.last_exit_code ?? '—'} · ${formatBackendTime(
+                              backend.supervisor?.last_exit_at,
+                            )}`}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>服务 ID</dt>
+                      <dd>
+                        <code>{backend.service_id || '—'}</code>
+                      </dd>
+                    </div>
+                    <div className="wide">
+                      <dt>可执行文件</dt>
+                      <dd>
+                        <code>{backend.executable || '—'}</code>
+                      </dd>
+                    </div>
+                    <div className="wide">
+                      <dt>程序目录（只读）</dt>
+                      <dd>
+                        <code>{backend.program_dir || '—'}</code>
+                      </dd>
+                    </div>
+                    <div className="wide">
+                      <dt>数据目录（只读）</dt>
+                      <dd>
+                        <code>{backend.data_dir || '—'}</code>
+                      </dd>
+                    </div>
+                    <div className="wide">
+                      <dt>Socket 路径（只读）</dt>
+                      <dd>
+                        <code>{backend.socket_path || '—'}</code>
+                      </dd>
+                    </div>
+                  </dl>
+
+                  <div className="ed-ext-backend-actions">
+                    <button
+                      type="button"
+                      className="ed-button primary"
+                      onClick={() => void backendLifecycle('start')}
+                      disabled={
+                        busy !== null ||
+                        supervisorState(backend.supervisor?.state) === 'RUNNING' ||
+                        supervisorState(backend.supervisor?.state) === 'STARTING'
+                      }
+                    >
+                      <Icon icon={Play} size={14} />
+                      启动
+                    </button>
+                    <button
+                      type="button"
+                      className="ed-button"
+                      onClick={() => void backendLifecycle('stop')}
+                      disabled={
+                        busy !== null ||
+                        supervisorState(backend.supervisor?.state) === 'STOPPED' ||
+                        supervisorState(backend.supervisor?.state) === 'STOPPING'
+                      }
+                    >
+                      <Icon icon={Square} size={14} />
+                      停止
+                    </button>
+                    <button
+                      type="button"
+                      className="ed-button"
+                      onClick={() => void backendLifecycle('restart')}
+                      disabled={busy !== null}
+                    >
+                      <Icon icon={RotateCw} size={14} />
+                      重启
+                    </button>
+                    <button type="button" className="ed-button" onClick={openProcessLogs}>
+                      <Icon icon={ScrollText} size={14} />
+                      进程日志
+                    </button>
+                  </div>
+
+                  <div className="ed-ext-backend-identity">
+                    <h5>运行身份</h5>
+                    <p className="ed-ext-hint">
+                      运行用户与用户组由管理员指定，manifest 不能覆盖。保存后需重新启动后端才会生效。
+                    </p>
+                    <div className="ed-ext-backend-fields">
+                      <label className="ed-ext-field">
+                        <span>运行用户</span>
+                        <input
+                          type="text"
+                          value={backendForm.run_user}
+                          onChange={(event) =>
+                            setBackendForm((current) => ({ ...current, run_user: event.target.value }))
+                          }
+                          disabled={busy !== null}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </label>
+                      <label className="ed-ext-field">
+                        <span>运行组</span>
+                        <input
+                          type="text"
+                          value={backendForm.run_group}
+                          onChange={(event) =>
+                            setBackendForm((current) => ({ ...current, run_group: event.target.value }))
+                          }
+                          disabled={busy !== null}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </label>
+                    </div>
+                    <label className="ed-ext-check">
+                      <input
+                        type="checkbox"
+                        checked={backendForm.allow_root}
+                        onChange={(event) =>
+                          setBackendForm((current) => ({ ...current, allow_root: event.target.checked }))
+                        }
+                        disabled={busy !== null}
+                      />
+                      允许以 root 运行
+                    </label>
+                    {backendForm.allow_root && (
+                      <div className="ed-ext-banner danger ed-ext-banner-inline" role="alert">
+                        <Icon icon={AlertTriangle} size={15} />
+                        <span>
+                          root 后端拥有主机级权限，可能读写任意系统文件或控制整台设备。仅在完全信任该程序时启用。
+                        </span>
+                      </div>
+                    )}
+                    <div className="ed-ext-inline-actions">
+                      <button
+                        type="button"
+                        className="ed-button"
+                        onClick={() => void saveBackendIdentity()}
+                        disabled={busy !== null}
+                      >
+                        保存运行身份
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="ed-ext-autostart">
+                    <label className="ed-ext-check">
+                      <input
+                        type="checkbox"
+                        checked={backend.autostart === true}
+                        onChange={(event) => void setAutostart(event.target.checked)}
+                        disabled={busy !== null}
+                      />
+                      开机自启
+                    </label>
+                    <span className="ed-ext-muted">独立设置，默认关闭；手动启动/停止不会修改自启状态。</span>
+                  </div>
+                </section>
+              )}
 
               <div className="ed-ext-grid">
                 <section className="ed-ext-section">
@@ -670,6 +1021,32 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
                 </section>
               </div>
 
+              <section className="ed-ext-section ed-ext-data" aria-label="应用数据">
+                <h4>应用数据</h4>
+                <p className="ed-ext-hint">
+                  卸载默认保留应用数据。彻底删除是独立操作，不会随普通卸载执行，也无法撤销。
+                </p>
+                <p className="ed-ext-data-scope">
+                  数据范围：平台 KV 命名空间 <code>{selected.app_id}</code>
+                  {backend?.present && backend.data_dir && (
+                    <>
+                      {' '}· 原生数据目录 <code>{backend.data_dir}</code>
+                    </>
+                  )}
+                </p>
+                <div className="ed-ext-inline-actions">
+                  <button
+                    type="button"
+                    className="ed-button danger"
+                    onClick={() => openPurgeDialog(selected)}
+                    disabled={busy !== null || selected.status === 'uninstalled'}
+                  >
+                    <Icon icon={Trash2} size={14} />
+                    彻底删除应用数据
+                  </button>
+                </div>
+              </section>
+
               {integrity && (
                 <div className={`ed-ext-banner ${integrity.ok ? 'ok' : 'danger'}`} role="status">
                   <Icon icon={integrity.ok ? Check : AlertTriangle} size={15} />
@@ -770,6 +1147,77 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
               </button>
               <button type="button" className="ed-button danger" onClick={() => uninstall('delete')}>
                 删除数据并卸载
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {purgeDialog && (
+        <div
+          className="ed-modal-backdrop"
+          onPointerDown={() => {
+            setPurgeDialog(null);
+            setPurgeConfirm('');
+          }}
+        >
+          <div
+            className="ed-modal ed-panel"
+            role="alertdialog"
+            aria-modal="true"
+            aria-label="彻底删除应用数据"
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <h2>彻底删除 {purgeDialog.display_name} 的应用数据</h2>
+            <p className="ed-modal-text">
+              此操作不可恢复。程序文件、Web 修订与审计历史会保留，只清理该应用专属的数据。
+            </p>
+            <ul className="ed-modal-list">
+              <li>
+                平台 KV 命名空间：<code>{purgeDialog.app_id}</code>
+              </li>
+              {backend?.present && backend.data_dir && (
+                <li>
+                  原生数据目录：<code>{backend.data_dir}</code>
+                </li>
+              )}
+              <li>不会删除其他应用的数据、程序文件或 Supervisor 服务配置。</li>
+            </ul>
+            <label className="ed-ext-field ed-ext-purge-field">
+              <span>
+                输入应用 ID <code>{purgeDialog.app_id}</code> 以确认：
+              </span>
+              <input
+                type="text"
+                value={purgeConfirm}
+                onChange={(event) => setPurgeConfirm(event.target.value)}
+                autoFocus
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="确认应用 ID"
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') confirmPurge();
+                }}
+              />
+            </label>
+            <div className="ed-modal-actions">
+              <button
+                type="button"
+                className="ed-button"
+                onClick={() => {
+                  setPurgeDialog(null);
+                  setPurgeConfirm('');
+                }}
+                disabled={busy !== null}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="ed-button danger"
+                onClick={confirmPurge}
+                disabled={busy !== null || purgeConfirm !== purgeDialog.app_id}
+              >
+                {busy === 'purge' ? '删除中…' : '彻底删除数据'}
               </button>
             </div>
           </div>
