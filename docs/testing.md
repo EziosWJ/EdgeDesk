@@ -448,7 +448,7 @@ file out/build/arm64-disk/bin/edgedesk   # ELF 64-bit ... ARM aarch64
 | root 模式暂存 | 安装测试中的 `--ops` 用例 | Web unit `User=root`、`Group=root`、`UMask=0022`、`Environment=HOME=/root`、`StateDirectory=edgedesk`、`RuntimeDirectory=edgedesk`，无 `ProtectSystem`/`ProtectHome`/`PrivateTmp`/`ReadWritePaths`；Supervisor `--allow-uid 0` 且无挂载加固；OpenRC/BusyBox 适配器同步；默认 `file-root = /`；`--ops` 配非 root 用户、无 `--ops` 的 `--service-user root`、以及过宽 `--data-dir` 递归 chown 均被拒绝 |
 | script + bin/ 布局 | 测试用例与真机 dry-run | 无需 `--source`/`--force`；预置在目标目录的二进制被就地采用 |
 | L0 全量 | `scripts/test-fast.sh` | **25/25 通过**（含 `install_script_test`） |
-| L1 全量 | `scripts/test-pr.sh` | 前端 **153 个测试** + 构建、`dev-disk` 构建、**25/25 ctest**、完整集成套件通过（2026-10-23 `--ops` 改动复跑：复用已构建前端，55 s） |
+| L1 全量 | `scripts/test-pr.sh` | 前端 **155 个测试** + 构建、`dev-disk` 构建、**25/25 ctest**、完整集成套件通过（2026-10-23 `--ops` + 交互提示改动复跑：85 s） |
 | systemd 静态校验 | `systemd-analyze verify`（暂存二进制） | 生成的 web/supervisor unit 无告警 |
 | OpenRC/BusyBox 生成物 | `sh -n` 暂存的 init 脚本与 wrapper | 通过；`/etc/inittab` 仅生成一个受管块 |
 
