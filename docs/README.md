@@ -68,6 +68,7 @@
 | [ADR-0015](adr/0015-process-supervisor-architecture.md) | 独立 Process Supervisor、Unix Socket、SQLite 与 init 适配 | 已实现（V1.0；平台矩阵部分未验证） |
 | [ADR-0016](adr/0016-process-supervisor-security.md) | root 守护进程、运行身份隔离、IPC 与执行安全 | 已实现（V1.0；root/init 真机验证待补） |
 | [ADR-0017](adr/0017-root-operations-profile.md) | 安装器 `--ops` root 运维模式：unit、Supervisor 允许列表与目录属主 | Accepted（暂存测试通过；真机手工迁移已验证，`--ops` 重装未验证） |
+| [ADR-0018](adr/0018-native-application-packages.md) | 原生应用包、单 ELF 后端、Supervisor 生命周期、HTTP over UDS 与覆盖升级 | Accepted（实施待开始） |
 
 ## Spec（要做什么）
 
@@ -83,6 +84,7 @@
 | [SPEC-0008](spec/0008-extension-platform-hardening.md) | 扩展应用平台安全与可靠性加固：内部路径保护、网络授权、完整性、数据事务、资源清理、审计脱敏与跨平台构建 |
 | [SPEC-0009](spec/0009-process-supervisor.md) | 独立进程托管、自动拉起、进程组停止、日志、IPC 权限与 init 适配（V1.0 已实现，平台验证部分待补） |
 | [SPEC-0010](spec/0010-process-supervisor-hardening.md) | Process Supervisor 安全与可靠性加固：进程组身份、后代清理、目录权限、持久化、恢复、长操作、脚本执行、审计和平台验证 |
+| [SPEC-0011](spec/0011-native-application-packages.md) | 现有 Web 扩展包增加可选 ELF 后端、UDS HTTP 代理、进程生命周期、数据保留与跨架构验收 |
 
 ## 实施计划
 
@@ -94,6 +96,7 @@
 | [SPEC-0008 扩展平台硬化实施计划](tasks/0008-extension-platform-hardening.md) | 8 个实现 Ticket、依赖顺序、回归测试与发布门槛 |
 | [SPEC-0009 Process Supervisor 实施计划](tasks/0009-process-supervisor.md) | Phase 0～5、PS-01～PS-10 建议任务拆分、验收标准与平台发布门槛 |
 | [SPEC-0010 Process Supervisor 加固计划](tasks/0010-process-supervisor-hardening.md) | PSH-01～PSH-11 独立 Ticket、依赖顺序、验收标准与发布门槛 |
+| [SPEC-0011 原生应用包实施计划](tasks/0011-native-application-packages.md) | APPX-01～APPX-07 独立 GitHub Issues、依赖顺序、验收标准与发布门槛 |
 
 ## 原生应用包扩展（SPEC-0011，待实施）
 
@@ -132,7 +135,7 @@
 - V1.1 首期是否开放高级部署配置的网页写入（当前决定为只读展示，后续逐项评估）。
 - 多用户/角色不在当前规划内；会话不跨服务进程重启持久化。
 - V1.2 桌面布局已在浏览器 localStorage 中恢复（schema v1，见 ADR-0010）；跨浏览器同步不在范围内。
-- V1.3 扩展应用为未签名本地 ZIP；公共市场、签名发布者、秘密存储与应用间通信仍不在范围内。
+- V1.3 静态 Web 扩展使用未签名本地 ZIP；原生后端由 SPEC-0011 另行定义。公共应用市场、强制数字签名、秘密存储与跨应用后端调用仍不在 V1 范围内。
 
 ## 变更约定
 
