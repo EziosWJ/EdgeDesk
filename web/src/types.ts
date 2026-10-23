@@ -222,6 +222,21 @@ export type SupervisedService = {
   metrics_available: boolean;
 };
 
+export type SupervisorOperationState = 'pending' | 'succeeded' | 'failed';
+
+/** Asynchronous stop/restart operation returned by the Supervisor. */
+export type SupervisorOperation = {
+  ok?: boolean;
+  operation_id: string;
+  service_id: string;
+  kind: 'stop' | 'restart';
+  state: SupervisorOperationState;
+  result: SupervisedService | null;
+  error: { slug: string; message: string } | null;
+  created_at: number;
+  finished_at: number | null;
+};
+
 export type SupervisorHealth = {
   ok: boolean;
   status: string;

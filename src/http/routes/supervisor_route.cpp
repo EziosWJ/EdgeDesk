@@ -65,8 +65,11 @@ int dispatch(RouteContext& ctx, const HttpResponseWriterPtr& writer, std::string
     return 202;
 }
 
-// Read-only endpoints are not audited individually; they expose no arguments or
-// secrets and would otherwise flood the audit log during UI polling.
+// Read-only endpoints (health, list, get, log tail/cursor reads) are not audited
+// individually; they expose no privileged arguments or secrets and would
+// otherwise flood the audit log during UI polling (the processes view polls
+// logs every ~2s). Management operations still go through dispatch(), which
+// records create/update/delete/start/stop/restart and root-privilege denials.
 void submit_read(RouteContext& ctx, const HttpResponseWriterPtr& writer, std::string method,
                  nlohmann::json params) {
     if (ctx.supervisor == nullptr) {
@@ -198,6 +201,13 @@ void register_supervisor_routes(hv::HttpService& router, RouteContext& ctx) {
                              "supervisor.restart", detail_for(id), ip);
                 });
 
+    router.GET("/api/supervisor/operations/:id",
+               [&ctx](const HttpRequestPtr& req, const HttpResponseWriterPtr& writer) {
+                   nlohmann::json params;
+                   params["operation_id"] = path_id(req.get());
+                   submit_read(ctx, writer, "service.operation.get", std::move(params));
+               });
+
     router.GET("/api/supervisor/services/:id/logs",
                [&ctx](const HttpRequestPtr& req, const HttpResponseWriterPtr& writer) {
                    const std::string id = path_id(req.get());
@@ -216,9 +226,8 @@ void register_supervisor_routes(hv::HttpService& router, RouteContext& ctx) {
                        params["max_bytes"] =
                            http::query_int(req.get(), "max_bytes", 0, 0, 256 * 1024);
                    }
-                   const std::string ip = http::client_ip(*ctx.config, req.get());
-                   dispatch(ctx, writer, "service.logs", std::move(params), "supervisor.logs",
-                            detail_for(id), ip);
+                   // Passive tail/cursor polling: audit-free (see submit_read).
+                   submit_read(ctx, writer, "service.logs", std::move(params));
                });
 }
 

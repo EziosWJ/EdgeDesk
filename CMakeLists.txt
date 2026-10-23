@@ -314,6 +314,7 @@ if(EDGEDESK_BUILD_TESTS)
     supervisor_log_store_test:supervisor/log_store_test.cpp
     supervisor_engine_test:supervisor/supervisor_engine_test.cpp
     supervisor_ipc_test:supervisor/ipc_server_test.cpp
+    process_control_test:supervisor/process_control_test.cpp
   )
   foreach(entry IN LISTS EDGEDESK_SUPERVISOR_TEST_TARGETS)
     string(REPLACE ":" ";" pair "${entry}")

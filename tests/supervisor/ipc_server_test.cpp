@@ -332,10 +332,29 @@ void test_authorized_client_and_async_stop() {
     // Let the child event loop drain exec confirmation before stopping.
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
+    // Stop is an asynchronous operation: the request returns an operation ID
+    // and the caller queries service.operation.get until it settles.
     CHECK(send_line(fd, make_request("6", "service.stop", id_params).dump()));
     response = rpc_call(fd);
     CHECK(response.contains("result"));
-    CHECK_EQ(response["result"]["state"].get<std::string>(), "STOPPED");
+    const std::string operation_id = response["result"].value("operation_id", std::string());
+    CHECK(!operation_id.empty());
+    CHECK_EQ(response["result"].value("state", std::string()), "pending");
+
+    json operation_params;
+    operation_params["operation_id"] = operation_id;
+    std::string operation_state;
+    const auto operation_deadline = std::chrono::steady_clock::now() +
+                                    std::chrono::milliseconds(kTimeoutMs);
+    while (std::chrono::steady_clock::now() < operation_deadline) {
+        CHECK(send_line(fd, make_request("6b", "service.operation.get", operation_params).dump()));
+        response = rpc_call(fd);
+        CHECK(response.contains("result"));
+        operation_state = response["result"].value("state", std::string());
+        if (operation_state != "pending") break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK_EQ(operation_state, "succeeded");
 
     CHECK(send_line(fd, make_request("7", "service.delete", id_params).dump()));
     response = rpc_call(fd);

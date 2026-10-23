@@ -130,6 +130,28 @@ def wait_service(client, service_id, wanted, timeout=12.0):
     return last
 
 
+def wait_operation(client, operation_id, timeout=20.0):
+    """Polls the non-blocking stop/restart operation until it settles.
+
+    A timeout here means the caller stopped waiting; it must not be interpreted
+    as the operation having failed or the service having stopped.
+    """
+    deadline = time.monotonic() + timeout
+    last = {}
+    while time.monotonic() < deadline:
+        status, body = client.json(
+            "GET", f"/api/supervisor/operations/{operation_id}")
+        if status != 200:
+            last = body
+            break
+        last = body
+        if body.get("state") != "pending":
+            return body
+        time.sleep(0.05)
+    check(False, f"operation {operation_id} did not settle; last={last!r}")
+    return last
+
+
 def pid_alive(pid):
     if not isinstance(pid, int) or pid <= 1:
         return False
@@ -147,6 +169,51 @@ def save_state(path, state):
         handle.write("\n")
 
 
+def audit_event_count(path, event):
+    """Count exact audit events in the JSON-lines audit log."""
+    if not path or not os.path.exists(path):
+        return 0
+    needle = f'"event":"{event}"'
+    count = 0
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if needle in line:
+                count += 1
+    return count
+
+
+def audit_contains(path, needle):
+    if not path or not os.path.exists(path):
+        return False
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        return any(needle in line for line in handle)
+
+
+def test_log_polling_does_not_audit(client, service_id, audit_log):
+    """PSH-08: passive tail/cursor polling must not grow the audit log.
+
+    The processes UI polls this endpoint every ~2s while a service is open, so a
+    per-request audit event would grow without bound. Management operations and
+    root-privilege denials must still be recorded.
+    """
+    if not audit_log:
+        print("note: --audit-log not supplied; skipping PSH-08 audit growth check")
+        return
+    before = audit_event_count(audit_log, "supervisor.logs")
+    for index in range(40):
+        status, body = client.json(
+            "GET", f"/api/supervisor/services/{service_id}/logs?tail_bytes=4096")
+        check(status == 200, f"log poll {index} status {status}: {body!r}")
+    after = audit_event_count(audit_log, "supervisor.logs")
+    check(after == before,
+          f"log polling grew audit log by {after - before} event(s) "
+          f"(before={before}, after={after})")
+    check(audit_event_count(audit_log, "supervisor.create") > 0,
+          "management create was not audited")
+    check(audit_contains(audit_log, "root_confirmation_required"),
+          "denied root-privilege request was not audited")
+
+
 def test_unauthenticated_and_csrf(client):
     status, body, _ = client.request("GET", "/api/supervisor/health")
     check(status == 401, f"unauthenticated supervisor health status {status}")
@@ -160,7 +227,7 @@ def test_unauthenticated_and_csrf(client):
     check(status == 403, f"CSRF supervisor create status {status}")
 
 
-def phase_crud(client, state_path):
+def phase_crud(client, state_path, audit_log):
     uid, _, user, group, is_root = identity()
     client.login()
     test_unauthenticated_and_csrf(client)
@@ -230,7 +297,11 @@ def phase_crud(client, state_path):
 
     status, restarted = client.json(
         "POST", f"/api/supervisor/services/{service_id}/restart", {})
-    check(status == 200, f"restart status {status}: {restarted!r}")
+    check(status == 200 and restarted.get("operation_id"),
+          f"restart status {status}: {restarted!r}")
+    operation = wait_operation(client, restarted.get("operation_id", ""))
+    check(operation.get("state") == "succeeded",
+          f"restart operation {operation!r}")
     running = wait_service(client, service_id, "RUNNING")
     new_pid = running.get("pid")
     check(isinstance(new_pid, int) and pid_alive(new_pid) and new_pid != pid,
@@ -239,8 +310,13 @@ def phase_crud(client, state_path):
 
     status, stopped = client.json("POST", f"/api/supervisor/services/{service_id}/stop",
                                   {})
-    check(status == 200 and stopped.get("state") == "STOPPED",
+    check(status == 200 and stopped.get("operation_id"),
           f"stop status {status}: {stopped!r}")
+    operation = wait_operation(client, stopped.get("operation_id", ""))
+    result = operation.get("result") or {}
+    check(operation.get("state") == "succeeded"
+          and result.get("state") == "STOPPED",
+          f"stop operation {operation!r}")
     check(not pid_alive(pid), f"stopped process {pid} still exists")
 
     status, started = client.json("POST", f"/api/supervisor/services/{service_id}/start",
@@ -293,6 +369,8 @@ def phase_crud(client, state_path):
                                {})
     check(status == 404, f"missing service start status {status}: {body!r}")
 
+    test_log_polling_does_not_audit(client, service_id, audit_log)
+
     save_state(state_path, {
         "service_id": service_id,
         "name": renamed,
@@ -300,7 +378,7 @@ def phase_crud(client, state_path):
     })
 
 
-def phase_after_backend_restart(client, state_path):
+def phase_after_backend_restart(client, state_path, audit_log):
     state = load_state(state_path)
     client.login()
     service = wait_service(client, state["service_id"], "RUNNING", timeout=10.0)
@@ -312,7 +390,7 @@ def phase_after_backend_restart(client, state_path):
           f"health after backend restart {status}: {health!r}")
 
 
-def phase_after_supervisor_restart(client, state_path):
+def phase_after_supervisor_restart(client, state_path, audit_log):
     state = load_state(state_path)
     client.login()
     deadline = time.monotonic() + 10.0
@@ -332,13 +410,18 @@ def phase_after_supervisor_restart(client, state_path):
 
     status, body = client.json(
         "POST", f"/api/supervisor/services/{state['service_id']}/stop", {})
-    check(status == 200 and body.get("state") == "STOPPED",
+    check(status == 200 and body.get("operation_id"),
           f"stop after adoption {status}: {body!r}")
+    operation = wait_operation(client, body.get("operation_id", ""))
+    result = operation.get("result") or {}
+    check(operation.get("state") == "succeeded",
+          f"stop after adoption operation {operation!r}")
     check(not pid_alive(state["pid"]), "process survived an explicit stop")
-    check(body.get("desired_state") == "stopped", f"desired state {body!r}")
+    check(result.get("desired_state") == "stopped",
+          f"desired state {result!r}")
 
 
-def phase_after_manual_stop_restart(client, state_path):
+def phase_after_manual_stop_restart(client, state_path, audit_log):
     state = load_state(state_path)
     client.login()
     service = wait_service(client, state["service_id"], "STOPPED", timeout=10.0)
@@ -351,7 +434,7 @@ def phase_after_manual_stop_restart(client, state_path):
     check(status == 404, f"delete missing service status {status}: {body!r}")
 
 
-def phase_unavailable(client, state_path):
+def phase_unavailable(client, state_path, audit_log):
     state = load_state(state_path)
     client.login()
     status, body = client.json("GET", "/api/supervisor/health")
@@ -381,6 +464,7 @@ def main():
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--password", required=True)
     parser.add_argument("--state", required=True)
+    parser.add_argument("--audit-log", default="")
     parser.add_argument("--phase", required=True, choices=[
         "crud", "after-backend-restart", "after-supervisor-restart",
         "after-manual-stop-restart", "unavailable",
@@ -395,7 +479,7 @@ def main():
         "after-manual-stop-restart": phase_after_manual_stop_restart,
         "unavailable": phase_unavailable,
     }
-    phases[args.phase](client, args.state)
+    phases[args.phase](client, args.state, args.audit_log)
 
     if FAILURES:
         print(f"supervisor {args.phase}: {len(FAILURES)} failure(s)")

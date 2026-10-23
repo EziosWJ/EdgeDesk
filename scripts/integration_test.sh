@@ -154,7 +154,8 @@ start_supervisor_backend() {
 
 run_supervisor_phase() {
   python3 scripts/supervisor_test.py --host 127.0.0.1 --port "$SUP_PORT" \
-    --password "$NEW_PASSWORD" --state "$SUP_STATE_FILE" --phase "$1"
+    --password "$NEW_PASSWORD" --state "$SUP_STATE_FILE" \
+    --audit-log "$SUP_STATE/audit.log" --phase "$1"
 }
 
 mkdir -p "$DATA/docs" "$STATE" "$AUTH_DATA" "$CORRUPT_DATA" "$APPS" "$EXT_DATA" "$EXT_STATE" "$EXT_APPS" "$EXT_FILES"
@@ -229,7 +230,13 @@ grep -q '"event":"supervisor.update"' "$SUP_STATE/audit.log"
 grep -q '"event":"supervisor.start"' "$SUP_STATE/audit.log"
 grep -q '"event":"supervisor.restart"' "$SUP_STATE/audit.log"
 grep -q '"event":"supervisor.stop"' "$SUP_STATE/audit.log"
-grep -q '"event":"supervisor.logs"' "$SUP_STATE/audit.log"
+# PSH-08: passive log tail/cursor polling is deliberately not audited, and the
+# poll-storm check in supervisor_test.py asserts the log does not grow per
+# request. No per-request supervisor.logs event may ever appear.
+if grep -q '"event":"supervisor.logs"' "$SUP_STATE/audit.log"; then
+  echo "passive log polling created per-request audit events" >&2
+  exit 1
+fi
 grep -q '"event":"supervisor.delete"' "$SUP_STATE/audit.log"
 grep -q 'root_confirmation_required' "$SUP_STATE/audit.log"
 stop_pid "$SUP_SERVER_PID"

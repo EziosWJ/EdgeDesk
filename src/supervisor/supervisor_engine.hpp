@@ -2,10 +2,13 @@
 
 #include "core/error.hpp"
 #include "supervisor/log_store.hpp"
+#include "supervisor/process_control.hpp"
 #include "supervisor/supervisor_store.hpp"
 #include "supervisor/supervisor_types.hpp"
 
 #include <cstdint>
+#include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -29,6 +32,10 @@ struct EngineOptions {
     std::string boot_id;
     std::int64_t metrics_interval_ms = 1000;
     std::int64_t adopted_poll_interval_ms = 250;
+    // Test-only fault injection: returning true makes the next runtime
+    // persistence write fail. Used to prove the fail-safe ordering required by
+    // SPEC-0010 PSH-04; never set by production callers.
+    std::function<bool()> persistence_fault;
 };
 
 struct RpcResult {
@@ -57,13 +64,16 @@ public:
     SupervisorEngine& operator=(const SupervisorEngine&) = delete;
     ~SupervisorEngine();
 
-    // Handles one RPC. For stop/restart that need the grace period the result
-    // has async=true and a completion arrives from poll().
+    // Handles one RPC. stop/restart return an operation object immediately
+    // (pending or terminal) and are queried through service.operation.get;
+    // no RPC produces an async ticket completion any more. The ticket parameter
+    // is retained for the IPC envelope but ignored.
     RpcResult rpc(std::string_view method, const nlohmann::json& params,
                   std::uint64_t ticket = 0);
 
-    // Drains child pipes, reaps children, runs timers and returns completed
-    // async RPCs. Must be called regularly (IPC loop + tests).
+    // Drains child pipes, reaps children and runs timers. Currently never
+    // returns ticket completions (operations are polled by ID); the return
+    // value is kept for the IPC server's completion plumbing.
     std::vector<RpcCompletion> poll(std::int64_t now_ms);
 
     // Upper bound until the next timer matters.
@@ -82,6 +92,7 @@ public:
 private:
     struct ServiceHandle;
     struct PendingOperation;
+    struct ServiceOperation;
 
     explicit SupervisorEngine(EngineOptions options);
     Error initialize();
@@ -91,14 +102,20 @@ private:
 
     nlohmann::json record_json(const ServiceHandle& handle, std::int64_t now_ms) const;
     nlohmann::json health_json(std::int64_t now_ms) const;
+    nlohmann::json operation_json(const ServiceOperation& operation) const;
 
     RpcResult handle_create(const nlohmann::json& params, std::int64_t now_ms);
     RpcResult handle_update(const nlohmann::json& params, std::int64_t now_ms);
     RpcResult handle_delete(const nlohmann::json& params);
     RpcResult handle_start(std::string_view id, std::int64_t now_ms);
-    RpcResult handle_stop(std::string_view id, std::uint64_t ticket, std::int64_t now_ms);
-    RpcResult handle_restart(std::string_view id, std::uint64_t ticket, std::int64_t now_ms);
+    RpcResult handle_stop(std::string_view id, std::int64_t now_ms);
+    RpcResult handle_restart(std::string_view id, std::int64_t now_ms);
+    RpcResult handle_operation(std::string_view operation_id) const;
     RpcResult handle_logs(const nlohmann::json& params) const;
+
+    // Persists the runtime row. Every critical lifecycle transition checks the
+    // result; failures are never silently downgraded to a log line.
+    Error save(ServiceHandle& handle);
 
     Error spawn_locked(ServiceHandle& handle, std::int64_t now_ms);
     void initiate_stop(ServiceHandle& handle, bool restart_after, std::int64_t now_ms);
@@ -108,15 +125,26 @@ private:
     void handle_adopted_gone(ServiceHandle& handle, std::int64_t now_ms);
     void apply_exit(ServiceHandle& handle, bool failed, int exit_code, int signal,
                     std::int64_t now_ms);
-    void save(ServiceHandle& handle);
     void close_fd(int& fd);
     void drain_log(ServiceHandle& handle, std::size_t budget);
     void drain_exec(ServiceHandle& handle);
     void update_metrics(ServiceHandle& handle, std::int64_t now_ms);
     void run_timers(std::int64_t now_ms);
-    void complete_pending(std::string_view id, std::int64_t now_ms, bool restart_after);
-    void complete_ticket(std::uint64_t ticket, RpcCompletion completion);
+    void complete_pending(std::string_view id, std::int64_t now_ms, bool restarted);
+    void fail_pending(std::string_view id, std::string slug, std::string message);
+    void finish_operation(ServiceOperation& operation, bool ok, std::string slug,
+                          std::string message, nlohmann::json result);
+    ServiceOperation* pending_operation(std::string_view service_id, std::string_view kind);
+    std::string begin_operation(ServiceHandle& handle, std::string kind, bool restart_after,
+                                std::int64_t now_ms, RpcResult& error);
+    std::string record_completed_operation(ServiceHandle& handle, std::string kind,
+                                           std::int64_t now_ms, bool ok,
+                                           std::string slug, std::string message);
+    void prune_operations();
+    GroupProbe probe_group(const ServiceHandle& handle) const;
     bool group_alive(const ServiceHandle& handle) const;
+    bool group_verifiable(const ServiceHandle& handle) const;
+    bool group_uncertain(const ServiceHandle& handle) const;
     bool leader_alive(const ServiceHandle& handle) const;
     bool unverified_process_may_exist(const ServiceHandle& handle) const;
 
@@ -127,11 +155,13 @@ private:
     bool shutting_down_ = false;
     std::uint64_t persistence_errors_ = 0;
     std::uint64_t log_errors_ = 0;
+    std::uint64_t operation_sequence_ = 0;
     std::unique_ptr<SupervisorStore> store_;
     std::unique_ptr<LogStore> logs_;
     std::map<std::string, ServiceHandle> services_;
     std::vector<PendingOperation> pending_;
-    std::vector<RpcCompletion> completions_;
+    std::map<std::string, ServiceOperation> operations_;
+    std::deque<std::string> operation_order_;
 };
 
 } // namespace edgedesk::supervisor

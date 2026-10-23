@@ -28,12 +28,18 @@ import type {
   ServiceLifecycle,
   SupervisedService,
   SupervisorHealth,
+  SupervisorOperation,
 } from '../../types';
 import { ServiceEditor } from './ServiceEditor';
 import './processes.css';
 
 const POLL_MS = 3000;
 const LOG_POLL_MS = 2000;
+const OPERATION_POLL_MS = 1000;
+// Longer than the maximum server-side stop timeout (600s) plus the SIGKILL
+// grace period. Waiting here only bounds the UI; the Supervisor keeps running
+// the operation if the page is refreshed or closed.
+const MAX_OPERATION_WAIT_MS = 11 * 60 * 1000;
 const MAX_LOG_CHARS = 256 * 1024;
 
 type ConfirmAction = {
@@ -90,6 +96,24 @@ function exitText(service: SupervisedService): string {
   if (service.last_signal !== null) return `信号 ${service.last_signal}`;
   if (service.last_exit_code !== null) return `退出码 ${service.last_exit_code}`;
   return '—';
+}
+
+async function waitForOperation(initial: SupervisorOperation): Promise<SupervisorOperation> {
+  let operation = initial;
+  let failures = 0;
+  const deadline = Date.now() + MAX_OPERATION_WAIT_MS;
+  while (operation.state === 'pending' && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, OPERATION_POLL_MS));
+    try {
+      operation = await api.supervisorOperation(operation.operation_id);
+      failures = 0;
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 404) throw caught;
+      failures += 1;
+      if (failures >= 5) throw caught;
+    }
+  }
+  return operation;
 }
 
 export function ProcessesView() {
@@ -269,12 +293,37 @@ export function ProcessesView() {
       if (kind === 'start') {
         applyRecord(await api.startSupervisorService(service.id));
         setNotice(`已请求启动 ${service.name}。`);
-      } else if (kind === 'stop') {
-        applyRecord(await api.stopSupervisorService(service.id));
-        setNotice(`已停止 ${service.name}。`);
-      } else if (kind === 'restart') {
-        applyRecord(await api.restartSupervisorService(service.id));
-        setNotice(`已重启 ${service.name}。`);
+      } else if (kind === 'stop' || kind === 'restart') {
+        // Stop/restart are asynchronous Supervisor operations: the HTTP request
+        // only submits them. Poll the operation ID until it settles; the
+        // service keeps stopping even if this page goes away.
+        const submitted =
+          kind === 'stop'
+            ? await api.stopSupervisorService(service.id)
+            : await api.restartSupervisorService(service.id);
+        setNotice(
+          kind === 'stop'
+            ? `已提交停止 ${service.name} 的请求，正在等待清理完成…`
+            : `已提交重启 ${service.name} 的请求，正在等待完成…`,
+        );
+        const operation = await waitForOperation(submitted);
+        if (operation.state === 'failed') {
+          throw new ApiError(
+            409,
+            operation.error?.slug ?? 'operation_failed',
+            operation.error?.message ?? 'Supervisor 操作失败。',
+          );
+        }
+        if (operation.state === 'pending') {
+          setNotice(
+            `操作 ${operation.operation_id} 仍在进行；刷新或关闭页面不会取消停止/清理。`,
+          );
+        } else {
+          if (operation.result) applyRecord(operation.result);
+          setNotice(
+            kind === 'stop' ? `已停止 ${service.name}。` : `已重启 ${service.name}。`,
+          );
+        }
       } else {
         await api.deleteSupervisorService(service.id);
         setServices((current) => current.filter((item) => item.id !== service.id));

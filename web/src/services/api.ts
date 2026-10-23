@@ -7,6 +7,7 @@ import type {
   ServicePayload,
   SupervisorHealth,
   SupervisorLogPage,
+  SupervisorOperation,
   SupervisedService,
   SetupStatus,
   SystemInfo,
@@ -224,14 +225,18 @@ export const api = {
       { method: 'POST' },
     ),
   stopSupervisorService: (id: string) =>
-    apiRequest<SupervisedService & { ok: boolean }>(
+    apiRequest<SupervisorOperation>(
       `/api/supervisor/services/${encodeURIComponent(id)}/stop`,
       { method: 'POST' },
     ),
   restartSupervisorService: (id: string) =>
-    apiRequest<SupervisedService & { ok: boolean }>(
+    apiRequest<SupervisorOperation>(
       `/api/supervisor/services/${encodeURIComponent(id)}/restart`,
       { method: 'POST' },
+    ),
+  supervisorOperation: (operationId: string) =>
+    apiRequest<SupervisorOperation>(
+      `/api/supervisor/operations/${encodeURIComponent(operationId)}`,
     ),
   supervisorLogs: (id: string, options: { tailBytes?: number; cursor?: number; maxBytes?: number } = {}) => {
     const params = new URLSearchParams();
