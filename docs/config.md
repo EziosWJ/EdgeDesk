@@ -223,6 +223,36 @@ sudo deploy/install.sh --uninstall           # 保留 /var/lib/edgedesk*
 具体文件、权限和三种 init 的生成内容见 [`deploy/README.md`](../deploy/README.md)。
 真机验证状态见 [`docs/testing.md`](testing.md)；未实际运行的 init 不得宣称通过。
 
+### Root 运维模式（`--ops`）
+
+默认安装以 `edgedesk` 服务账号运行，并启用 systemd 文件系统加固；它不能编辑
+`/etc`、执行 `apt` 或管理 `systemctl`。需要完整服务器运维能力的部署使用显式
+`--ops`：
+
+```bash
+sudo deploy/install.sh --ops --host 127.0.0.1 --port 8080
+```
+
+`--ops` 的行为：
+
+- Web unit 使用 `User=root`、`Group=root`、`UMask=0022`、
+  `Environment=HOME=/root`，保留 `NoNewPrivileges=yes` 和
+  `StateDirectory`/`RuntimeDirectory`，但移除 `ProtectSystem`、
+  `ProtectHome`、`PrivateTmp` 与 `ReadWritePaths`；
+- Supervisor unit 增加 `--allow-uid 0`（Web 后端的 `SO_PEERCRED` 为 uid 0），
+  并移除自身的挂载加固，使托管服务可以访问主机 `/etc`、`/home` 与 `/tmp`；
+- `--file-root` 默认 `/`，可用 `--file-root DIR` 收窄；
+- 服务身份变化时，安装器对 `--data-dir` 和 `--apps-root` 递归 `chown`
+  （仅限专用目录，拒绝 `/`、`/var/lib` 等过宽路径）；
+- `--service-user root` 单独使用会被拒绝，`--ops` 搭配非 root
+  `--service-user` 也会被拒绝，避免隐式提权。
+
+安全边界：`--ops` 后，任何能登录面板的人即拥有主机 root；终端命令没有
+命令级审计；扩展宿主桥接也以 root 执行。只应部署在回环地址，或受 TLS/VPN
+保护的受信网络中。非回环监听仍需显式 `--allow-non-loopback`，不得把 root
+面板直接暴露到公网。更完整的部署说明见
+[`deploy/README.md`](../deploy/README.md)。
+
 ## 服务化示例（systemd）
 
 ```ini

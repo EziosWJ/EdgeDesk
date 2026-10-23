@@ -22,6 +22,9 @@ sudo deploy/install.sh
 sudo deploy/install.sh --host 127.0.0.1 --port 8080 \
   --source /opt/edgedesk-dist --file-root /srv/edgedesk-files
 
+# Full server operations (root backend); see "Root operations profile" below
+sudo deploy/install.sh --ops --host 127.0.0.1 --port 8080
+
 # Inspect the environment without changing anything
 deploy/install.sh --detect
 
@@ -77,10 +80,13 @@ or a non-standard image.
 Init adapters:
 
 - **systemd**: `edgedesk.service` and `edgedesk-supervisor.service` under
-  `/etc/systemd/system`, both enabled and started. The web unit uses
+  `/etc/systemd/system`, both enabled and started. The default web unit uses
   `ProtectSystem=strict`, `NoNewPrivileges=yes`, `StateDirectory` and
-  `RuntimeDirectory`. The supervisor keeps `KillMode=process` and
-  `NoNewPrivileges=no` because it must switch service identities.
+  `RuntimeDirectory`. With `--ops` it instead runs as `root` with
+  `UMask=0022`, `Environment=HOME=/root`, no `ProtectSystem`/`ProtectHome`/
+  `PrivateTmp`/`ReadWritePaths`, and the supervisor gains `--allow-uid 0` and
+  drops its mount hardening. The supervisor always keeps `KillMode=process`
+  and `NoNewPrivileges=no` because it must switch service identities.
 - **OpenRC**: `/etc/init.d/edgedesk` and `/etc/init.d/edgedesk-supervisor`,
   both using `supervise-daemon` (OpenRC >= 0.21), added to `default`.
 - **BusyBox init**: `edgedesk-boot` and `edgedesk-supervisor-boot` wrappers plus
@@ -100,6 +106,54 @@ apps-root = /var/lib/edgedesk/apps
 audit-log = /var/lib/edgedesk/audit.log
 supervisor-socket = /run/edgedesk-supervisor.sock
 ```
+
+## Root operations profile (`--ops`)
+
+The default install is a deliberately constrained panel: the backend, terminal
+and file API run as the `edgedesk` service account and systemd makes the
+filesystem read-only outside the data directories. That profile cannot edit
+`/etc`, run `apt`, manage `systemctl`, or administer `/opt`.
+
+`--ops` is the explicit opt-in for a full operations console:
+
+```sh
+sudo deploy/install.sh --ops --host 127.0.0.1 --port 8080
+```
+
+It changes the privilege model, not just one command line:
+
+- `User=root`, `Group=root`, `UMask=0022`, `Environment=HOME=/root`;
+- no `ProtectSystem`, `ProtectHome`, `PrivateTmp` or `ReadWritePaths` in the
+  web unit, so the terminal and file API can write the host filesystem;
+- `--file-root` defaults to `/` (override with `--file-root DIR`);
+- the supervisor gets `--allow-uid 0` (the backend's `SO_PEERCRED` is uid 0)
+  and loses its `ProtectSystem`/`ProtectHome`/`PrivateTmp`; managed services
+  inherit that namespace, so they can use `/etc`, `/home` and the host `/tmp`;
+- authentication, CSRF, rate limiting and audit are unchanged: the mode changes
+  the process identity and systemd namespace, not the API.
+
+Because the panel is now equivalent to host root, treat it as an admin plane:
+keep it on loopback, or put TLS/VPN and a trusted network boundary in front.
+A non-loopback `--host` still requires `--allow-non-loopback`. Do not share one
+administrator account between people.
+
+`--service-user root` without `--ops` is rejected, and `--ops` with any other
+`--service-user` is rejected, so the mode can never be selected by accident.
+
+### Migrating an existing install
+
+The application refuses a data directory owned by another UID. When the
+service identity changes, the installer recursively applies the new owner to
+`--data-dir` and `--apps-root` before installing files. Only dedicated
+directories are accepted; broad paths such as `/`, `/var/lib` or `/etc` are
+refused. A manual migration is therefore usually just:
+
+```sh
+sudo deploy/install.sh --ops --force --source /opt/edgedesk/bin
+sudo systemctl restart edgedesk-supervisor edgedesk
+```
+
+The `.bak` copies of unit and config files are kept by `--force`.
 
 ## Safety rules enforced by the installer
 

@@ -443,10 +443,11 @@ file out/build/arm64-disk/bin/edgedesk   # ELF 64-bit ... ARM aarch64
 | --- | --- | --- |
 | 语法 | `sh -n deploy/install.sh`、`dash -n deploy/install.sh` | 两种 shell 均通过 |
 | init 探测 | `deploy/install.sh --detect` | 本机输出 `init=systemd`、`pid1=systemd`、`uid=1000`、`systemd=yes` |
-| 暂存安装测试 | `ctest -R install_script_test` | **24 项断言通过**：systemd/OpenRC/BusyBox 暂存安装、配置与 unit 内容、inittab `--force` 幂等、覆盖保护、`--no-supervisor`、端口/host/路径校验、dry-run 不落盘、uninstall/`--purge`、过宽 prefix 拒绝 |
+| 暂存安装测试 | `ctest -R install_script_test` | **32 项断言通过**：systemd/OpenRC/BusyBox 暂存安装、配置与 unit 内容、`--ops` root 模式、inittab `--force` 幂等、覆盖保护、`--no-supervisor`、端口/host/路径校验、dry-run 不落盘、uninstall/`--purge`、过宽 prefix 与过宽 chown 路径拒绝 |
+| root 模式暂存 | 安装测试中的 `--ops` 用例 | Web unit `User=root`、`Group=root`、`UMask=0022`、`Environment=HOME=/root`、`StateDirectory=edgedesk`、`RuntimeDirectory=edgedesk`，无 `ProtectSystem`/`ProtectHome`/`PrivateTmp`/`ReadWritePaths`；Supervisor `--allow-uid 0` 且无挂载加固；OpenRC/BusyBox 适配器同步；默认 `file-root = /`；`--ops` 配非 root 用户、无 `--ops` 的 `--service-user root`、以及过宽 `--data-dir` 递归 chown 均被拒绝 |
 | script + bin/ 布局 | 测试用例与真机 dry-run | 无需 `--source`/`--force`；预置在目标目录的二进制被就地采用 |
 | L0 全量 | `scripts/test-fast.sh` | **25/25 通过**（含 `install_script_test`） |
-| L1 全量 | `scripts/test-pr.sh` | 前端 **153 个测试** + 构建、`dev-disk` 构建、**25/25 ctest**、完整集成套件通过 |
+| L1 全量 | `scripts/test-pr.sh` | 前端 **153 个测试** + 构建、`dev-disk` 构建、**25/25 ctest**、完整集成套件通过（2026-10-23 `--ops` 改动复跑：复用已构建前端，55 s） |
 | systemd 静态校验 | `systemd-analyze verify`（暂存二进制） | 生成的 web/supervisor unit 无告警 |
 | OpenRC/BusyBox 生成物 | `sh -n` 暂存的 init 脚本与 wrapper | 通过；`/etc/inittab` 仅生成一个受管块 |
 
@@ -462,9 +463,10 @@ file out/build/arm64-disk/bin/edgedesk   # ELF 64-bit ... ARM aarch64
 | 重启韧性 | `systemctl restart edgedesk`、`systemctl restart edgedesk-supervisor` | 两次重启后 `/api/health` 均 200，两个服务均 `active` |
 | 安装后 unit 校验 | `systemd-analyze verify /etc/systemd/system/edgedesk*.service` | exit 0，无告警 |
 | 布局修复真机验证 | 上传新版脚本到 `/tmp/edgedesk-fix` 后 `--dry-run --init none` | 输出 `binary already at target: ...`，未写系统文件 |
+| root 运维模式（手工迁移） | 手工改 web unit 为 `User=root`、移除 `ProtectSystem`/`ProtectHome`/`PrivateTmp`、Supervisor 加 `--allow-uid 0`，并 `chown -R root:root /var/lib/edgedesk` | web 进程 `uid=0`、根挂载 `rw`、`/opt/edgedesk` 可写、`/api/health` 200、Supervisor 无 rejected peer；`--ops` 安装器路径尚未在该主机重装验证 |
 
 仍未执行：OpenRC/BusyBox 真机启动、停止与 respawn；systemd 真机 `--uninstall`
-（测试机保持安装状态）；ARM64/musl 目标上的安装器运行。安装器本身是 POSIX shell，
+（测试机保持安装状态）；安装器 `--ops` 真机重装；ARM64/musl 目标上的安装器运行。安装器本身是 POSIX shell，
 但仍依赖目标机的 `useradd`/`addgroup`、`awk`、`sed` 等命令集，不能由 x86_64 结果外推。
 
 ### 优雅退出耗时修复（2026-10-23）
@@ -512,6 +514,13 @@ Supervisor 集成测试（`scripts/supervisor_test.py`）实际覆盖：
 运行中更新不重启。`supervisor_ipc_test` 覆盖授权/未授权 `SO_PEERCRED`、错误 JSON、
 未知方法、异步 stop。静态 musl 运行暴露了测试中“socket 文件出现即已 listen”的时序假设，
 已改为重试连接至监听就绪；产品行为未修改。
+
+2026-10-23 安装器 `--ops` 改动复跑 L1 时，首次 `ctest -j4` 命中
+`supervisor_engine_test` 的退避计时断言（`backoff_durations[0] >= 180`）。该用例以
+2 ms 轮询测量约 200 ms 的 `BACKOFF` 窗口，并在 4 路并行负载下把窗口量短；随后
+`ctest -R supervisor_engine_test -j1 --repeat until-fail:5` **5/5 通过**，完整 L1
+复跑 **25/25 + 集成套件全过**。这是测试自身的并行计时抖动，本次改动只涉及安装器与
+文档，未修改 Supervisor 代码；该断言后续应改为直接注入时钟或放宽下界。
 
 ### 明确未验证项
 

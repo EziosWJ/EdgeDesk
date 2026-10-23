@@ -47,11 +47,15 @@ FORCE=0
 PURGE=0
 DRY_RUN=0
 ALLOW_NON_LOOPBACK=0
+OPS_MODE=0
+SERVICE_UMASK=0077
 BIN_DIR_EXPLICIT=0
 APPS_ROOT_EXPLICIT=0
 STATE_DIR_EXPLICIT=0
 SUPERVISOR_DIRS_EXPLICIT=0
 SERVICE_GROUP_EXPLICIT=0
+SERVICE_USER_EXPLICIT=0
+FILE_ROOT_EXPLICIT=0
 CONFIG_FILE=
 INIT_DETECTED=
 
@@ -92,6 +96,15 @@ General:
   --no-enable              Do not enable the services at boot
   --no-supervisor          Do not install/register edgedesk-supervisor
 
+Privilege model:
+  --ops                    Run the web backend, terminal and file API as root
+                           for full server operations. Disables systemd
+                           filesystem hardening, relaxes the supervisor mount
+                           namespace, defaults --file-root to / and sets
+                           --service-user/--service-group to root. High risk:
+                           whoever logs in to the panel becomes host root; use
+                           loopback, or TLS/VPN, and keep the bind explicit.
+
 Listen and paths:
   --host ADDR              Listen address (default 127.0.0.1; non-loopback
                            requires --allow-non-loopback)
@@ -103,11 +116,13 @@ Listen and paths:
   --data-dir DIR           Persistent data directory (default /var/lib/edgedesk)
   --state-dir DIR          Runtime state directory (default /run/edgedesk)
   --apps-root DIR          Extension apps root (default DATA_DIR/apps)
-  --file-root DIR          File API sandbox root (default /srv; must exist)
+  --file-root DIR          File API sandbox root (default /srv; --ops: /;
+                           must exist)
   --supervisor-db PATH     Supervisor SQLite path
   --supervisor-log-dir DIR Supervisor log directory
   --supervisor-socket PATH Supervisor Unix socket path
-  --service-user NAME      Account for the web backend (default edgedesk)
+  --service-user NAME      Account for the web backend (default edgedesk;
+                           root requires --ops)
   --service-group NAME     Group allowed to use the supervisor socket
   --source DIR             Directory containing edgedesk[-supervisor]
   --web-root DIR           Frontend directory for disk builds (copied to
@@ -116,6 +131,7 @@ Listen and paths:
 Examples:
   sudo deploy/install.sh --host 127.0.0.1 --port 8080
   sudo deploy/install.sh --init openrc --file-root /srv/edgedesk-files
+  sudo deploy/install.sh --ops --host 127.0.0.1 --port 8080
   sudo deploy/install.sh --uninstall
   deploy/install.sh --dry-run --destdir /tmp/edgedesk-stage
 EOF
@@ -138,6 +154,7 @@ while [ "$#" -gt 0 ]; do
         --no-start) START_SERVICE=0; shift ;;
         --no-enable) ENABLE_SERVICE=0; shift ;;
         --no-supervisor) WITH_SUPERVISOR=0; shift ;;
+        --ops) OPS_MODE=1; shift ;;
         --allow-non-loopback) ALLOW_NON_LOOPBACK=1; shift ;;
         --host) need_value "$@"; HOST=$2; shift 2 ;;
         --host=*) HOST=${1#*=}; shift ;;
@@ -157,16 +174,16 @@ while [ "$#" -gt 0 ]; do
         --state-dir=*) STATE_DIR=${1#*=}; STATE_DIR_EXPLICIT=1; shift ;;
         --apps-root) need_value "$@"; APPS_ROOT=$2; APPS_ROOT_EXPLICIT=1; shift 2 ;;
         --apps-root=*) APPS_ROOT=${1#*=}; APPS_ROOT_EXPLICIT=1; shift ;;
-        --file-root) need_value "$@"; FILE_ROOT=$2; shift 2 ;;
-        --file-root=*) FILE_ROOT=${1#*=}; shift ;;
+        --file-root) need_value "$@"; FILE_ROOT=$2; FILE_ROOT_EXPLICIT=1; shift 2 ;;
+        --file-root=*) FILE_ROOT=${1#*=}; FILE_ROOT_EXPLICIT=1; shift ;;
         --supervisor-db) need_value "$@"; SUPERVISOR_DB=$2; SUPERVISOR_DIRS_EXPLICIT=1; shift 2 ;;
         --supervisor-db=*) SUPERVISOR_DB=${1#*=}; SUPERVISOR_DIRS_EXPLICIT=1; shift ;;
         --supervisor-log-dir) need_value "$@"; SUPERVISOR_LOG_DIR=$2; SUPERVISOR_DIRS_EXPLICIT=1; shift 2 ;;
         --supervisor-log-dir=*) SUPERVISOR_LOG_DIR=${1#*=}; SUPERVISOR_DIRS_EXPLICIT=1; shift ;;
         --supervisor-socket) need_value "$@"; SUPERVISOR_SOCKET=$2; shift 2 ;;
         --supervisor-socket=*) SUPERVISOR_SOCKET=${1#*=}; shift ;;
-        --service-user) need_value "$@"; SERVICE_USER=$2; shift 2 ;;
-        --service-user=*) SERVICE_USER=${1#*=}; shift ;;
+        --service-user) need_value "$@"; SERVICE_USER=$2; SERVICE_USER_EXPLICIT=1; shift 2 ;;
+        --service-user=*) SERVICE_USER=${1#*=}; SERVICE_USER_EXPLICIT=1; shift ;;
         --service-group) need_value "$@"; SERVICE_GROUP=$2; SERVICE_GROUP_EXPLICIT=1; shift 2 ;;
         --service-group=*) SERVICE_GROUP=${1#*=}; SERVICE_GROUP_EXPLICIT=1; shift ;;
         --source) need_value "$@"; SOURCE_DIR=$2; shift 2 ;;
@@ -189,7 +206,11 @@ if [ "$APPS_ROOT_EXPLICIT" -eq 0 ]; then
     APPS_ROOT="$DATA_DIR/apps"
 fi
 if [ "$STATE_DIR_EXPLICIT" -eq 0 ]; then
-    STATE_DIR="/run/$SERVICE_USER"
+    if [ "$OPS_MODE" -eq 1 ]; then
+        STATE_DIR=/run/edgedesk
+    else
+        STATE_DIR="/run/$SERVICE_USER"
+    fi
 fi
 if [ "$SUPERVISOR_DIRS_EXPLICIT" -eq 0 ]; then
     SUPERVISOR_DB="/var/lib/edgedesk-supervisor/supervisor.db"
@@ -197,6 +218,28 @@ if [ "$SUPERVISOR_DIRS_EXPLICIT" -eq 0 ]; then
 fi
 CONFIG_FILE="$CONFIG_DIR/edgedesk.conf"
 SUPERVISOR_DB_DIR=$(dirname "$SUPERVISOR_DB")
+
+# --ops is the only supported way to run the backend as root. Root changes the
+# deployment's threat model, so it must never happen implicitly through
+# --service-user.
+if [ "$OPS_MODE" -eq 1 ]; then
+    if [ "$SERVICE_USER_EXPLICIT" -eq 1 ] && [ "$SERVICE_USER" != root ]; then
+        die "--ops runs the web backend as root; --service-user $SERVICE_USER conflicts"
+    fi
+    SERVICE_USER=root
+    if [ "$SERVICE_GROUP_EXPLICIT" -eq 0 ]; then
+        SERVICE_GROUP=root
+    fi
+    if [ "$FILE_ROOT_EXPLICIT" -eq 0 ]; then
+        FILE_ROOT=/
+    fi
+    SERVICE_UMASK=0022
+else
+    if [ "$SERVICE_USER" = root ]; then
+        die "refusing to run the web backend as root without --ops"
+    fi
+    SERVICE_UMASK=0077
+fi
 
 if [ -n "$DESTDIR" ]; then
     DESTDIR=${DESTDIR%/}
@@ -504,6 +547,34 @@ ensure_service_account() {
     say "created service account: $SERVICE_USER:$SERVICE_GROUP"
 }
 
+# The application refuses a data directory owned by another UID. Adopt the
+# platform-owned trees when the service identity changes, for example when an
+# existing install is migrated to or from --ops. Only dedicated directories
+# are accepted: a broad path must never be recursively chowned.
+adopt_tree_ownership() {
+    path=$1
+    target=$(rooted "$path")
+    [ -d "$target" ] || return 0
+    case "$path" in
+        /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var|/var/lib|/var/log)
+            die "refusing to chown -R $path; use a dedicated data/apps directory"
+            ;;
+    esac
+    current=$(stat -c '%U:%G' "$target" 2>/dev/null || true)
+    if [ "$current" = "$SERVICE_USER:$SERVICE_GROUP" ]; then
+        return 0
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        say "adopt ownership: chown -R $SERVICE_USER:$SERVICE_GROUP $target"
+        return 0
+    fi
+    if [ -n "$DESTDIR" ]; then
+        return 0
+    fi
+    say "adopt ownership: chown -R $SERVICE_USER:$SERVICE_GROUP $target"
+    chown -R "$SERVICE_USER:$SERVICE_GROUP" "$target"
+}
+
 config_body() {
     cat <<EOF
 # EdgeDesk configuration. Generated by deploy/install.sh.
@@ -538,22 +609,38 @@ StartLimitBurst=10
 Type=simple
 User=$SERVICE_USER
 Group=$SERVICE_GROUP
-UMask=0077
+UMask=$SERVICE_UMASK
+EOF
+    if [ "$OPS_MODE" -eq 1 ]; then
+        # Pin the terminal's initial working directory instead of relying on
+        # systemd's passwd lookup; /root is readable in this profile.
+        printf 'Environment=HOME=/root\n'
+    fi
+    cat <<EOF
 ExecStart=$BIN_DIR/edgedesk --config $CONFIG_FILE
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=yes
+EOF
+    if [ "$OPS_MODE" -eq 0 ]; then
+        cat <<EOF
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
 ReadWritePaths=$FILE_ROOT $DATA_DIR $STATE_DIR $APPS_ROOT
 EOF
-    if [ "$DATA_DIR" = "/var/lib/$SERVICE_USER" ]; then
-        printf 'StateDirectory=%s\n' "$SERVICE_USER"
+    fi
+    # StateDirectory/RuntimeDirectory create and chown the directory to
+    # User/Group. Derive the name from the path, not the account, so --ops
+    # still gets /var/lib/edgedesk and /run/edgedesk owned by root.
+    data_name=${DATA_DIR##*/}
+    if [ -n "$data_name" ] && [ "$DATA_DIR" = "/var/lib/$data_name" ]; then
+        printf 'StateDirectory=%s\n' "$data_name"
         printf 'StateDirectoryMode=0700\n'
     fi
-    if [ "$STATE_DIR" = "/run/$SERVICE_USER" ]; then
-        printf 'RuntimeDirectory=%s\n' "$SERVICE_USER"
+    state_name=${STATE_DIR##*/}
+    if [ -n "$state_name" ] && [ "$STATE_DIR" = "/run/$state_name" ]; then
+        printf 'RuntimeDirectory=%s\n' "$state_name"
         printf 'RuntimeDirectoryMode=0700\n'
     else
         printf 'ExecStartPre=+/bin/mkdir -p -m 0700 %s\n' "$STATE_DIR"
@@ -567,6 +654,13 @@ EOF
 }
 
 systemd_supervisor_unit() {
+    allow_uid_arg=
+    if [ "$OPS_MODE" -eq 1 ]; then
+        # The web backend is uid 0 in this mode; --allow-gid alone may not
+        # match if the operator chose a non-root group.
+        allow_uid_arg=' \
+  --allow-uid 0'
+    fi
     cat <<EOF
 [Unit]
 Description=EdgeDesk process supervisor
@@ -582,7 +676,7 @@ ExecStart=$BIN_DIR/edgedesk-supervisor \\
   --database $SUPERVISOR_DB \\
   --log-dir $SUPERVISOR_LOG_DIR \\
   --socket-group $SERVICE_GROUP \\
-  --allow-gid $SERVICE_GROUP
+  --allow-gid $SERVICE_GROUP$allow_uid_arg
 
 # Managed services form their own process groups. Signal only the supervisor
 # first so it can forward SIGTERM, wait for stop_timeout_ms and escalate.
@@ -594,11 +688,15 @@ RestartSec=2
 # The supervisor runs as root to switch service identities. Do not add
 # NoNewPrivileges=yes here.
 NoNewPrivileges=no
+EOF
+    if [ "$OPS_MODE" -eq 0 ]; then
+        cat <<EOF
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=full
 ReadWritePaths=$SUPERVISOR_DB_DIR $SUPERVISOR_LOG_DIR
 EOF
+    fi
     if [ "$SUPERVISOR_DB_DIR" = "/var/lib/edgedesk-supervisor" ]; then
         printf 'StateDirectory=edgedesk-supervisor\n'
         printf 'StateDirectoryMode=0700\n'
@@ -648,6 +746,11 @@ EOF
 }
 
 openrc_supervisor_script() {
+    allow_uid_arg=
+    if [ "$OPS_MODE" -eq 1 ]; then
+        allow_uid_arg=' \
+  --allow-uid 0'
+    fi
     cat <<EOF
 #!/sbin/openrc-run
 # Generated by deploy/install.sh. Requires OpenRC with supervise-daemon.
@@ -665,7 +768,7 @@ command_args="--socket \${EDGEDESK_SUPERVISOR_SOCKET} \\
   --database \${EDGEDESK_SUPERVISOR_DB} \\
   --log-dir \${EDGEDESK_SUPERVISOR_LOG_DIR} \\
   --socket-group \${EDGEDESK_SUPERVISOR_GROUP} \\
-  --allow-gid \${EDGEDESK_SUPERVISOR_GROUP}"
+  --allow-gid \${EDGEDESK_SUPERVISOR_GROUP}$allow_uid_arg"
 command_user="root:root"
 supervisor="supervise-daemon"
 respawn_delay=2
@@ -691,7 +794,7 @@ busybox_web_wrapper() {
 #!/bin/sh
 # Generated by deploy/install.sh: BusyBox init wrapper for the web backend.
 set -eu
-umask 0077
+umask $SERVICE_UMASK
 
 mkdir -p $DATA_DIR $APPS_ROOT $STATE_DIR
 chmod 0700 $DATA_DIR $APPS_ROOT $STATE_DIR
@@ -712,6 +815,11 @@ EOF
 }
 
 busybox_supervisor_wrapper() {
+    allow_uid_arg=
+    if [ "$OPS_MODE" -eq 1 ]; then
+        allow_uid_arg=' \
+    --allow-uid 0'
+    fi
     cat <<EOF
 #!/bin/sh
 # Generated by deploy/install.sh: BusyBox init wrapper for the supervisor.
@@ -729,7 +837,7 @@ exec $BIN_DIR/edgedesk-supervisor \\
     --database $SUPERVISOR_DB \\
     --log-dir $SUPERVISOR_LOG_DIR \\
     --socket-group $SERVICE_GROUP \\
-    --allow-gid $SERVICE_GROUP
+    --allow-gid $SERVICE_GROUP$allow_uid_arg
 EOF
 }
 
@@ -981,6 +1089,11 @@ do_install() {
         fi
     fi
 
+    if [ "$OPS_MODE" -eq 1 ]; then
+        warn "--ops runs the web backend, terminal and file API as root."
+        warn "Anyone who can authenticate to the panel gets host root; keep it on"
+        warn "loopback or behind a trusted TLS/VPN boundary."
+    fi
     if [ "$FILE_ROOT" = / ]; then
         warn "--file-root / exposes the whole filesystem through the file API"
     fi
@@ -1019,10 +1132,13 @@ do_install() {
     say "  apps:        $APPS_ROOT"
     say "  file root:   $FILE_ROOT"
     say "  user/group:  $SERVICE_USER:$SERVICE_GROUP"
+    say "  mode:        $([ "$OPS_MODE" -eq 1 ] && printf 'ops (root backend)' || printf 'service user')"
     say "  supervisor:  $([ "$WITH_SUPERVISOR" -eq 1 ] && printf 'yes' || printf 'no')"
     say ""
 
     ensure_service_account
+    adopt_tree_ownership "$DATA_DIR"
+    adopt_tree_ownership "$APPS_ROOT"
     install_files
     apply_init
     print_next_steps
@@ -1169,7 +1285,11 @@ do_uninstall() {
         rmdir "$(rooted "$BIN_DIR")" 2>/dev/null || true
         rmdir "$(rooted "$PREFIX")" 2>/dev/null || true
     fi
-    say "uninstall complete; the account $SERVICE_USER was not removed"
+    if [ "$SERVICE_USER" = root ]; then
+        say "uninstall complete; the web backend ran as root (--ops)"
+    else
+        say "uninstall complete; the account $SERVICE_USER was not removed"
+    fi
 }
 
 # ---------------------------------------------------------------------------

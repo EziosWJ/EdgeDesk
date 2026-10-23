@@ -65,6 +65,7 @@
 | [ADR-0014](adr/0014-extension-popup-navigation-boundary.md) | 扩展弹窗与 iframe 顶层导航边界（待确认；风险未关闭） | Proposed |
 | [ADR-0015](adr/0015-process-supervisor-architecture.md) | 独立 Process Supervisor、Unix Socket、SQLite 与 init 适配 | 已实现（V1.0；平台矩阵部分未验证） |
 | [ADR-0016](adr/0016-process-supervisor-security.md) | root 守护进程、运行身份隔离、IPC 与执行安全 | 已实现（V1.0；root/init 真机验证待补） |
+| [ADR-0017](adr/0017-root-operations-profile.md) | 安装器 `--ops` root 运维模式：unit、Supervisor 允许列表与目录属主 | Accepted（暂存测试通过；真机手工迁移已验证，`--ops` 重装未验证） |
 
 ## Spec（要做什么）
 

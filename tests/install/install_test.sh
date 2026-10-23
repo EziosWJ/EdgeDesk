@@ -54,7 +54,8 @@ expect_fail() {
 }
 
 mkdir -p "$WORK/bin" "$WORK/srv" "$WORK/stage-systemd" "$WORK/stage-openrc" \
-    "$WORK/stage-busybox" "$WORK/stage-nosup" "$WORK/stage-host" "$WORK/stage-uninstall"
+    "$WORK/stage-busybox" "$WORK/stage-nosup" "$WORK/stage-host" "$WORK/stage-uninstall" \
+    "$WORK/stage-ops" "$WORK/stage-ops-openrc" "$WORK/stage-ops-busybox"
 
 printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/edgedesk"
 printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/edgedesk-supervisor"
@@ -117,6 +118,71 @@ if grep -Rq "0\.0\.0\.0" "$STAGE" 2>/dev/null; then
     fail "default install must not reference 0.0.0.0"
 fi
 ok "default install never binds all interfaces"
+
+# ---------------------------------------------------------------------------
+# Root operations profile (--ops)
+# ---------------------------------------------------------------------------
+
+"$INSTALL" --destdir "$WORK/stage-ops" --init systemd --ops \
+    --source "$WORK/bin" --file-root "$WORK/srv" --port 18081 \
+    --no-start --no-enable > "$WORK/ops.out"
+
+STAGE="$WORK/stage-ops"
+assert_file "$STAGE/etc/systemd/system/edgedesk.service"
+assert_contains "$STAGE/etc/edgedesk/edgedesk.conf" "file-root = $WORK/srv"
+assert_contains "$STAGE/etc/systemd/system/edgedesk.service" "User=root"
+assert_contains "$STAGE/etc/systemd/system/edgedesk.service" "Group=root"
+assert_contains "$STAGE/etc/systemd/system/edgedesk.service" "UMask=0022"
+assert_contains "$STAGE/etc/systemd/system/edgedesk.service" "Environment=HOME=/root"
+assert_contains "$STAGE/etc/systemd/system/edgedesk.service" "StateDirectory=edgedesk"
+assert_contains "$STAGE/etc/systemd/system/edgedesk.service" "RuntimeDirectory=edgedesk"
+assert_not_contains "$STAGE/etc/systemd/system/edgedesk.service" "ProtectSystem"
+assert_not_contains "$STAGE/etc/systemd/system/edgedesk.service" "ProtectHome"
+assert_not_contains "$STAGE/etc/systemd/system/edgedesk.service" "PrivateTmp"
+assert_not_contains "$STAGE/etc/systemd/system/edgedesk.service" "ReadWritePaths"
+ok "--ops generates a root web unit without filesystem hardening"
+
+assert_contains "$STAGE/etc/systemd/system/edgedesk-supervisor.service" "--allow-uid 0"
+assert_not_contains "$STAGE/etc/systemd/system/edgedesk-supervisor.service" "ProtectSystem"
+ok "--ops authorizes the root backend and relaxes the supervisor sandbox"
+
+"$INSTALL" --dry-run --init systemd --ops --source "$WORK/bin" --yes \
+    > "$WORK/ops-default.out"
+assert_contains "$WORK/ops-default.out" "file-root = /"
+assert_contains "$WORK/ops-default.out" "User=root"
+ok "--ops defaults the file API root to /"
+
+"$INSTALL" --destdir "$WORK/stage-ops-openrc" --init openrc --ops \
+    --source "$WORK/bin" --file-root "$WORK/srv" --no-start --no-enable \
+    > "$WORK/ops-openrc.out"
+STAGE="$WORK/stage-ops-openrc"
+assert_contains "$STAGE/etc/init.d/edgedesk" 'EDGEDESK_USER:=root'
+assert_contains "$STAGE/etc/init.d/edgedesk-supervisor" "--allow-uid 0"
+sh -n "$STAGE/etc/init.d/edgedesk"
+sh -n "$STAGE/etc/init.d/edgedesk-supervisor"
+ok "--ops propagates to the OpenRC adapters"
+
+"$INSTALL" --destdir "$WORK/stage-ops-busybox" --init busybox --ops \
+    --source "$WORK/bin" --file-root "$WORK/srv" --no-start --no-enable \
+    > "$WORK/ops-busybox.out"
+STAGE="$WORK/stage-ops-busybox"
+assert_contains "$STAGE/opt/edgedesk/bin/edgedesk-boot" "umask 0022"
+assert_contains "$STAGE/opt/edgedesk/bin/edgedesk-supervisor-boot" "--allow-uid 0"
+sh -n "$STAGE/opt/edgedesk/bin/edgedesk-boot"
+sh -n "$STAGE/opt/edgedesk/bin/edgedesk-supervisor-boot"
+ok "--ops propagates to the BusyBox wrappers"
+
+expect_fail "--ops rejects a non-root service user" \
+    "$INSTALL" --dry-run --init systemd --ops --source "$WORK/bin" \
+    --service-user alice --file-root "$WORK/srv"
+
+expect_fail "root without --ops is rejected" \
+    "$INSTALL" --dry-run --init systemd --source "$WORK/bin" \
+    --service-user root --file-root "$WORK/srv"
+
+expect_fail "ownership adoption refuses a broad data directory" \
+    "$INSTALL" --dry-run --init systemd --ops --source "$WORK/bin" \
+    --file-root "$WORK/srv" --data-dir /var/lib
 
 # ---------------------------------------------------------------------------
 # OpenRC staging
