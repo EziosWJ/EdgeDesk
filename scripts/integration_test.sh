@@ -319,6 +319,31 @@ python3 scripts/extension_test.py --host 127.0.0.1 --port "$((PORT + 6))" \
 stop_pid "$CRASH_PID"
 unset ACTIVE_APPS
 
+# The maintenance thread sleeps for 30s between sweeps; shutdown must wake it
+# instead of waiting out the interval. Regression guard for a 30s SIGTERM stop.
+log "graceful shutdown is prompt"
+start_server "$((PORT + 7))" --file-root "$DATA" --data-dir "$AUTH_DATA" --state-dir "$STATE"
+SHUTDOWN_PID=$SERVER_PID
+wait_health "$((PORT + 7))"
+SHUTDOWN_START_NS=$(date +%s%N)
+kill "$SHUTDOWN_PID" 2>/dev/null || true
+for _ in $(seq 1 50); do
+  kill -0 "$SHUTDOWN_PID" 2>/dev/null || break
+  sleep 0.1
+done
+if kill -0 "$SHUTDOWN_PID" 2>/dev/null; then
+  kill -9 "$SHUTDOWN_PID" 2>/dev/null || true
+  wait "$SHUTDOWN_PID" 2>/dev/null || true
+  echo "graceful shutdown did not finish within 5s" >&2
+  exit 1
+fi
+SHUTDOWN_ELAPSED_MS=$(( ($(date +%s%N) - SHUTDOWN_START_NS) / 1000000 ))
+wait "$SHUTDOWN_PID" 2>/dev/null || true
+if [ "$SHUTDOWN_ELAPSED_MS" -ge 3000 ]; then
+  echo "graceful shutdown took ${SHUTDOWN_ELAPSED_MS}ms (expected < 3000ms)" >&2
+  exit 1
+fi
+
 log "audit log sanity"
 if [ -f "$STATE/audit.log" ]; then
   grep -q '"event":"auth.setup"' "$STATE/audit.log"

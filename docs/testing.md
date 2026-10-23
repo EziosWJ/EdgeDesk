@@ -467,6 +467,29 @@ file out/build/arm64-disk/bin/edgedesk   # ELF 64-bit ... ARM aarch64
 （测试机保持安装状态）；ARM64/musl 目标上的安装器运行。安装器本身是 POSIX shell，
 但仍依赖目标机的 `useradd`/`addgroup`、`awk`、`sed` 等命令集，不能由 x86_64 结果外推。
 
+### 优雅退出耗时修复（2026-10-23）
+
+现象：前台 Ctrl+C 或 `systemctl stop/restart` 需要约 30 秒才退出。根因是
+`Application::start_maintenance()` 使用**局部** `condition_variable` 等待 30 秒维护周期，
+退出时只设置 `stopping_` 而没有 `notify`，`maintenance_.join()` 必须等满整个周期。
+
+修复：维护线程改用 `Application` 成员 `maintenance_mutex_`/`maintenance_wakeup_`，
+`request_stop()` 置位并 `notify_all`；周期工作不持锁执行，避免关停等待 sweep。
+启动横幅同时改为 “starting on”，绑定失败时额外打印
+“EdgeDesk failed to listen on <host>:<port> (error <n>)”。
+
+| 验证 | 命令 | 实际结果 |
+| --- | --- | --- |
+| 修复前复现（测试机） | 发送 `SIGINT` 并计时 | `shutdown_ms=29903` |
+| 修复后（宿主） | 同一脚本、`127.0.0.1:18081` | `shutdown_ms=9`～`10` |
+| 修复后（测试机 Ubuntu 26.04） | 上传新二进制到 `/tmp` 后同一脚本 | `shutdown_ms=13` |
+| 集成回归守卫 | `scripts/integration_test.sh`（新增 “graceful shutdown is prompt”） | 优雅退出 < 3 s 断言通过；`ctest` 25/25 |
+| 绑定失败诊断 | 非 root 绑定 `127.0.0.1:80` | 输出 `bind: Permission denied` 与新的失败说明；进程退出 |
+
+30 秒等待问题与低端口绑定无关：端口 80 失败是因为生成的服务以 `User=edgedesk`
+运行，Linux 要求 root 或 `CAP_NET_BIND_SERVICE` 才能绑定 1024 以下端口。
+安装器仍只允许回环地址；`0.0.0.0` 不会在未经安全设计评审时启用。
+
 Supervisor 集成测试（`scripts/supervisor_test.py`）实际覆盖：
 
 | 场景 | 实际断言与结果 |
@@ -495,9 +518,9 @@ Supervisor 集成测试（`scripts/supervisor_test.py`）实际覆盖：
 - **root 身份切换**：集成测试以 `uid=1000` 运行，未实际以 root 启动 Supervisor，也未验证
   跨 UID/GID 的 `setgroups`/`setgid`/`setuid` 失败清理。相关配置校验与拒绝路径有原生测试，
   但运行时身份切换没有证据。
-- **init 真机**：systemd、OpenRC、BusyBox 仅提供文件并做语法检查；安装器也只完成
-  暂存安装、生成物语法检查和 systemd 静态校验。未在真实 init 环境执行
-  启动、停止、Supervisor 崩溃后的 respawn，也未以 root 验证服务账号创建。不得视为平台验收通过。
+- **init 真机**：systemd 已在 Ubuntu 26.04 测试机完成真实安装、启停与重启验证
+  （见“安装器实际执行记录”）；OpenRC 与 BusyBox 仍只有生成物和语法检查，未在真实
+  init 环境执行启动、停止、Supervisor 崩溃后的 respawn。不得视为平台验收通过。
 - **真实 reboot**：未执行系统重启；boot ID 变化后的 `autostart` 行为只有代码路径和单元级
   构造测试，没有真实断电/重启证据。
 - **Buildroot/真实硬件、ARM32**：未构建、未运行。

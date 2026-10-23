@@ -44,7 +44,7 @@ std::string getenv_or(const char* name, const std::string& fallback) {
 Application::Application(Config config) : config_(std::move(config)) {}
 
 Application::~Application() {
-    stopping_.store(true);
+    request_stop();
     if (maintenance_.joinable()) maintenance_.join();
     if (metrics_) metrics_->stop();
     // TerminalManager is destroyed after the server stops; its destructor
@@ -201,15 +201,25 @@ void Application::print_banner() const {
               << std::flush;
 }
 
+void Application::request_stop() {
+    {
+        std::lock_guard<std::mutex> lock(maintenance_mutex_);
+        stopping_.store(true);
+    }
+    maintenance_wakeup_.notify_all();
+}
+
 void Application::start_maintenance() {
     maintenance_ = std::thread([this] {
-        std::mutex mutex;
-        std::condition_variable wakeup;
-        std::unique_lock<std::mutex> lock(mutex);
-        while (!stopping_.load()) {
-            wakeup.wait_for(lock, std::chrono::milliseconds(kMaintenanceIntervalMs),
-                            [this] { return stopping_.load(); });
-            if (stopping_.load()) break;
+        for (;;) {
+            {
+                std::unique_lock<std::mutex> lock(maintenance_mutex_);
+                maintenance_wakeup_.wait_for(lock, std::chrono::milliseconds(kMaintenanceIntervalMs),
+                                             [this] { return stopping_.load(); });
+                if (stopping_.load()) return;
+            }
+            // Do the periodic work without holding the mutex: request_stop()
+            // must not wait for a sweep or an audit prune to finish.
             const auto now_ms = now_unix_millis();
             terminals_->sweep(now_ms);
             api_limiter_->sweep(now_ms);
@@ -289,7 +299,7 @@ int Application::run() {
 
     const int result = server.run();
 
-    stopping_.store(true);
+    request_stop();
     if (signal_thread.joinable()) {
         ::pthread_kill(signal_thread.native_handle(), SIGTERM);
         signal_thread.join();
