@@ -15,11 +15,27 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { deflateRawSync } from 'node:zlib';
 import { crc32 as zlibCrc32 } from 'node:zlib';
+import { fileURLToPath } from 'node:url';
 
 const HOST_API_VERSION = '1.0.0';
 const PERMISSIONS = new Set(['storage', 'files.manage', 'terminal.access', 'network']);
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 const ID = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+// SPEC-0011 section 4.2. The SDK mirrors the host limits so a package fails
+// during development instead of after upload. Identity, socket path, data
+// directory and autostart are host-managed and never appear in the manifest.
+const BACKEND_KEYS = new Set(['executable', 'args']);
+const BACKEND_EXECUTABLE_MAX_BYTES = 4096;
+const BACKEND_ARGS_MAX_ENTRIES = 128;
+const BACKEND_ARG_MAX_BYTES = 8192;
+const BACKEND_ARGS_TOTAL_MAX_BYTES = 128 * 1024;
+const TEMPLATES_ROOT = fileURLToPath(new URL('../templates/', import.meta.url));
+const ELF_MACHINES = new Map([
+  [62, { arch: 'x86_64', elfClass: 2 }],
+  [183, { arch: 'aarch64', elfClass: 2 }],
+  [40, { arch: 'arm32', elfClass: 1 }],
+]);
 
 function fail(message) {
   const error = new Error(message);
@@ -46,6 +62,129 @@ function normalizeEntry(name) {
   const parts = normalized.split('/');
   if (parts.some((part) => part === '' || part === '.' || part === '..')) fail(`invalid relative path: ${name}`);
   return normalized;
+}
+
+function byteLength(text) {
+  return Buffer.byteLength(text, 'utf8');
+}
+
+function validateBackendExecutable(value, errors) {
+  if (typeof value !== 'string' || value.length === 0) {
+    errors.push('backend.executable is required and must be a non-empty string');
+    return null;
+  }
+  if (byteLength(value) > BACKEND_EXECUTABLE_MAX_BYTES) {
+    errors.push(`backend.executable must be at most ${BACKEND_EXECUTABLE_MAX_BYTES} bytes`);
+    return null;
+  }
+  if (controlChars(value)) {
+    errors.push('backend.executable must not contain NUL or control characters');
+    return null;
+  }
+  if (value.includes('\\')) {
+    errors.push('backend.executable must use forward slashes and no backslashes');
+    return null;
+  }
+  if (value.startsWith('/')) {
+    errors.push('backend.executable must be a relative path inside the package');
+    return null;
+  }
+  const parts = value.split('/');
+  if (parts.some((part) => part === '' || part === '.' || part === '..')) {
+    errors.push('backend.executable must be a normalized relative path (no empty, "." or ".." segments)');
+    return null;
+  }
+  return value;
+}
+
+function validateBackendArgs(value, errors) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push('backend.args must be an array of strings');
+    return [];
+  }
+  if (value.length > BACKEND_ARGS_MAX_ENTRIES) {
+    errors.push(`backend.args must contain at most ${BACKEND_ARGS_MAX_ENTRIES} entries`);
+  }
+  let total = 0;
+  value.forEach((argument, index) => {
+    if (typeof argument !== 'string') {
+      errors.push(`backend.args[${index}] must be a string`);
+      return;
+    }
+    if (controlChars(argument)) {
+      errors.push(`backend.args[${index}] must not contain NUL or control characters`);
+      return;
+    }
+    const size = byteLength(argument);
+    total += size;
+    if (size > BACKEND_ARG_MAX_BYTES) {
+      errors.push(`backend.args[${index}] must be at most ${BACKEND_ARG_MAX_BYTES} bytes`);
+    }
+  });
+  if (total > BACKEND_ARGS_TOTAL_MAX_BYTES) {
+    errors.push(`backend.args must total at most ${BACKEND_ARGS_TOTAL_MAX_BYTES} bytes`);
+  }
+  return value;
+}
+
+function validateBackend(value, errors) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    errors.push('backend must be an object');
+    return null;
+  }
+  for (const key of Object.keys(value)) {
+    if (!BACKEND_KEYS.has(key)) {
+      errors.push(
+        `backend.${key} is not allowed; run identity, socket, data directory, autostart and network settings are managed by EdgeDesk`,
+      );
+    }
+  }
+  const executable = validateBackendExecutable(value.executable, errors);
+  const args = validateBackendArgs(value.args, errors);
+  return { executable, args };
+}
+
+function localElfArch() {
+  const arch = { x64: 'x86_64', arm64: 'aarch64', arm: 'arm32' }[process.arch];
+  return arch ?? 'unknown';
+}
+
+/**
+ * Header-only ELF inspection. It never maps or executes package content and
+ * never follows symlinks. Full layout validation happens on the device at
+ * install time.
+ */
+async function inspectElfFile(file) {
+  const handle = await fs.open(file, 'r');
+  try {
+    const header = Buffer.alloc(64);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead < 4 || !(header[0] === 0x7f && header[1] === 0x45 && header[2] === 0x4c && header[3] === 0x46)) {
+      return { error: 'not an ELF file (scripts and other formats are not executed)' };
+    }
+    if (bytesRead < 52) return { error: 'file is too short to be an ELF executable' };
+    const elfClass = header[4];
+    if (elfClass !== 1 && elfClass !== 2) return { error: 'unsupported ELF class' };
+    if (header[5] !== 1) return { error: 'big-endian ELF is not supported' };
+    if (header[6] !== 1) return { error: 'unsupported ELF header version' };
+    if (bytesRead < (elfClass === 2 ? 64 : 52)) return { error: 'truncated ELF header' };
+    const type = header.readUInt16LE(16);
+    if (type !== 2 && type !== 3) {
+      return { error: 'ELF type must be an executable (ET_EXEC) or position-independent executable (ET_DYN)' };
+    }
+    const machine = header.readUInt16LE(18);
+    const expected = ELF_MACHINES.get(machine);
+    if (!expected) {
+      return { error: `unsupported ELF architecture (e_machine=${machine}, class=${elfClass === 2 ? 64 : 32}-bit)` };
+    }
+    if (expected.elfClass !== elfClass) {
+      return { error: `ELF class ${elfClass === 2 ? 64 : 32}-bit does not match ${expected.arch}` };
+    }
+    return { arch: expected.arch };
+  } finally {
+    await handle.close();
+  }
 }
 
 function validateManifest(manifest) {
@@ -108,10 +247,15 @@ function validateManifest(manifest) {
   if (manifest.icon !== undefined && (typeof manifest.icon !== 'string' || !/^[^/\\][^\\]*$/.test(manifest.icon) || manifest.icon.split('/').some((part) => part === '..' || part === '.'))) {
     errors.push('icon must be a normalized relative path');
   }
-  if (manifest.backend !== undefined || manifest.runtime !== undefined || manifest.scripts !== undefined) {
-    warnings.push('backend/script runtime fields are reserved and are not executed by EdgeDesk 1.3');
+  let backend = null;
+  if (manifest.backend !== undefined) {
+    backend = validateBackend(manifest.backend, errors);
+  }
+  if (manifest.runtime !== undefined || manifest.scripts !== undefined) {
+    warnings.push('runtime/script fields are reserved and are not executed by EdgeDesk');
   }
   if (errors.length > 0) fail(`manifest validation failed:\n- ${errors.join('\n- ')}`);
+  if (backend) manifest.backend = backend;
   return { manifest, warnings, hostCompatible: currentHostInRange(manifest) };
 }
 
@@ -195,6 +339,23 @@ async function validateDirectory(root) {
   if (!folded.has('index.html')) fail('index.html is required at the package root');
   if (!folded.has('manifest.json')) fail('manifest.json is required at the package root');
   if (manifest.icon && !folded.has(manifest.icon.toLowerCase())) fail(`manifest icon does not exist: ${manifest.icon}`);
+  if (manifest.backend) {
+    const executable = manifest.backend.executable;
+    if (!files.includes(executable)) fail(`backend.executable does not exist in the package: ${executable}`);
+    const stat = await fs.lstat(path.join(root, executable));
+    if (!stat.isFile()) fail(`backend.executable must be a regular file: ${executable}`);
+    if ((stat.mode & 0o111) === 0) {
+      fail(`backend.executable is not executable: ${executable} (set the executable bit before packing)`);
+    }
+    const elf = await inspectElfFile(path.join(root, executable));
+    if (elf.error) fail(`backend.executable is not a valid ELF executable: ${elf.error}`);
+    if (elf.arch !== localElfArch()) {
+      warnings.push(
+        `backend.executable targets ${elf.arch}; this validator host is ${localElfArch()}. ` +
+          'The device independently checks the ELF architecture at install time.',
+      );
+    }
+  }
   await loadTextAssets(root, files);
   const referenceWarnings = [];
   const referenceErrors = [];
@@ -281,7 +442,7 @@ function buildZip(entries) {
     local.writeUInt16LE(name.length, 26);
     local.writeUInt16LE(0, 28);
     chunks.push(local, name, compressed);
-    central.push({ name, crc, compressed: compressed.length, uncompressed: entry.data.length, offset });
+    central.push({ name, crc, compressed: compressed.length, uncompressed: entry.data.length, offset, mode: entry.mode });
     offset += local.length + name.length + compressed.length;
   }
   const centralOffset = offset;
@@ -302,7 +463,7 @@ function buildZip(entries) {
     header.writeUInt16LE(0, 32);
     header.writeUInt16LE(0, 34);
     header.writeUInt16LE(0, 36);
-    header.writeUInt32LE((0o100644 << 16) >>> 0, 38);
+    header.writeUInt32LE(((0o100000 | ((entry.mode ?? 0o644) & 0o777)) << 16) >>> 0, 38);
     header.writeUInt32LE(entry.offset, 42);
     chunks.push(header, entry.name);
     offset += header.length + entry.name.length;
@@ -325,7 +486,9 @@ async function packDirectory(root, output) {
   const validation = await validateDirectory(root);
   const entries = [];
   for (const relative of validation.files) {
-    entries.push({ name: relative, data: await fs.readFile(path.join(root, relative)) });
+    const absolute = path.join(root, relative);
+    const stat = await fs.stat(absolute);
+    entries.push({ name: relative, data: await fs.readFile(absolute), mode: stat.mode });
   }
   const zip = buildZip(entries);
   await fs.writeFile(output, zip);
@@ -356,14 +519,45 @@ async function readZipEntries(file) {
       compressed: data.readUInt32LE(offset + 20),
       uncompressed: data.readUInt32LE(offset + 24),
       localOffset: data.readUInt32LE(offset + 42),
+      mode: data.readUInt32LE(offset + 38) >>> 16,
     });
     offset += 46 + nameLength + extraLength + commentLength;
   }
   return entries;
 }
 
+async function initTemplate(destination, templateName) {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(templateName)) fail(`invalid template name: ${templateName}`);
+  const source = path.join(TEMPLATES_ROOT, templateName);
+  const stat = await fs.stat(source).catch(() => null);
+  if (!stat || !stat.isDirectory()) {
+    const available = await fs.readdir(TEMPLATES_ROOT).catch(() => []);
+    fail(`unknown template: ${templateName} (available: ${available.join(', ')})`);
+  }
+  const existing = await fs.readdir(destination).catch(() => null);
+  if (existing !== null && existing.length > 0) fail(`destination is not empty: ${destination}`);
+  await fs.mkdir(destination, { recursive: true });
+  await fs.cp(source, destination, { recursive: true, force: true, errorOnExist: false });
+  return {
+    destination,
+    template: templateName,
+    files: await readdirRecursive(destination),
+  };
+}
+
+async function readdirRecursive(root, relative = '') {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const child = relative ? `${relative}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) files.push(...(await readdirRecursive(path.join(root, entry.name), child)));
+    else files.push(child);
+  }
+  return files;
+}
+
 function usage() {
-  return `EdgeDesk extension CLI\n\nUsage:\n  edgedesk-ext validate <dir>\n  edgedesk-ext pack <dir> [output.zip]\n  edgedesk-ext inspect <package.zip>\n\nThe directory must contain manifest.json and index.html at its root and a\nbuilt static application. Host API ${HOST_API_VERSION}.\n`;
+  return `EdgeDesk extension CLI\n\nUsage:\n  edgedesk-ext validate <dir>\n  edgedesk-ext pack <dir> [output.zip]\n  edgedesk-ext inspect <package.zip>\n  edgedesk-ext init <dir> [--template <name>]\n\nTemplates: vanilla, react, vue, svelte, native-backend.\n\nThe directory must contain manifest.json and index.html at its root and a\nbuilt static application. Host API ${HOST_API_VERSION}. Native backend\npackages also need backend.executable staged as a native ELF file.\n`;
 }
 
 async function main(argv) {
@@ -398,7 +592,33 @@ async function main(argv) {
     const names = entries.map((entry) => entry.name);
     if (!names.includes('manifest.json')) fail('package does not contain manifest.json');
     if (!names.includes('index.html')) fail('package does not contain index.html');
-    process.stdout.write(`${entries.length} entries:\n${names.map((name) => `  ${name}`).join('\n')}\n`);
+    const listing = entries
+      .map((entry) => `  ${entry.name}${(entry.mode & 0o111) !== 0 ? ' [exec]' : ''}`)
+      .join('\n');
+    process.stdout.write(`${entries.length} entries:\n${listing}\n`);
+    return 0;
+  }
+  if (command === 'init') {
+    if (!args[0]) fail('init requires a destination directory');
+    let template = 'vanilla';
+    for (let index = 1; index < args.length; index += 1) {
+      if (args[index] === '--template') {
+        template = args[index + 1];
+        if (!template) fail('--template requires a name');
+        index += 1;
+      } else {
+        fail(`unknown init argument: ${args[index]}`);
+      }
+    }
+    const result = await initTemplate(path.resolve(args[0]), template);
+    process.stdout.write(
+      `created: ${result.destination} from template ${result.template} (${result.files.length} files)\n`,
+    );
+    if (template === 'native-backend') {
+      process.stdout.write(
+        'next: build backend/notes-backend with make, then run validate/pack.\n',
+      );
+    }
     return 0;
   }
   process.stderr.write(usage());

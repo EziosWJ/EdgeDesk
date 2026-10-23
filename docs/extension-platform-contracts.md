@@ -34,9 +34,24 @@
 | `description` / `publisher` | 可选展示字段；`publisher` 不受信任 |
 
 - 声明 `network.origins` 会自动把 `network` 加入申请权限集合。
-- `backend` / `runtime` / `scripts` 字段只产生“保留且不执行”警告。
+- `backend` 为可选对象，规则见 2.1；`runtime` / `scripts` 字段仍只产生“保留且不执行”警告。
 - 未知权限、非法来源、路径穿越式 `icon`、反向范围均拒绝安装。
 - 宿主 API 范围不兼容时拒绝启用；核心升级后可自动禁用不兼容应用，但保留包与数据。
+
+### 2.1 原生后端声明（SPEC-0011）
+
+`backend` 缺失时保持纯 Web 应用语义，不创建 Supervisor 服务、不执行包内文件。
+
+| 字段 | 规则 |
+| --- | --- |
+| `backend.executable` | 必填，规范化包内相对路径，≤4096 字节；拒绝绝对路径、`.`/`..`/空段、反斜杠、NUL 与控制字符 |
+| `backend.args` | 可选字符串数组；≤128 项，每项 ≤8192 字节，总计 ≤128 KiB；逐项作为 argv，不做 Shell 展开 |
+
+- `backend` 中的其他键一律拒绝：运行用户/组、root/allow_root、autostart、socket、data_dir、url、port 等均由管理员或宿主管理。
+- 目标必须是包内普通、可执行的 ELF，且每个包只包含一个目标架构；设备在安装时做权威校验并拒绝脚本、非 ELF、符号链接与架构不匹配。
+- SDK/CLI（`tools/ext-sdk`）在开发期镜像上述 manifest 限制，并检查可执行位与 ELF 头（x86_64/aarch64/arm32）；跨架构包给出警告而非拒绝，最终由目标设备判定。
+- 宿主通过 `EDGEDESK_APP_SOCKET` / `EDGEDESK_APP_DATA_DIR` 传入运行路径；前端只能经 JSON-RPC `backend.request` 访问本应用后端（见 `api.md`）。
+- 未签名包仅依赖 SHA-256 完整性清单，不证明发布者身份；升级覆盖稳定程序路径且不自动回滚。
 
 ## 3. 生命周期状态机
 
@@ -222,7 +237,7 @@ src/file/file_lock.*  统一共享读/独占写锁；FileService 集成
 src/http/routes/extension_route.cpp
                       /api/extensions、/api/extensions/runtime、/apps 静态资源
 web/src/extensions/   管理 UI、iframe runtime、host bridge、动态注册表
-tools/ext-sdk/        SDK、CLI、vanilla/React/Vue/Svelte 模板
+tools/ext-sdk/        SDK、CLI、vanilla/React/Vue/Svelte/native-backend 模板与示例
 scripts/extension_test.py
                       扩展平台集成测试（含崩溃恢复模式）
 ```
