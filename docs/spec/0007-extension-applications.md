@@ -6,6 +6,8 @@
 - 前置基线：[SPEC-0006 桌面工作区](0006-desktop-workspace.md)、[ADR-0004 文件路径沙箱](../adr/0004-path-sandbox.md)、[ADR-0009 桌面架构](../adr/0009-desktop-workspace-architecture.md)、[ADR-0010 桌面状态与恢复](../adr/0010-desktop-persistence-and-recovery.md)
 - 配套文档：[ADR-0011 运行时与应用包](../adr/0011-extension-runtime-and-packages.md)、[ADR-0012 权限与通信安全](../adr/0012-extension-security-and-communication.md)、[ADR-0013 文件 API 与传输](../adr/0013-extension-file-api-and-transfer.md)、[风险清单](../security/extension-app-risk-register.md)、[实施计划](../tasks/0007-extension-applications.md)
 
+> **更新说明（2026-10-23）：** SPEC-0011 已在现有 ZIP/manifest 基础上增加可选的单个 ELF 原生后端。本文继续定义静态 Web 资源、iframe 沙箱、宿主 API、权限、KV、文件传输和窗口行为；本文中“首期不执行后端”的历史范围声明由 [SPEC-0011](0011-native-application-packages.md) 对含 backend 的新包覆盖。纯 Web 包仍按本文原有行为运行。应用卸载默认保留数据的最新策略以 SPEC-0011 为准。
+
 > 本文是扩展应用平台的唯一需求基线。文档获批不代表功能已实现。实现状态必须以代码、自动化测试和 docs/testing.md 中的实际证据为准。第 1～98 轮的逐轮决策摘要见本文末尾。
 
 ## 1. 目标与范围
