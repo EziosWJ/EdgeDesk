@@ -13,12 +13,14 @@
 - [Coding Agent 开发规范](../AGENTS.md)
 - [Phase 1 工程骨架（历史记录）](phase1.md)
 
-## Process Supervisor（V1.0 已实现）
+## Process Supervisor（V1.0 已实现；安全与可靠性加固进行中）
 
 - [SPEC-0009：本机进程托管](spec/0009-process-supervisor.md)：独立守护进程、自动拉起、日志、IPC 权限与跨 init 适配（宿主 Linux 已验证）。
 - [ADR-0015：独立 Supervisor 架构](adr/0015-process-supervisor-architecture.md)
 - [ADR-0016：权限与进程执行安全](adr/0016-process-supervisor-security.md)
 - [SPEC-0009 实施计划与执行记录](tasks/0009-process-supervisor.md)：PS-01～PS-09 已实现；PS-10 平台矩阵部分未验证。
+- [SPEC-0010：Process Supervisor 可靠性与安全加固](spec/0010-process-supervisor-hardening.md)：修复进程组身份、后代清理、目录权限、持久化与恢复语义，并补齐脚本、审计和平台验证。
+- [SPEC-0010 实施计划与 Ticket 拆分](tasks/0010-process-supervisor-hardening.md)：总任务 [#45](https://github.com/EziosWJ/EdgeDesk/issues/45)，PSH-01～PSH-11 对应独立 GitHub Issues。
 - [部署与 init 适配](../deploy/README.md)：`deploy/install.sh` 安装器、systemd、OpenRC、BusyBox 文件与安装说明。
 
 > 代码位于 `src/supervisor/`、`src/app/supervisor_service.*`、`src/http/routes/supervisor_route.*`
@@ -80,6 +82,7 @@
 | [SPEC-0007](spec/0007-extension-applications.md) | 扩展应用 ZIP 包、安装/审批/升级/卸载、iframe 沙箱、宿主 API、KV 与文件传输；含第 1～98 轮决策台账 |
 | [SPEC-0008](spec/0008-extension-platform-hardening.md) | 扩展应用平台安全与可靠性加固：内部路径保护、网络授权、完整性、数据事务、资源清理、审计脱敏与跨平台构建 |
 | [SPEC-0009](spec/0009-process-supervisor.md) | 独立进程托管、自动拉起、进程组停止、日志、IPC 权限与 init 适配（V1.0 已实现，平台验证部分待补） |
+| [SPEC-0010](spec/0010-process-supervisor-hardening.md) | Process Supervisor 安全与可靠性加固：进程组身份、后代清理、目录权限、持久化、恢复、长操作、脚本执行、审计和平台验证 |
 
 ## 实施计划
 
@@ -90,6 +93,7 @@
 | [SPEC-0007 扩展应用平台实施计划](tasks/0007-extension-applications.md) | Phase 0～9、原始实施任务与验收标准 |
 | [SPEC-0008 扩展平台硬化实施计划](tasks/0008-extension-platform-hardening.md) | 8 个实现 Ticket、依赖顺序、回归测试与发布门槛 |
 | [SPEC-0009 Process Supervisor 实施计划](tasks/0009-process-supervisor.md) | Phase 0～5、PS-01～PS-10 建议任务拆分、验收标准与平台发布门槛 |
+| [SPEC-0010 Process Supervisor 加固计划](tasks/0010-process-supervisor-hardening.md) | PSH-01～PSH-11 独立 Ticket、依赖顺序、验收标准与发布门槛 |
 
 ## 设计素材
 
