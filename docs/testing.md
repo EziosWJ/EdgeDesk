@@ -500,21 +500,55 @@ Supervisor 集成测试（`scripts/supervisor_test.py`）实际覆盖：
 | Web 认证/CSRF | 未认证 `GET /api/supervisor/*` → 401；Cookie 写请求缺少同源 Origin → 403 `csrf_rejected` |
 | 配置校验 | 缺少 `run_user`/`run_group` → 400 `invalid_service_config`；root 身份未确认 → 403 `root_confirmation_required` |
 | CRUD | 创建、重名 409、列表、详情、部分更新保留未提供字段、删除运行中服务 409、缺失服务 404 |
-| 生命周期 | start → RUNNING，PID 存活且 `pgid == pid`；restart 生成新 PID；stop 后 `/proc/<pid>` 消失；再次 start 成功 |
+| 生命周期 | start → RUNNING，PID 存活且 `pgid == pid`；restart 返回 operation 并轮询至 `succeeded`，生成新 PID；stop 轮询至 `succeeded` 后 `/proc/<pid>` 消失；再次 start 成功 |
+| 异步操作 | stop/restart 立即返回 `operation_id` 与 `state=pending`；`GET /api/supervisor/operations/{id}` 轮询到 `succeeded`，`result` 为最终服务对象 |
 | 无 Shell 执行 | `/bin/echo` 参数包含字面量 `$(touch <marker>)`、`semi;colon`、`space value`；日志原样保留，marker 文件不存在 |
 | 日志 | 尾部读取返回上述字面量，`truncated=false`；删除后再次删除 404 |
 | 后端重启 | 停止并重启 EdgeDesk 后端后，服务 PID 不变且继续存活 |
 | Supervisor 崩溃恢复 | `SIGKILL` Supervisor 后重启，接管原 PID（不重复拉起）；显式 stop 能结束该进程 |
 | 人工停止持久化 | 服务已 STOPPED 时再次重启 Supervisor，服务仍 STOPPED，随后可删除 |
 | 不可用隔离 | Supervisor 不可达时 `/api/supervisor/*` → 503 `supervisor_unavailable`；`/api/health`、认证会话、文件 API 仍 200，托管进程继续存活 |
-| 审计 | 集成脚本检查 `supervisor.create/update/start/restart/stop/logs/delete` 与 `root_confirmation_required` 事件已写入审计 |
+| 审计 | 集成脚本检查 `supervisor.create/update/start/restart/stop/delete` 与 `root_confirmation_required` 事件已写入审计；40 次日志尾部轮询不产生 `supervisor.logs` 事件（PSH-08） |
 
 `supervisor_engine_test` 额外覆盖：`always` 对退出码 0 也重启、`on-failure` 重启上限与
 `FAILED` 锁定、`never` 不重启、指数退避（约 200 ms → 400 ms）、稳定运行后重置重启窗口、
 忽略 SIGTERM 时超时升级为 SIGKILL、Supervisor 重启后人工停止保持、崩溃接管、
-运行中更新不重启。`supervisor_ipc_test` 覆盖授权/未授权 `SO_PEERCRED`、错误 JSON、
+运行中更新不重启。SPEC-0010 还增加了操作幂等/未知操作、持久化故障注入、后代清理后
+重启、中断停止恢复、身份不可验证进入 `UNKNOWN`、shebang 脚本与缺失解释器用例。
+`supervisor_ipc_test` 覆盖授权/未授权 `SO_PEERCRED`、错误 JSON、
 未知方法、异步 stop。静态 musl 运行暴露了测试中“socket 文件出现即已 listen”的时序假设，
 已改为重试连接至监听就绪；产品行为未修改。
+
+## Process Supervisor 加固（SPEC-0010）实际执行记录（2026-10-23）
+
+执行环境同上：WSL2 Linux 6.18.54.1，x86_64；集成测试以 `uid=1000` 运行。
+
+| 验证 | 命令 | 实际结果 |
+| --- | --- | --- |
+| L0 原生 | `scripts/test-fast.sh` | **26/26 通过**；新增 `process_control_test`（PSH-01/02 身份探测），`supervisor_engine_test` 增至 21 个场景，总耗时约 8.4 s |
+| L0 前端 | 同上 | **27 个文件 / 155 个测试通过** |
+| L1 全量 | `scripts/test-pr.sh` | 前端 155 测试 + 生产构建、`dev-disk` 构建、**26/26 ctest**、完整集成套件通过，**87 s** |
+| 集成 stop/restart | `scripts/supervisor_test.py` | 返回 `operation_id`，轮询 `state=succeeded`；stop 后 PID 消失，restart 生成新 PID |
+| 集成审计负载 | 同上，40 次日志轮询 | `supervisor.logs` 事件数前后不变；`supervisor.create` 与 `root_confirmation_required` 仍存在；`integration_test.sh` 断言不存在 `supervisor.logs` 事件 |
+| 集成崩溃恢复 | 同上，`after-supervisor-restart` / `after-manual-stop-restart` | 新 Supervisor 接管原 PID；人工停止不被重启撤销 |
+
+原生回归用例与对应 Ticket：
+
+| 用例 | 覆盖 | 断言 |
+| --- | --- | --- |
+| `process_control_test::test_verified_absent_and_uncertain` | PSH-01 | 存活 leader 为 `verified`；starttime/boot ID 不匹配或缺少 starttime 为 `uncertain`；拒绝信号且不杀进程；组消失为 `absent` |
+| `process_control_test::test_descendant_group_identity` | PSH-01/02 | leader 退出后后代仍被会话锚定为 `verified`；SIGTERM 后组变为 `absent` |
+| `test_operation_contract` / `test_operation_retention_bound` | PSH-06 | pending、重复 stop 幂等、成功结果、未知操作 404、后续 stop 为新操作；300 次完成后最旧操作被裁剪，最新仍可查询 |
+| `test_persistence_failure_is_fail_closed` | PSH-04 | 身份持久化失败时无存活子进程且状态 `FAILED`；停止意图失败时进程仍在、状态 `RUNNING`、返回 `supervisor_unavailable` |
+| `test_descendant_cleanup_before_restart` | PSH-02 | 忽略 SIGTERM 的后代被 SIGKILL；只有旧组消失后才出现新 PID；旧 PGID 无成员 |
+| `test_interrupted_stop_recovery` | PSH-05 | 停止过程中 Supervisor 崩溃后，新实例恢复清理并到达 `STOPPED`，`desired_state=stopped` |
+| `test_recovery_unverifiable_identity` | PSH-05 | 篡改 `start_ticks` 后恢复为 `UNKNOWN`，进程未被信号 |
+| `test_shebang_script_start` | PSH-07 | `#!/bin/sh` 脚本执行并输出日志；缺失解释器启动失败且 `last_error` 指出解释器 |
+| `supervisor_store_test` 目录用例 | PSH-03 | 拒绝 `/`、相对路径、`.`/`..`、符号链接、普通文件与错误属主；系统祖先权限不变；嵌套目录创建为 `0700` |
+
+仍未执行（不得视为通过）：root UID/GID 切换（PSH-09）；OpenRC/BusyBox 真机与真实
+reboot（PSH-10）；高频日志/慢客户端/队列饱和/多服务并发压力（PSH-11）；加固后的
+musl/static-PIE 与 ARM64/QEMU 重跑（本轮未改 CMake、第三方库或平台适配，未执行 L2）。
 
 2026-10-23 安装器 `--ops` 改动复跑 L1 时，首次 `ctest -j4` 命中
 `supervisor_engine_test` 的退避计时断言（`backoff_durations[0] >= 180`）。该用例以

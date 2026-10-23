@@ -1,6 +1,6 @@
 # SPEC-0010：Process Supervisor 可靠性与安全加固
 
-- 状态：**Proposed**
+- 状态：**部分实现**（PSH-01～PSH-08 已实现并有自动化证据；PSH-09～PSH-11 未执行）
 - 适用版本：EdgeDesk Process Supervisor V1.0 后续加固
 - 基线：[SPEC-0009：本机进程托管](0009-process-supervisor.md)
 - 相关决策：[ADR-0015](../adr/0015-process-supervisor-architecture.md)、[ADR-0016](../adr/0016-process-supervisor-security.md)
@@ -159,3 +159,35 @@
 - 回归确认文件管理、终端、仪表盘、认证、设置、桌面与扩展平台不受影响。
 - 不允许通过跳过权限校验、降低安全断言或只修改测试使其通过。
 - 所有代码修改由独立 Ticket 跟踪；合入后更新本 SPEC、实施计划与 `docs/testing.md`，并把状态从 Proposed 改为对应实际状态。
+
+## 6. 实施状态与证据（2026-10-23）
+
+下列状态只反映实际执行过的命令与测试。宿主为 WSL2 Linux 6.18.54.1，x86_64，
+集成测试以普通用户 `uid=1000` 运行；本轮没有以 root 启动 Supervisor，也没有执行
+init/reboot/压力测试。
+
+| Ticket | 状态 | 实现要点 | 已执行证据 |
+|---|---|---|---|
+| PSH-01 | 已实现 | `probe_service_group()` 三态判断（boot ID、leader starttime/PGID/SID、成员 session）；仅对 `verified` 发信号，`uncertain` 进入 `UNKNOWN` | `process_control_test`（leader 存活、starttime 不匹配、boot ID 不匹配、缺少 starttime、拒绝信号、组消失）；`supervisor_engine_test::test_recovery_unverifiable_identity` |
+| PSH-02 | 已实现 | leader 退出后保留组身份；`never`/`on-failure`/`always`、人工 stop 与关闭均先清理后代；清理完成前不重启 | `test_descendant_cleanup_before_restart`（孤儿后代忽略 SIGTERM → SIGKILL → 新实例）；stop 路径由 `test_operation_contract`、`test_stop_escalates_to_sigkill` 覆盖 |
+| PSH-03 | 已实现 | 绝对路径/空分量/`.`/`..`/NUL/符号链接拒绝；`openat`+`O_NOFOLLOW` 逐级打开；仅最终目录校验属主并 `fchmod 0700` | `supervisor_store_test`：root/相对路径、点分量、符号链接、普通文件、嵌套创建、系统祖先不被收紧、错误属主；未测试并发路径替换 |
+| PSH-04 | 已实现 | 启动意图 → 阻塞子进程 → 持久化身份 → 释放；失败中止并回收；停止先持久化意图；持久化失败不自动拉起 | `test_persistence_failure_is_fail_closed`（身份写入失败无遗留子进程；停止意图失败不发送信号）；自动重启持久化失败路径已实现，未单独注入测试 |
+| PSH-05 | 已实现 | 同 boot 恢复遵守 `desired_state`；中断的 `STOPPING`/`BACKOFF` 继续清理；身份不可验证 → `UNKNOWN` | `test_interrupted_stop_recovery`、`test_recovery_unverifiable_identity`、`test_manual_stop_survives_supervisor_restart`；集成 `after-supervisor-restart` 接管原 PID |
+| PSH-06 | 已实现 | stop/restart 返回 `operation_id`；`service.operation.get` 与 `GET /api/supervisor/operations/{id}`；重复提交幂等；操作上限 256；客户端断开不取消清理 | `test_operation_contract`（pending/重复 ID/成功/未知 ID/后续新操作）、`test_operation_retention_bound`（300 次后最旧操作被裁剪）、`supervisor_ipc_test` 异步 stop、集成 stop/restart 轮询；未测试后端线程池饱和与 IPC 断开 |
+| PSH-07 | 已实现 | 检查与执行使用同一 `O_RDONLY` inode，脚本经 `/proc/self/fd/<fd>`；解释器缺失/非法/非绝对路径 fail closed | `test_shebang_script_start`（`#!/bin/sh` 脚本与缺失解释器）；带参数解释器与 FD 继承范围未单独测试 |
+| PSH-08 | 已实现 | 被动日志尾部/游标读取不写审计；管理操作与 root 拒绝仍审计 | 集成 `supervisor_test.py` 的 40 次轮询断言审计事件不增长，`integration_test.sh` 禁止 `supervisor.logs` 事件，`audit log sanity` 通过 |
+| PSH-09 | **未验证** | 代码路径存在 | 未以 root 运行，未注入 `setgroups`/`setgid`/`setuid`/cwd/exec 失败 |
+| PSH-10 | **未验证** | systemd 安装/启停此前已在测试机验证（见 `docs/testing.md`） | OpenRC/BusyBox 未真机执行；真实 reboot 后的 `autostart` 未验证 |
+| PSH-11 | **未验证** | 队列、日志与连接均有代码上限 | 未执行长时间高频日志、慢 IPC 客户端、队列饱和或多服务并发压力测试 |
+
+本轮实际执行的命令与结果：
+
+- `scripts/test-fast.sh`：26/26 原生测试通过（含新增 `process_control_test`）。
+- `scripts/test-pr.sh`：前端 27 个文件 / 155 个测试通过、生产构建成功、
+  `dev-disk` 26/26 ctest 通过、完整集成套件通过，87 s。
+- 集成套件中的 supervisor 全部阶段（crud、after-backend-restart、
+  after-supervisor-restart、after-manual-stop-restart、unavailable）通过。
+
+未执行：musl/static-PIE 与 ARM64/QEMU 重建（本轮未改 CMake、第三方库或平台适配），
+root 身份切换，OpenRC/BusyBox 真机，真实 reboot，压力/故障注入。上述项目仍按
+`docs/testing.md` 标注为未验证，不得视为通过。

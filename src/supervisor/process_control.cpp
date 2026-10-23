@@ -560,7 +560,7 @@ bool signal_service_group(const GroupProbe& probe, int signal, std::string& erro
     // and no unrelated group is signalled. If every member exits and the kernel
     // recycles the numeric PGID between verification and kill, the signal can
     // reach the new group. That window is inherent to the supported kernels and
-    // is documented in ADR-0018; no additional plain /proc scan closes it.
+    // is documented in ADR-0019; no additional plain /proc scan closes it.
     if (::kill(-probe.pgid, signal) != 0) {
         if (errno == ESRCH) {
             error = "process group no longer exists";

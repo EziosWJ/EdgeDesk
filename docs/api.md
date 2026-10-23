@@ -285,8 +285,9 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 | PUT | `/api/supervisor/services/{id}` | 更新提供的字段，不自动重启 |
 | DELETE | `/api/supervisor/services/{id}` | 删除已停止服务；运行中返回 409 |
 | POST | `/api/supervisor/services/{id}/start` | 启动服务 |
-| POST | `/api/supervisor/services/{id}/stop` | 停止服务并等待完成 |
-| POST | `/api/supervisor/services/{id}/restart` | 停止后重新启动并等待完成 |
+| POST | `/api/supervisor/services/{id}/stop` | 提交异步停止操作，立即返回操作对象 |
+| POST | `/api/supervisor/services/{id}/restart` | 提交异步停止并重启操作，立即返回操作对象 |
+| GET | `/api/supervisor/operations/{operation_id}` | 查询 stop/restart 操作的当前状态 |
 | GET | `/api/supervisor/services/{id}/logs` | 读取日志；支持 `tail_bytes`、`cursor`、`max_bytes` |
 
 成功响应带 `"ok": true`。服务对象包含配置和运行时字段：
@@ -337,6 +338,36 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 `UNKNOWN`。`pid`/`pgid`/`started_at`/`last_exit_*`/`uptime_seconds` 在不可用时为
 `null`；`cpu_percent`/`rss_bytes` 不可用时同样为 `null`，不得当作 0。
 
+`UNKNOWN` 表示 Supervisor 无法证明进程组归属，因而拒绝发送信号或启动第二份实例。
+该状态不会自动恢复：运维确认原进程组已不存在后，才能通过 stop/start 清除。
+
+### stop/restart 异步操作
+
+`stop` 与 `restart` 立即返回操作对象，不等待宽限期、SIGKILL 升级或清理完成：
+
+```json
+{
+  "operation_id": "op-12-1792421400000",
+  "service_id": "…",
+  "kind": "stop",
+  "state": "pending",
+  "result": null,
+  "error": null,
+  "created_at": 1792421400,
+  "finished_at": null
+}
+```
+
+- `kind` 为 `stop` 或 `restart`；`state` 为 `pending`、`succeeded` 或 `failed`。
+- `succeeded` 时 `result` 是操作完成后的服务对象；`failed` 时 `error` 为
+  `{"slug": "…", "message": "…"}`，`result` 为 `null`。
+- 同一服务同一类型的 pending 操作重复提交返回同一个 `operation_id`；人工 stop 会
+  取代 pending restart。已完成的操作用于查询保留，内存中按 256 条上限裁剪。
+- 通过 `GET /api/supervisor/operations/{id}` 轮询；未知 ID 返回 404
+  `operation_not_found`。操作历史不跨 Supervisor 重启保留。
+- 客户端断开、页面刷新或 HTTP 超时只表示调用方停止等待，不会取消停止/清理。
+  此时服务可能仍为 `STOPPING`/`BACKOFF`，应以服务详情为准。
+
 日志游标响应：
 
 ```json
@@ -366,14 +397,17 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 | 400 | `invalid_service_config` / `invalid_request` / `invalid_params` | 配置、路径、身份或参数无效 |
 | 403 | `root_confirmation_required` | 运行身份为 root 但没有 `allow_root=true` |
 | 403 | `permission_denied` | 非 root Supervisor 无法切换身份等 |
-| 404 | `service_not_found` | 服务 ID 不存在 |
-| 409 | `service_running` / `service_stopping` / `service_state` / `service_name_conflict` | 生命周期或唯一名称冲突 |
+| 404 | `service_not_found` / `operation_not_found` | 服务或操作 ID 不存在 |
+| 409 | `service_running` / `service_stopping` / `service_state` / `service_name_conflict` / `service_unknown` | 生命周期、唯一名称冲突或进程身份无法验证 |
 | 502 | `supervisor_error` | IPC 返回无法映射的内部错误 |
 | 503 | `supervisor_unavailable` / `supervisor_busy` / `operation_timeout` | Socket 不可达、worker 队列满或操作超时 |
 
 CSRF 校验失败仍由通用中间件返回 403 `csrf_rejected`；未认证返回 401。
 `supervisor_unavailable` 只影响进程管理端点，文件、终端、仪表盘、认证、设置和扩展
 平台继续工作。
+
+被动只读请求（health、列表、详情、日志尾部/游标读取、操作查询）不逐请求写入审计；
+创建/修改/删除/启动/停止/重启、root 特权请求和拒绝仍然审计（ADR-0019）。
 
 完整行为契约见 [SPEC-0009](spec/0009-process-supervisor.md)，部署见
 [`deploy/README.md`](../deploy/README.md)。

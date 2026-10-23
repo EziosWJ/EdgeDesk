@@ -261,13 +261,15 @@ Supervisor 可能在服务仍运行时崩溃或升级重启。恢复时必须先
 | PUT | `/api/supervisor/services/{id}` | 更新配置，不隐式重启 |
 | DELETE | `/api/supervisor/services/{id}` | 删除已停止服务 |
 | POST | `/api/supervisor/services/{id}/start` | 启动服务 |
-| POST | `/api/supervisor/services/{id}/stop` | 停止服务 |
-| POST | `/api/supervisor/services/{id}/restart` | 重启服务 |
+| POST | `/api/supervisor/services/{id}/stop` | 提交异步停止操作并返回 `operation_id` |
+| POST | `/api/supervisor/services/{id}/restart` | 提交异步停止并重启操作并返回 `operation_id` |
+| GET | `/api/supervisor/operations/{operation_id}` | 查询异步操作的 `pending`/`succeeded`/`failed` 状态 |
 | GET | `/api/supervisor/services/{id}/logs` | 获取日志尾部或游标后的增量内容 |
 
 错误遵循当前 API 格式。已实现错误码包括 `supervisor_unavailable`（503）、
-`supervisor_busy`（503）、`service_not_found`（404）、`service_running`（409）、
-`service_stopping`（409）、`service_state`（409）、`service_name_conflict`（409）、
+`supervisor_busy`（503）、`service_not_found`（404）、`operation_not_found`（404）、
+`service_running`（409）、`service_stopping`（409）、`service_state`（409）、
+`service_name_conflict`（409）、`service_unknown`（409）、
 `root_confirmation_required`（403）、`permission_denied`（403）、
 `invalid_service_config`（400）、`invalid_request`（400）与 `operation_timeout`（503）。
 `supervisor_unavailable` 表示 Socket/守护进程不可达；不影响文件、终端、仪表盘、
@@ -334,7 +336,8 @@ IPC 调用必须使用有界等待与独立执行上下文，不能无限阻塞 
   数据目录 `0700`、数据库 `0600`；损坏或更高版本 schema 时启动失败并保留原文件。
 - IPC 使用 Unix `AF_UNIX`/`SOCK_STREAM` NDJSON JSON-RPC 2.0；创建时校验 Socket
   目录归属和写权限，连接时检查 `SO_PEERCRED` 的 UID/GID 允许列表，没有 TCP listener。
-  stop/restart 以 ticket + pending operation 异步完成，客户端断开会清理等待项。
+  stop/restart 以操作对象异步完成，调用方轮询 `service.operation.get`；客户端断开或
+  页面刷新不会取消清理（SPEC-0010 PSH-06、ADR-0019）。
 - 日志按服务单文件轮转（保留一个 `.1`），读取支持 `tail_bytes`、`cursor`、
   `max_bytes`，输出按 UTF-8 清洗；CPU/RSS 来自 `/proc`，不可用时返回 `null`，
   不伪装成 0。

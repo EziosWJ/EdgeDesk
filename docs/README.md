@@ -69,6 +69,7 @@
 | [ADR-0016](adr/0016-process-supervisor-security.md) | root 守护进程、运行身份隔离、IPC 与执行安全 | 已实现（V1.0；root/init 真机验证待补） |
 | [ADR-0017](adr/0017-root-operations-profile.md) | 安装器 `--ops` root 运维模式：unit、Supervisor 允许列表与目录属主 | Accepted（暂存测试通过；真机手工迁移已验证，`--ops` 重装未验证） |
 | [ADR-0018](adr/0018-native-application-packages.md) | 原生应用包、单 ELF 后端、Supervisor 生命周期、HTTP over UDS 与覆盖升级 | Accepted（实施待开始） |
+| [ADR-0019](adr/0019-process-supervisor-identity-and-operations.md) | Supervisor 进程组三态身份、异步操作契约、持久化顺序、脚本执行与审计边界 | Accepted（PSH-01～08 已实现；平台项未验证） |
 
 ## Spec（要做什么）
 
@@ -83,7 +84,7 @@
 | [SPEC-0007](spec/0007-extension-applications.md) | 扩展应用 ZIP 包、安装/审批/升级/卸载、iframe 沙箱、宿主 API、KV 与文件传输；含第 1～98 轮决策台账 |
 | [SPEC-0008](spec/0008-extension-platform-hardening.md) | 扩展应用平台安全与可靠性加固：内部路径保护、网络授权、完整性、数据事务、资源清理、审计脱敏与跨平台构建 |
 | [SPEC-0009](spec/0009-process-supervisor.md) | 独立进程托管、自动拉起、进程组停止、日志、IPC 权限与 init 适配（V1.0 已实现，平台验证部分待补） |
-| [SPEC-0010](spec/0010-process-supervisor-hardening.md) | Process Supervisor 安全与可靠性加固：进程组身份、后代清理、目录权限、持久化、恢复、长操作、脚本执行、审计和平台验证 |
+| [SPEC-0010](spec/0010-process-supervisor-hardening.md) | Process Supervisor 安全与可靠性加固：进程组身份、后代清理、目录权限、持久化、恢复、长操作、脚本执行、审计和平台验证（PSH-01～08 已实现；PSH-09～11 未验证） |
 | [SPEC-0011](spec/0011-native-application-packages.md) | 现有 Web 扩展包增加可选 ELF 后端、UDS HTTP 代理、进程生命周期、数据保留与跨架构验收 |
 
 ## 实施计划

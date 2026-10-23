@@ -296,8 +296,15 @@ systemd / OpenRC / BusyBox init -> 负责 Supervisor 自身的启动与 respawn
 - Supervisor 只在 Unix Socket 上监听，创建时校验目录所有权/权限，连接时检查
   `SO_PEERCRED`；不存在 TCP 管理 listener。
 - 业务服务由 Supervisor 直接启动：绝对可执行路径 + argv 数组，`fork`/`setsid`/
-  `fexecve`，不经过 Shell。运行身份必须在配置中显式给出，root 需要
-  `allow_root=true`。
+  `fexecve`（脚本经已检查 inode 的 `/proc/self/fd/<fd>`），不经过 Shell。运行身份
+  必须在配置中显式给出，root 需要 `allow_root=true`。
+- 子进程在持久化 PID/PGID/boot ID/starttime 之前阻塞在启动握手上；持久化失败会
+  回收子进程，不会留下无身份的孤儿。
+- 进程组信号只发送给三态身份探测（`verified`/`absent`/`uncertain`）中 `verified`
+  的组；证据不足时进入 `UNKNOWN`，不猜测 PGID，也不启动第二份实例。
+- stop/restart 是异步操作：请求立即返回 `operation_id`，通过
+  `/api/supervisor/operations/{id}` 查询；宽限期与清理不占用 Web 工作线程。
+- 被动日志轮询不逐请求写审计；管理操作、认证失败和 root 特权拒绝仍然审计。
 - Supervisor 使用专属 SQLite 数据库保存定义、期望状态与恢复元数据；
   不与扩展平台数据库共用，也不迁移认证、设置、终端或指标存储。
 - 日志、IPC 消息、队列和连接数均有上限；CPU/RSS 不可用时返回 `null`。
@@ -306,5 +313,7 @@ systemd / OpenRC / BusyBox init -> 负责 Supervisor 自身的启动与 respawn
 - init 适配文件位于 `deploy/`；systemd、OpenRC、BusyBox 真机验证尚未在当前环境
   执行，不能把“脚本存在”当作平台验收通过。
 - 完整设计和行为契约见 [SPEC-0009](spec/0009-process-supervisor.md)，技术决策见
-  [ADR-0015](adr/0015-process-supervisor-architecture.md) 与
-  [ADR-0016](adr/0016-process-supervisor-security.md)。
+  [ADR-0015](adr/0015-process-supervisor-architecture.md)、
+  [ADR-0016](adr/0016-process-supervisor-security.md) 与
+  [ADR-0019](adr/0019-process-supervisor-identity-and-operations.md)；加固需求见
+  [SPEC-0010](spec/0010-process-supervisor-hardening.md)。
