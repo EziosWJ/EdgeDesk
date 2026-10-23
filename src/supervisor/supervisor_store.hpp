@@ -50,8 +50,11 @@ private:
     sqlite3* db_ = nullptr;
 };
 
-// Private directory helper shared with tests; creates each component as 0700
-// and rejects symlinks/non-directories.
+// Private directory helper shared with tests. The path is walked component by
+// component with directory descriptors (openat/mkdirat) and must be absolute
+// without ".", "..", symlink or non-directory components. Missing components are
+// created as 0700. Only the final configured directory is verified to be owned
+// by the effective user and tightened to 0700; ancestors are never modified.
 bool ensure_private_directory(const std::string& path, std::string& error);
 Error sqlite_error_to_error(int code, const std::string& context);
 

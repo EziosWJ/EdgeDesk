@@ -1,5 +1,6 @@
 #include "supervisor/supervisor_store.hpp"
 
+#include "core/fd.hpp"
 #include "core/util.hpp"
 
 #include <cerrno>
@@ -8,6 +9,7 @@
 #include <sqlite3.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <vector>
 
 namespace edgedesk::supervisor {
 namespace {
@@ -185,6 +187,82 @@ constexpr const char* kSaveRuntime =
     "started_at_ms=?7,last_exit_code=?8,last_signal=?9,last_exit_at=?10,last_error=?11,"
     "restart_count=?12,window_restarts=?13,window_started_at=?14,failed_locked=?15 WHERE id=?16";
 
+// Splits an absolute path into components without resolving anything. ".", "..",
+// NUL bytes and a path that collapses to the filesystem root are rejected before
+// any directory is opened or created.
+bool parse_directory_components(const std::string& path, std::vector<std::string>& out,
+                                std::string& error) {
+    if (path.empty()) {
+        error = "supervisor data directory must not be empty";
+        return false;
+    }
+    if (path.front() != '/') {
+        error = "supervisor data directory must be an absolute path: " + path;
+        return false;
+    }
+    if (path.find('\0') != std::string::npos) {
+        error = "supervisor data directory contains a NUL byte";
+        return false;
+    }
+    out.clear();
+    std::size_t start = 1;
+    for (;;) {
+        const std::size_t slash = path.find('/', start);
+        const std::size_t end = slash == std::string::npos ? path.size() : slash;
+        const std::string component = path.substr(start, end - start);
+        if (!component.empty()) {
+            if (component == "." || component == "..") {
+                error = "supervisor data directory must not contain '.' or '..' components: " + path;
+                return false;
+            }
+            out.push_back(component);
+        }
+        if (slash == std::string::npos) break;
+        start = slash + 1;
+    }
+    if (out.empty()) {
+        error = "refusing to use the filesystem root as the supervisor data directory";
+        return false;
+    }
+    return true;
+}
+
+// Opens (or creates when missing) one component relative to its parent
+// descriptor. O_NOFOLLOW makes a symlinked component fail with ELOOP instead of
+// being followed, and O_DIRECTORY rejects regular files and other non-directories.
+bool open_or_create_component(int parent_fd, const std::string& name, const std::string& display,
+                              UniqueFd& out, std::string& error) {
+    const int flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW;
+    int fd = ::openat(parent_fd, name.c_str(), flags);
+    if (fd < 0 && errno == ENOENT) {
+        if (::mkdirat(parent_fd, name.c_str(), 0700) != 0 && errno != EEXIST) {
+            error = "cannot create " + display + ": " + std::strerror(errno);
+            return false;
+        }
+        fd = ::openat(parent_fd, name.c_str(), flags);
+    }
+    if (fd < 0) {
+        const int saved = errno;
+        struct stat link_info {};
+        if (saved == ENOTDIR &&
+            ::fstatat(parent_fd, name.c_str(), &link_info, AT_SYMLINK_NOFOLLOW) == 0 &&
+            S_ISLNK(link_info.st_mode)) {
+            error = "refusing symlink in supervisor data path: " + display;
+        } else if (saved == ELOOP) {
+            error = "refusing symlink in supervisor data path: " + display;
+        } else if (saved == ENOTDIR) {
+            error = "path component is not a directory: " + display;
+        } else if (saved == ENOENT) {
+            error = "supervisor data path component disappeared while opening " + display;
+        } else {
+            error = "cannot open " + display + ": " + std::strerror(saved);
+        }
+        return false;
+    }
+    out.reset(fd);
+    return true;
+}
+
 } // namespace
 
 Error sqlite_error_to_error(int code, const std::string& context) {
@@ -215,55 +293,68 @@ Error sqlite_error_to_error(int code, const std::string& context) {
 }
 
 bool ensure_private_directory(const std::string& path, std::string& error) {
-    if (path.empty() || path.front() != '/') {
-        error = "supervisor directory must be an absolute path";
+    std::vector<std::string> components;
+    if (!parse_directory_components(path, components, error)) return false;
+
+    // Walk one component at a time relative to descriptors already opened. A
+    // rename or symlink swap after a component has been opened cannot redirect
+    // the walk because later lookups never re-resolve the string path.
+    UniqueFd current(::open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+    if (!current.valid()) {
+        error = "cannot open filesystem root: " + std::string(std::strerror(errno));
         return false;
     }
-    std::string current = "/";
-    std::size_t start = 1;
-    for (;;) {
-        const auto slash = path.find('/', start);
-        const std::string part =
-            path.substr(start, slash == std::string::npos ? path.size() - start : slash - start);
-        if (!part.empty()) {
-            if (current.size() > 1) current.push_back('/');
-            current += part;
-            struct stat info {};
-            if (::lstat(current.c_str(), &info) != 0) {
-                if (errno != ENOENT) {
-                    error = "cannot inspect " + current + ": " + std::strerror(errno);
-                    return false;
-                }
-                if (::mkdir(current.c_str(), 0700) != 0 && errno != EEXIST) {
-                    error = "cannot create " + current + ": " + std::strerror(errno);
-                    return false;
-                }
-                if (::lstat(current.c_str(), &info) != 0) {
-                    error = "cannot inspect created " + current + ": " + std::strerror(errno);
-                    return false;
-                }
-            }
-            if (S_ISLNK(info.st_mode)) {
-                error = "refusing symlink in supervisor data path: " + current;
+
+    std::string display = "/";
+    for (std::size_t index = 0; index < components.size(); ++index) {
+        if (display.back() != '/') display.push_back('/');
+        display += components[index];
+
+        UniqueFd child;
+        if (!open_or_create_component(current.get(), components[index], display, child, error)) {
+            return false;
+        }
+
+        struct stat info {};
+        if (::fstat(child.get(), &info) != 0) {
+            error = "cannot inspect " + display + ": " + std::strerror(errno);
+            return false;
+        }
+        // O_DIRECTORY already guarantees this; keep the explicit check so the
+        // contract does not depend on a single open flag.
+        if (!S_ISDIR(info.st_mode)) {
+            error = "path component is not a directory: " + display;
+            return false;
+        }
+
+        const bool final_component = index + 1 == components.size();
+        if (final_component) {
+            // Only the explicitly configured final directory is ever tightened.
+            // Its ancestors above are opened read-only and never chmod'ed.
+            if (info.st_uid != ::geteuid()) {
+                error = "supervisor data directory is not owned by the effective user: " + display;
                 return false;
             }
-            if (!S_ISDIR(info.st_mode)) {
-                error = "path component is not a directory: " + current;
-                return false;
-            }
-            if (current.size() == path.size()) {
-                if (info.st_uid != ::geteuid()) {
-                    error = "supervisor directory is not owned by the service user: " + current;
+            if ((info.st_mode & 07777) != 0700) {
+                if (::fchmod(child.get(), 0700) != 0) {
+                    error = "cannot restrict permissions on " + display + ": " +
+                            std::strerror(errno);
                     return false;
                 }
-                if (::chmod(current.c_str(), 0700) != 0) {
-                    error = "cannot tighten permissions on " + current + ": " + std::strerror(errno);
+                struct stat updated {};
+                if (::fstat(child.get(), &updated) != 0) {
+                    error = "cannot verify permissions on " + display + ": " +
+                            std::strerror(errno);
+                    return false;
+                }
+                if ((updated.st_mode & 07777) != 0700) {
+                    error = "cannot establish 0700 permissions on " + display;
                     return false;
                 }
             }
         }
-        if (slash == std::string::npos) break;
-        start = slash + 1;
+
+        current = std::move(child);
     }
     error.clear();
     return true;
