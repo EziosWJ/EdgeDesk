@@ -187,7 +187,7 @@
 | PSH-08 | 已实现 | 只读日志轮询不写审计；管理操作与 root 拒绝仍审计 | 集成 `supervisor_test.py` 40 次轮询断言、`integration_test.sh` 审计检查 |
 | PSH-09 | **已验证（Ubuntu 26.04）** | root Supervisor 切换 UID/GID/补充组；非 root 服务、root 服务显式确认、无效用户拒绝、SIGTERM/SIGKILL、子进程清理 | 46/46 VM 检查：`/proc/<pid>/status` Uid/Gid、`id -G`、cwd、anchor Uid=0、unrelated 进程存活、socket 0660 root:pshclients、`SO_PEERCRED` 拒绝 uid=994/gid=1000 |
 | PSH-10 | **systemd + 真实 reboot 已验证；OpenRC/BusyBox 未验证** | systemd 安装/启停/respawn、graceful restart、SIGKILL 接管、真实 reboot 后 autostart 与人工停止 | 24/24 重启前检查；19/19 reboot 后检查（新 boot ID、DB v2/quick_check、autostart 启动、manual 保持停止、anchor 持久化） |
-| PSH-11 | **已实现并完成隔离实例压力** | 7 类并发 worker、1,000+ 生命周期操作、30 分钟持续运行、崩溃/退避/孤儿/日志轮转/操作清理；监测 RSS/FD/线程/DB/日志/进程数 | 见下方压力结果；SQLite `quick_check`、无残留测试进程、无重复实例、日志/DB 上界 |
+| PSH-11 | **已实现并完成隔离实例压力** | 7 类并发 worker、1,000+ 生命周期操作、30 分钟持续运行、崩溃/退避/孤儿/日志轮转/操作清理；监测 RSS/FD/线程/DB/日志/进程数 | 30 分钟运行 **29/29 通过、1,474 次操作、1,811 s**；RSS 峰值 4,924 KiB、FD 峰值 33、线程 1、DB 33,296 B、日志 137,877 B；结束后无残留进程/anchor、`quick_check=ok` |
 
 ### 已执行命令与结果
 
@@ -201,9 +201,9 @@
 - `cmake --build --preset release-embed` + `ctest --preset release-embed`：26/26 通过，
   生成的 `edgedesk`/`edgedesk-supervisor` 为 static-pie。
 - `cmake --build --preset release-embed-arm64`：交叉构建通过；CI `arm64-cross`
-  在 commit `8cf3ac2` 完成 qemu 集成套件（早期 `74b0030` 暴露的 `CLONE_PARENT`
+  在 commit `585c4ac` 完成 qemu 集成套件（早期 `74b0030` 暴露的 `CLONE_PARENT`
   EINVAL 已由 `fork()` 回退修复）。
-- GitHub Actions run `39974939274`（commit `8cf3ac2`）：frontend、host-build、
+- GitHub Actions run `39978950537`（commit `585c4ac`）：frontend、host-build、
   x86_64-musl-static、gcc15-embed、arm64-cross 五个 job 全部 `success`。
 
 虚拟机：
@@ -217,18 +217,58 @@
 - Phase B（systemd，最终二进制）：24/24 检查通过。`systemctl restart` 后服务重新启动；
   `kill -9` Supervisor 后 systemd 在 2 s 内 respawn，新 Supervisor 以相同 PID 接管进程；
   `systemctl stop/start` 停止并恢复 `desired_state=running` 的服务。
-- 真实 reboot（最终二进制）：19/19 检查通过。boot ID 从
-  `8e30915e-c4e6-4e17-a5db-907fc3726e82` 变为
-  `f80646e8-2a16-4ee2-a7a3-5d235ef900a3`；`autostart=true` 服务自动启动，
+- 真实 reboot（最终 HEAD `585c4ac`）：19/19 检查通过。boot ID 从
+  `f80646e8-2a16-4ee2-a7a3-5d235ef900a3` 变为
+  `4e2dde97-6280-4e7c-a6d0-e5f62e607457`；`autostart=true` 服务自动启动，
   人工停止的服务保持 `STOPPED`；DB v2、`PRAGMA quick_check=ok`、anchor 重新创建且
-  UID=0、`systemctl --failed` 为空。
+  UID=0、`systemctl --failed` 为空。更早一轮（`74b0030`）为
+  `8e30915e-…` → `f80646e8-…`，同样 19/19。
 - v1→v2 迁移在系统实例真实数据库（0 行）上执行，`user_version=2`。
+
+### PSH-11 压力与故障注入结果
+
+- 隔离实例：root Supervisor，socket `/run/psh-accept/supervisor.sock`；压力工作目录
+  `/srv/psh-accept/stress-run`（与系统实例目录分离）。
+- 命令：`STRESS_SECONDS=1800 python3 -u stress.py`。
+- 并发工作负载：`stress-s1`/`s2`（start/stop/restart）、`stress-crash`（on-failure
+  崩溃循环）、`stress-kill`（外部 SIGKILL leader 触发重启）、`stress-orphan`
+  （忽略 TERM 的后代）、`stress-ignore`（SIGKILL 升级）、`stress-log`
+  （64 KiB 轮转，约 10 KiB/s）、`stress-noop`（操作保留/裁剪压力）。
+- 结果：**29/29 检查通过**；**1,474 次**生命周期操作；持续 **1,811 s**。
+- 资源：Supervisor RSS 3,496 → 4,920 KiB（峰值 4,924）；FD 9 → 18（峰值 33）；
+  线程 1；数据库峰值 33,296 B；日志目录峰值 137,877 B；测试进程峰值 19。
+- 每服务 cwd 峰值 3（日志服务 4），无重复实例；无关 `sleep` 进程存活。
+- 结束时：无残留测试进程/anchor，SQLite `quick_check=ok`，`.log.1` 存在且单文件
+  ≤128 KiB；早期已完成操作被裁剪、pending 保留、最新完成操作仍可查询。
+- 该 30 分钟运行使用 commit `8cf3ac2` 的二进制。独立审查后又在 `36e9f42`/`585c4ac`
+  修复了自动重启旧日志 FD 关闭、UNKNOWN/停止意图不自动重启、裁剪保护新建操作、
+  持续写失败转入显式清理、zombie anchor 校验与 exec errno 补读等问题；新增
+  `test_unknown_is_not_auto_restarted`、`test_persistent_failure_does_not_spin` 等回归，
+  并在最终 HEAD 上完成 Phase A 46/46 与补充压力运行（见下）。
+
+### 独立审查修复
+
+在 74b0030/8cf3ac2 之后进行了一次独立只读审查，按发现修复：
+
+1. 自动重启调用 `spawn_locked` 时先 drain/关闭上一实例的日志与 exec 管道，避免 FD
+   与未读输出泄漏。
+2. `desired_state=stopped` 或 `UNKNOWN` 的服务即使 restart policy 为 `always` 也不会
+   被自动拉起；`schedule_restart` 同样拒绝非 running 意图。
+3. `prune_operations` 保护当前调用刚创建的操作，并在完成 pending 后延迟裁剪，避免
+   >256 个 pending 时 `operations_.at()` 抛异常终止守护进程。
+4. backoff 清理遇到持续持久化失败或停止意图时转入显式 STOPPING/终态，不再每轮重新
+   arm（否则 `poll_timeout_ms` 返回 0 导致空转和 SIGTERM 风暴）。
+5. spawn 校验拒绝 zombie anchor；`handle_child_exit` 在关闭 exec 管道前补读 errno；
+   exec 错误管道改为非阻塞，避免被暂停的 FD 继承者阻塞事件循环。
+6. 新增 `test_unknown_is_not_auto_restarted`、`test_persistent_failure_does_not_spin`
+   回归；`supervisor_store_test` 对 `/tmp` 仅比较权限/属主，容忍并发临时目录导致的
+   mtime 变化。
 
 ### 未验证项目
 
 - OpenRC 与 BusyBox init 的真实启停/respawn/reboot 未在目标机执行（虚拟机为 systemd）；
   对应适配器只有安装器静态/暂存测试，不能据此宣称通过。
 - ARM64/QEMU：CI `arm64-cross`（Bootlin aarch64 musl + qemu 集成套件）已在 commit
-  `8cf3ac2` 通过；未在真实 ARM64 硬件运行。本地验证了 `release-embed-arm64` 交叉
+  `585c4ac` 通过；未在真实 ARM64 硬件运行。本地验证了 `release-embed-arm64` 交叉
   构建，未本地运行 qemu。
 - 真实硬件重启、电源故障和文件系统损坏注入未执行。

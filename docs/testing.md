@@ -579,7 +579,7 @@ OpenRC/BusyBox、ARM64/QEMU 与 Bootlin musl 交叉构建仍未执行，不得�
 - **真实 reboot（PSH-10）**：已执行真实 `systemctl reboot` 并验证 boot ID 变化后的
   autostart 与人工停止语义。
 - **Buildroot/真实硬件、ARM32**：未构建、未运行。
-- **qemu-user aarch64**：CI 交叉构建并运行完整集成套件；commit `8cf3ac2` 的
+- **qemu-user aarch64**：CI 交叉构建并运行完整集成套件；commit `585c4ac` 的
   `arm64-cross` job 已通过。早期 `74b0030` 的该 job 暴露 qemu-user 拒绝
   `CLONE_PARENT`（EINVAL），已加入 `fork()` 回退（见 ADR-0019 §1）。本机无 qemu，
   未在本地重跑。
@@ -612,9 +612,10 @@ OpenRC/BusyBox、ARM64/QEMU 与 Bootlin musl 交叉构建仍未执行，不得�
 | 权限隔离（A） | 隔离 root Supervisor + Python JSON-RPC 客户端 | 46/46：UID/GID/补充组、cwd、anchor UID=0、socket 0660 root:pshclients、`SO_PEERCRED` 拒绝、SIGTERM/SIGKILL、孤儿清理、DB/日志 0600/0700 |
 | 最终二进制部署 | `/bin/sleep`（Ubuntu coreutils multicall）+ anchor FD 检查 | 13/13：staging 0711、`AT_EXECFN` 保留、anchor 提交后 0 FD、comm=`edgedesk-anchor` |
 | systemd（B，最终二进制） | `systemctl restart/stop/start`、`kill -9` Supervisor | 24/24：graceful restart 重启服务；SIGKILL 后 2 s respawn 并以原 PID 接管；stop/start 恢复 `desired_state=running` |
-| 真实 reboot（最终二进制） | `systemctl reboot`，SSH 恢复后重新验证 | 19/19：新 boot ID `f80646e8-…`、autostart 启动、人工停止保持、DB v2/quick_check、anchor 重建 |
-| 压力（C，隔离实例） | 隔离实例，7 类并发 worker，1,000+ 操作 / 30 分钟 | 结果见 SPEC-0010 §6；结束后无测试进程、无 anchor、SQLite 完整、资源有界 |
-| CI（GitHub Actions） | run `39974939274`（commit `8cf3ac2`） | frontend、host-build、x86_64-musl-static、gcc15-embed、arm64-cross 全部 `success` |
+| 真实 reboot（最终 HEAD） | `systemctl reboot`，SSH 恢复后重新验证 | 19/19：新 boot ID `4e2dde97-…`、autostart 启动、人工停止保持、DB v2/quick_check、anchor 重建 |
+| 压力（C，隔离实例） | 隔离实例，7 类并发 worker，1,000+ 操作 / 30 分钟 | **29/29 通过**，1,474 次操作，1,811 s；RSS 峰值 4,924 KiB、FD 峰值 33、线程 1、DB 33,296 B、日志 137,877 B；无残留进程/anchor、`quick_check=ok` |
+| 压力补充（最终 HEAD） | 隔离实例，600 s / 500+ 操作 | **29/29 通过**，727 次操作，617 s；RSS 峰值 4,868 KiB、FD 峰值 34、DB 33,296 B、日志 131,673 B；无残留进程/anchor |
+| CI（GitHub Actions） | run `39978950537`（commit `585c4ac`） | frontend、host-build、x86_64-musl-static、gcc15-embed、arm64-cross 全部 `success` |
 
 ### root/权限验收细节
 
@@ -633,10 +634,10 @@ OpenRC/BusyBox、ARM64/QEMU 与 Bootlin musl 交叉构建仍未执行，不得�
 
 - 系统数据库从 schema v1 迁移到 v2（新增 anchor 列），`PRAGMA quick_check=ok`，
   原有 0 行数据保持不变。
-- 最终二进制真实 reboot 前后 boot ID 由
-  `8e30915e-c4e6-4e17-a5db-907fc3726e82` 变为
-  `f80646e8-2a16-4ee2-a7a3-5d235ef900a3`（更早一轮为
-  `07ebc04e-…` → `8e30915e-…`）。
+- 最终 HEAD（`585c4ac`）真实 reboot 前后 boot ID 由
+  `f80646e8-2a16-4ee2-a7a3-5d235ef900a3` 变为
+  `4e2dde97-6280-4e7c-a6d0-e5f62e607457`（更早两轮为
+  `07ebc04e-…` → `8e30915e-…` 和 `8e30915e-…` → `f80646e8-…`）。
 - `autostart=true` 的测试服务在新 boot 自动启动并以 pshsvc 运行；人工停止的服务
   保持 `STOPPED`、`desired_state=stopped`、身份列清零。
 - `systemctl --failed` 为空；journal 无 error/failure 记录。
