@@ -560,7 +560,8 @@ Supervisor 集成测试（`scripts/supervisor_test.py`）实际覆盖：
 
 2026-10-23 已在 Ubuntu 26.04 / systemd 虚拟机完成 root UID/GID 切换（PSH-09）、
 systemd 与真实 reboot（PSH-10）以及隔离实例的 30 分钟压力（PSH-11），详见下一节。
-OpenRC/BusyBox、ARM64/QEMU 与 Bootlin musl 交叉构建仍未执行，不得视为通过。
+OpenRC/BusyBox 真机仍未执行，不得视为通过；ARM64/QEMU 与 Bootlin musl 已由 CI
+`arm64-cross`（commit `585c4ac`）通过。
 
 2026-10-23 安装器 `--ops` 改动复跑 L1 时，首次 `ctest -j4` 命中
 `supervisor_engine_test` 的退避计时断言（`backoff_durations[0] >= 180`）。该用例以
@@ -645,5 +646,5 @@ OpenRC/BusyBox、ARM64/QEMU 与 Bootlin musl 交叉构建仍未执行，不得�
 ### 仍未验证
 
 - OpenRC / BusyBox init 的真实启停、respawn、reboot（本机只有 systemd）。
-- ARM64/QEMU、Bootlin musl 交叉构建在本轮未重跑。
+- 真实 ARM64 硬件未运行（qemu 集成已由 CI `arm64-cross` 通过）。
 - 真实硬件断电/文件系统损坏/磁盘满故障注入。
