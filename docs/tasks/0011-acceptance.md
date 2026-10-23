@@ -1,6 +1,7 @@
 # SPEC-0011 验收矩阵（APPX-07）
 
-- 状态：**待集成执行**
+- 状态：**宿主 x86_64 已执行（2026-10-23）；跨架构、musl、root 与 init 未验证**
+- 实际证据：[docs/testing.md](../testing.md) 的“2026-10-23 SPEC-0011 原生应用包实际执行记录”。
 - 需求：[SPEC-0011](../spec/0011-native-application-packages.md) 第 11 节
 - 共享契约：[0011-workstreams.md](0011-workstreams.md)
 - 原则：只记录**实际执行**的命令、环境与结果；未执行项明确标记未验证。

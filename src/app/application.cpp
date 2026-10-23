@@ -182,6 +182,8 @@ void Application::initialize() {
         packages_->set_backend_installer(native_installer_.get());
         packages_->set_backend_stop_hook(
             [this](std::string_view app_id) { return stop_backend_for_upgrade(app_id); });
+        packages_->set_backend_service_remove_hook(
+            [this](std::string_view service_id) { return remove_backend_service(service_id); });
         native_lifecycle_ = std::make_unique<extensions::NativeBackendLifecycle>(
             packages_->store(), *packages_, *native_installer_, config_.apps_root);
         backend_proxy_ =
@@ -227,7 +229,7 @@ Error Application::stop_backend_for_upgrade(std::string_view app_id) {
     bool exists = false;
     error = query_state(state, exists);
     if (!error.ok()) return error;
-    if (!exists || state == "stopped" || state == "failed" || state == "backoff") {
+    if (!exists || state == "STOPPED" || state == "FAILED" || state == "BACKOFF") {
         return Error::none();
     }
 
@@ -243,19 +245,37 @@ Error Application::stop_backend_for_upgrade(std::string_view app_id) {
     // service.stop is asynchronous in the Supervisor. Poll the authoritative
     // state for a short bounded period; never overwrite a possibly running ELF.
     const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        std::chrono::steady_clock::now() + std::chrono::seconds(20);
     for (;;) {
         error = query_state(state, exists);
         if (!error.ok()) return error;
-        if (!exists || state == "stopped" || state == "failed" || state == "backoff") {
+        if (!exists || state == "STOPPED" || state == "FAILED" || state == "BACKOFF") {
             return Error::none();
         }
         if (std::chrono::steady_clock::now() >= deadline) {
             return Error::make(ErrorCode::unavailable,
-                               "native backend did not stop within 10 seconds; upgrade aborted");
+                               "native backend did not stop within 20 seconds; operation aborted");
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+}
+
+Error Application::remove_backend_service(std::string_view service_id) {
+    if (!backend_stop_client_) {
+        return Error::make(ErrorCode::unavailable,
+                           "process supervisor is not configured; cannot remove the native "
+                           "backend service");
+    }
+    nlohmann::json result;
+    supervisor::SupervisorRpcError rpc;
+    Error error = backend_stop_client_->call(
+        "service.delete", {{"id", std::string(service_id)}}, result, rpc);
+    if (!error.ok()) return error;
+    if (rpc.code != 0 && rpc.slug != "service_not_found") {
+        return Error::make(ErrorCode::unavailable,
+                           "supervisor rejected service.delete: " + rpc.message);
+    }
+    return Error::none();
 }
 
 void Application::print_banner() const {

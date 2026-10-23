@@ -1,6 +1,6 @@
 # SPEC-0011：原生应用包与后端运行时
 
-- 状态：**Accepted（Grill 已结束，实施待开始）**
+- 状态：**宿主实现完成（x86_64 glibc 已验证；生产发布门槛未满足：ARM64/ARM32、musl、真实 root 身份切换与 init/reboot 未验证）**
 - 日期：2026-10-23
 - 关联基线：[SPEC-0007：扩展应用平台](0007-extension-applications.md)、[SPEC-0008：扩展平台加固](0008-extension-platform-hardening.md)、[SPEC-0009：Process Supervisor](0009-process-supervisor.md)、[SPEC-0010：Supervisor 安全与可靠性加固](0010-process-supervisor-hardening.md)
 - 关联 ADR：[ADR-0011](../adr/0011-extension-runtime-and-packages.md)、[ADR-0012](../adr/0012-extension-security-and-communication.md)、[ADR-0015](../adr/0015-process-supervisor-architecture.md)、[ADR-0016](../adr/0016-process-supervisor-security.md)、[ADR-0017](../adr/0017-root-operations-profile.md)、[ADR-0018](../adr/0018-native-application-packages.md)

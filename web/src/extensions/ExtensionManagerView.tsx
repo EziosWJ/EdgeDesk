@@ -56,12 +56,6 @@ const STATUS_LABEL: Record<string, string> = {
   uninstalled: '已卸载',
 };
 
-const BACKEND_STATE_LABEL: Record<string, string> = {
-  stopped: '已停止',
-  upgrading: '升级中',
-  upgrade_failed: '升级失败',
-};
-
 const SUPERVISOR_STATE_LABEL: Record<string, string> = {
   STOPPED: '已停止',
   STARTING: '启动中',
@@ -91,10 +85,15 @@ function supervisorStateClass(state: string | undefined): string {
   return 'muted';
 }
 
-function backendStateClass(state: string | undefined): string {
-  if (state === 'upgrade_failed') return 'danger';
-  if (state === 'upgrading') return 'pending';
-  return 'subtle';
+// The persisted manager state only records installer outcomes. Process
+// liveness is owned by the Supervisor, so the headline badge must show live
+// state when available instead of a stale "stopped" that contradicts RUNNING.
+function backendBadge(backend: BackendInfo): { label: string; className: string } {
+  if (backend.state === 'upgrade_failed') return { label: '升级失败', className: 'danger' };
+  if (backend.state === 'upgrading') return { label: '升级中', className: 'pending' };
+  const live = supervisorState(backend.supervisor?.state);
+  if (live) return { label: supervisorStateLabel(live), className: supervisorStateClass(live) };
+  return { label: '已停止', className: 'subtle' };
 }
 
 function archMismatch(backend: BackendInfo | null | undefined): boolean {
@@ -159,6 +158,24 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
 
   const selected = detail?.app ?? apps.find((item) => item.app_id === selectedId) ?? null;
   const backend = detail?.backend ?? selected?.backend ?? null;
+  const backendBadgeInfo = backend ? backendBadge(backend) : null;
+
+  // The detail endpoint carries the persisted backend configuration. Live
+  // Supervisor state (RUNNING/PID/exit) only comes from the dedicated backend
+  // endpoint, so fetch it for backend apps and merge it into the detail view.
+  const loadDetail = useCallback(async (appId: string) => {
+    const info = await extensionApi.detail(appId);
+    let backendInfo = info.backend;
+    if (backendInfo?.present) {
+      try {
+        const live = await extensionApi.getBackend(appId);
+        backendInfo = live.backend;
+      } catch {
+        // Status is advisory; keep the persisted configuration on failure.
+      }
+    }
+    return { app: info.app, revisions: info.revisions, backend: backendInfo };
+  }, []);
 
   const load = useCallback(async (preferred?: string) => {
     setRefreshing(true);
@@ -169,8 +186,7 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
       const next = response.apps.find((item) => item.app_id === target) ?? response.apps[0];
       setSelectedId(next?.app_id ?? '');
       if (next) {
-        const info = await extensionApi.detail(next.app_id);
-        setDetail({ app: info.app, revisions: info.revisions, backend: info.backend });
+        setDetail(await loadDetail(next.app_id));
       } else {
         setDetail(null);
       }
@@ -180,7 +196,7 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
     } finally {
       setRefreshing(false);
     }
-  }, [selectedId]);
+  }, [loadDetail, selectedId]);
 
   useEffect(() => {
     void load();
@@ -204,12 +220,32 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail?.app.app_id, backend?.run_user, backend?.run_group, backend?.allow_root]);
 
+  useEffect(() => {
+    if (!detail?.backend?.present || !selectedId) return;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const live = await extensionApi.getBackend(selectedId);
+        if (stopped) return;
+        setDetail((current) =>
+          current && current.app.app_id === selectedId ? { ...current, backend: live.backend } : current,
+        );
+      } catch {
+        // Transient status failures are surfaced by explicit actions instead.
+      }
+    };
+    const timer = window.setInterval(() => void tick(), 3000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [selectedId, detail?.backend?.present]);
+
   const select = async (appId: string) => {
     setSelectedId(appId);
     setBusy('load');
     try {
-      const info = await extensionApi.detail(appId);
-      setDetail({ app: info.app, revisions: info.revisions, backend: info.backend });
+      setDetail(await loadDetail(appId));
       setError('');
     } catch (caught) {
       setError(errorMessage(caught));
@@ -666,8 +702,8 @@ export function ExtensionManagerView({ onExtensionsChanged }: Props) {
                       <Icon icon={Server} size={14} />
                       原生后端
                     </h4>
-                    <span className={`ed-badge ${backendStateClass(backend.state)}`}>
-                      {BACKEND_STATE_LABEL[backend.state ?? ''] ?? backend.state ?? '状态未知'}
+                    <span className={`ed-badge ${backendBadgeInfo?.className ?? 'subtle'}`}>
+                      {backendBadgeInfo?.label ?? '状态未知'}
                     </span>
                     <span className={`ed-ext-backend-live ${supervisorStateClass(backend.supervisor?.state)}`}>
                       <span

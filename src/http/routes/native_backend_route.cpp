@@ -204,6 +204,28 @@ bool submit_or_busy(RouteContext& ctx, const HttpResponseWriterPtr& writer, std:
 
 const char* start_event = "extension.backend.start";
 
+// Persists the Supervisor-generated service id. The Supervisor assigns ids on
+// create; the extension platform stores that stable id so every later call uses
+// the same mapping (SPEC-0011 section 6.1).
+bool persist_service_id(RouteContext& ctx, const HttpResponseWriterPtr& writer,
+                        const std::string& app_id, const std::string& service_id) {
+    BackendRecord record;
+    bool found = false;
+    Error error = ctx.packages->store().get_backend(app_id, record, found);
+    if (!error.ok() || !found) {
+        write_error_slug(writer, 500, "backend_not_configured",
+                         "the backend record disappeared while registering its service");
+        return false;
+    }
+    record.service_id = service_id;
+    error = ctx.packages->store().upsert_backend(record);
+    if (!error.ok()) {
+        write_lifecycle_error(writer, error);
+        return false;
+    }
+    return true;
+}
+
 void complete_start(RouteContext& ctx, const HttpResponseWriterPtr& writer,
                     const std::string& app_id, const std::string& ip,
                     SupervisorResult result) {
@@ -235,6 +257,72 @@ void submit_start(RouteContext& ctx, const HttpResponseWriterPtr& writer,
                    });
 }
 
+// Creates the Supervisor service without starting it. Used when an
+// administrator saves an identity or enables autostart for a backend that has
+// never been started: the service must exist for autostart to work at boot,
+// while installation itself still never starts anything.
+void submit_create(RouteContext& ctx, const HttpResponseWriterPtr& writer,
+                   const std::string& app_id, const std::string& ip,
+                   const std::string& event, const std::string& detail) {
+    BackendRecord record;
+    bool found = false;
+    Error get_error = ctx.packages->store().get_backend(app_id, record, found);
+    if (!get_error.ok()) {
+        write_lifecycle_error(writer, get_error);
+        return;
+    }
+    if (!found) {
+        write_error_slug(writer, 409, "backend_not_configured",
+                         "this application has no native backend");
+        return;
+    }
+    if (record.run_user.empty() || record.run_group.empty()) {
+        write_error_slug(writer, 400, "backend_identity_required",
+                         "configure run_user and run_group before enabling a Supervisor "
+                         "service");
+        return;
+    }
+    std::string socket_path;
+    const Error prepared = ctx.native_backends->prepare_runtime(app_id, socket_path);
+    if (!prepared.ok()) {
+        audit(ctx, event.c_str(), false, prepared.message, ip, app_id);
+        write_lifecycle_error(writer, prepared);
+        return;
+    }
+    nlohmann::json params;
+    const Error configured = ctx.native_backends->service_params(app_id, params);
+    if (!configured.ok()) {
+        audit(ctx, event.c_str(), false, configured.message, ip, app_id);
+        write_lifecycle_error(writer, configured);
+        return;
+    }
+    // The Supervisor assigns the id on create; the placeholder in the params is
+    // only meaningful for updates.
+    params.erase("id");
+    submit_or_busy(
+        ctx, writer, "service.create", std::move(params),
+        [&ctx, writer, app_id, ip, event, detail](SupervisorResult created) {
+            if (created.status < 200 || created.status >= 300) {
+                audit(ctx, event.c_str(), false, created.code, ip, app_id);
+                write_supervisor_failure(writer, created);
+                return;
+            }
+            const std::string created_id = created.value.value("id", std::string());
+            if (created_id.empty() ||
+                !persist_service_id(ctx, writer, app_id, created_id)) {
+                if (created_id.empty()) {
+                    audit(ctx, event.c_str(), false, "service.create returned no id", ip, app_id);
+                    write_error_slug(writer, 502, "supervisor_error",
+                                     "the Supervisor created a service without an id");
+                }
+                return;
+            }
+            audit(ctx, event.c_str(), true, detail, ip, app_id);
+            nlohmann::json snapshot = supervisor_snapshot(created.value);
+            write_backend(ctx, writer, app_id, 200, true, &snapshot);
+        });
+}
+
 // Runs after the Supervisor confirmed there is no live process. The local
 // run-directory preparation happens here, on a Supervisor worker thread, not
 // on the libhv event loop.
@@ -248,10 +336,9 @@ void prepare_and_start(RouteContext& ctx, const HttpResponseWriterPtr& writer,
         write_lifecycle_error(writer, prepared);
         return;
     }
-    if (service_exists) {
-        submit_start(ctx, writer, app_id, service_id, ip);
-        return;
-    }
+    // Always regenerate the service configuration from the current package and
+    // administrator settings. An upgrade can change args or the display name;
+    // a stale Supervisor definition must never be started silently.
     nlohmann::json params;
     const Error configured = ctx.native_backends->service_params(app_id, params);
     if (!configured.ok()) {
@@ -259,14 +346,40 @@ void prepare_and_start(RouteContext& ctx, const HttpResponseWriterPtr& writer,
         write_lifecycle_error(writer, configured);
         return;
     }
+    if (service_exists) {
+        submit_or_busy(ctx, writer, "service.update", std::move(params),
+                       [&ctx, writer, app_id, service_id, ip](SupervisorResult updated) {
+                           if (updated.status < 200 || updated.status >= 300) {
+                               audit(ctx, start_event, false, updated.code, ip, app_id);
+                               write_supervisor_failure(writer, updated,
+                                                        "cannot apply the current backend "
+                                                        "configuration: ");
+                               return;
+                           }
+                           submit_start(ctx, writer, app_id, service_id, ip);
+                       });
+        return;
+    }
+    // service.create must not receive "id": the Supervisor assigns it. The
+    // placeholder id is only used by service.update.
+    params.erase("id");
     submit_or_busy(ctx, writer, "service.create", std::move(params),
-                   [&ctx, writer, app_id, service_id, ip](SupervisorResult created) {
+                   [&ctx, writer, app_id, ip](SupervisorResult created) {
                        if (created.status < 200 || created.status >= 300) {
                            audit(ctx, start_event, false, created.code, ip, app_id);
                            write_supervisor_failure(writer, created);
                            return;
                        }
-                       submit_start(ctx, writer, app_id, service_id, ip);
+                       const std::string created_id = created.value.value("id", std::string());
+                       if (created_id.empty()) {
+                           audit(ctx, start_event, false,
+                                 "service.create returned no id", ip, app_id);
+                           write_error_slug(writer, 502, "supervisor_error",
+                                            "the Supervisor created a service without an id");
+                           return;
+                       }
+                       if (!persist_service_id(ctx, writer, app_id, created_id)) return;
+                       submit_start(ctx, writer, app_id, created_id, ip);
                    });
 }
 
@@ -400,10 +513,10 @@ void register_native_backend_routes(hv::HttpService& router, RouteContext& ctx) 
                        [&ctx, writer, app_id, service_id, ip,
                         detail](SupervisorResult fetched) {
                            if (fetched.status == 404 || fetched.code == "service_not_found") {
-                               // No Supervisor service exists yet; the identity is
-                               // applied when the backend is first started.
-                               audit(ctx, "extension.backend.identity", true, detail, ip, app_id);
-                               write_backend(ctx, writer, app_id, 200, true, nullptr);
+                               // Create the service now (without starting it) so
+                               // autostart and a later start use the saved identity.
+                               submit_create(ctx, writer, app_id, ip,
+                                             "extension.backend.identity", detail);
                                return;
                            }
                            if (fetched.status < 200 || fetched.status >= 300) {
@@ -493,8 +606,17 @@ void register_native_backend_routes(hv::HttpService& router, RouteContext& ctx) 
                        [&ctx, writer, app_id, service_id, enabled, ip,
                         detail](SupervisorResult fetched) {
                            if (fetched.status == 404 || fetched.code == "service_not_found") {
-                               audit(ctx, "extension.backend.autostart", true, detail, ip, app_id);
-                               write_backend(ctx, writer, app_id, 200, true, nullptr);
+                               if (!enabled) {
+                                   audit(ctx, "extension.backend.autostart", true, detail, ip,
+                                         app_id);
+                                   write_backend(ctx, writer, app_id, 200, true, nullptr);
+                                   return;
+                               }
+                               // Autostart is independent from a manual start:
+                               // create the service (stopped) so the Supervisor
+                               // can start it on the next boot.
+                               submit_create(ctx, writer, app_id, ip,
+                                             "extension.backend.autostart", detail);
                                return;
                            }
                            if (fetched.status < 200 || fetched.status >= 300) {

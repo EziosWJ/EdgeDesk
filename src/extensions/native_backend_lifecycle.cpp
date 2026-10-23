@@ -173,14 +173,18 @@ std::string truncate_utf8(const std::string& text, std::size_t max_bytes) {
 }
 
 // Supervisor service names must be <=128 bytes, valid UTF-8 and control-free.
+// The stable app id hash is part of the name because display names are not
+// unique and the Supervisor enforces a UNIQUE(name) constraint.
 std::string service_name_for(const AppRecord& app) {
     std::string base = trim_ascii(app.display_name);
     strip_control_characters(base);
     if (base.empty() || !is_valid_utf8(base)) base = app.app_id;
-    const std::string suffix = kServiceNameSuffix;
-    if (base.size() + suffix.size() > kMaxServiceNameBytes) {
-        base = truncate_utf8(base, kMaxServiceNameBytes - suffix.size());
-    }
+    std::string unique = backend_service_id(app.app_id);
+    if (unique.size() > 16) unique.resize(16);
+    const std::string suffix = " (" + unique + ")" + kServiceNameSuffix;
+    const std::size_t room =
+        kMaxServiceNameBytes > suffix.size() ? kMaxServiceNameBytes - suffix.size() : 0;
+    if (base.size() > room) base = truncate_utf8(base, room);
     std::string name = base + suffix;
     if (name.empty() || !is_valid_utf8(name)) name = "app" + suffix;
     if (name.size() > kMaxServiceNameBytes) name = truncate_utf8(name, kMaxServiceNameBytes);
@@ -438,7 +442,7 @@ Error NativeBackendLifecycle::service_params(std::string_view app_id,
     params["run_group"] = record.run_group;
     params["allow_root"] = record.allow_root;
     params["autostart"] = record.autostart;
-    params["restart_policy"] = "on_failure";
+    params["restart_policy"] = "on-failure";
     // Limits use the Supervisor defaults. V1 deliberately adds no health
     // check and no WebSocket/streaming proxy configuration here.
     return Error::none();

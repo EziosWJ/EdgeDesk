@@ -255,7 +255,7 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 | `POST` | `/api/extensions/runtime/terminal/sessions` | 创建 PTY；body `title/cwd/cols/rows`。 |
 | `POST` | `/api/extensions/runtime/terminal/close` | body `{"session_id":"..."}`。 |
 | `POST` | `/api/extensions/runtime/errors` | 应用错误上报；只写应用/实例/修订、类型、截断消息与栈到审计。type/message/stack 先脱敏、按 UTF-8 边界截断并作为带引号的 `key="value"` 字段编码；审计 sink 再次脱敏 detail/path，并将单字段限制在 8192 字节（超出追加 `[TRUNCATED]`）。不记录原始请求正文。 |
-| `POST` | `/api/extensions/runtime/backend/request` | 原生后端 HTTP-over-UDS 代理（SPEC-0011）。body `{"token","method","path","body"?,"contentType"?}`；身份只取自 token 对应运行实例；成功返回宿主 `200` 与 `{"status","headers","body"}`；不代理 WebSocket/流式响应/任意 URL。 |
+| `POST` | `/api/extensions/runtime/backend/request` | 原生后端 HTTP-over-UDS 代理（SPEC-0011）。身份只取自 `X-EdgeDesk-Runtime` 头对应运行实例（请求体 token 被忽略）；body `{"method","path","body"?,"contentType"?}`；成功返回宿主 `200` 与 `{"status","headers","body"}`；不代理 WebSocket/流式响应/任意 URL。 |
 
 ### 原生后端管理（SPEC-0011）
 

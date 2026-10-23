@@ -227,7 +227,9 @@ void test_service_params() {
     CHECK(error.ok());
     if (!error.ok()) std::fprintf(stderr, "service_params: %s\n", error.message.c_str());
     CHECK_STR_EQ(params.value("id", std::string()), backend_service_id("io.example.params"));
-    CHECK_STR_EQ(params.value("name", std::string()), "Params App backend");
+    const std::string expected_name =
+        "Params App (" + backend_service_id("io.example.params").substr(0, 16) + ") backend";
+    CHECK_STR_EQ(params.value("name", std::string()), expected_name);
     CHECK_STR_EQ(params.value("executable", std::string()),
                  backend_executable_path(fixture.root_path(), "io.example.params"));
     CHECK_STR_EQ(params.value("cwd", std::string()),
@@ -236,7 +238,7 @@ void test_service_params() {
     CHECK_STR_EQ(params.value("run_group", std::string()), current_group_name());
     CHECK_EQ(params.value("allow_root", true), false);
     CHECK_EQ(params.value("autostart", true), false);
-    CHECK_STR_EQ(params.value("restart_policy", std::string()), "on_failure");
+    CHECK_STR_EQ(params.value("restart_policy", std::string()), "on-failure");
 
     CHECK(params.contains("args"));
     CHECK(params["args"].is_array());

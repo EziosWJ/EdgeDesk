@@ -1,6 +1,6 @@
 # SPEC-0011 实施计划：原生应用包与后端运行时
 
-- 状态：**已拆分 Ticket，尚未实施**
+- 状态：**已实施（APPX-01～06 与宿主 x86_64 的 APPX-07 验收完成；ARM64/ARM32、musl、root 身份与 init/reboot 未验证）**
 - 需求基线：[SPEC-0011](../spec/0011-native-application-packages.md)
 - 架构决策：[ADR-0018](../adr/0018-native-application-packages.md)
 - 既有基线：[SPEC-0007 Web 扩展](../spec/0007-extension-applications.md)、[SPEC-0009 Process Supervisor](../spec/0009-process-supervisor.md)
@@ -122,12 +122,15 @@
 
 ## 5. 发布门槛
 
-- [ ] APPX-01～APPX-07 全部验收通过。
-- [ ] PSH-01～PSH-05 相关阻塞项关闭。
-- [ ] root 身份切换与 init/reboot/autostart 有实际验证证据。
-- [ ] 安装不执行后端；后端路径与参数不经 Shell。
-- [ ] UDS 访问仅绑定对应应用；没有新增后端 TCP 监听。
-- [ ] 升级失败保持停止且可诊断；不声称自动回滚。
-- [ ] 卸载默认保留数据，彻底清理有独立确认。
-- [ ] Web-only 包和现有桌面功能回归通过。
-- [ ] docs/testing.md 准确标记已验证与未验证平台。
+- [x] APPX-01～APPX-07 在宿主 x86_64（glibc）完成实现与自动化验收。
+- [x] PSH-01～PSH-05 相关阻塞项关闭（见 `docs/testing.md` 的 SPEC-0010 记录）。
+- [ ] root 身份切换与 init/reboot/autostart 有实际验证证据（本轮未执行；同 uid 普通用户已验证）。
+- [x] 安装不执行后端；后端路径与参数不经 Shell。
+- [x] UDS 访问仅绑定对应应用；没有新增后端 TCP 监听。
+- [x] 升级失败保持停止且可诊断；不声称自动回滚。
+- [x] 卸载默认保留数据，彻底清理有独立确认。
+- [x] Web-only 包和现有桌面功能回归通过（L0/L1）。
+- [ ] ARM64/ARM32 与 musl 实际运行验证；`docs/testing.md` 已如实标记未验证。
+
+实际执行证据见 `docs/testing.md` 的“2026-10-23 SPEC-0011 原生应用包实际执行记录”和
+`docs/tasks/0011-acceptance.md`。不得据此表声称已满足生产发布矩阵。

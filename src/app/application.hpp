@@ -58,6 +58,9 @@ private:
     // Bounded stop used before an upgrade overwrites the stable backend
     // executable. Returns an error when it cannot prove the process stopped.
     Error stop_backend_for_upgrade(std::string_view app_id);
+    // Deletes the Supervisor service definition created for a native backend.
+    // service_not_found is treated as success.
+    Error remove_backend_service(std::string_view service_id);
     // Signals the maintenance thread and makes the periodic wait return
     // immediately, so process shutdown never waits out a full interval.
     void request_stop();

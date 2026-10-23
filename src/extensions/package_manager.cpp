@@ -535,7 +535,17 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
     const std::string destination = revision_path(manifest.id, revision_id);
     // Replacing a running program is never safe. The hook performs a bounded
     // Supervisor stop; when it fails nothing has been modified yet.
-    if (previous_backend_found && backend_stop_hook_) {
+    if (previous_backend_found) {
+        // Replacing a running program is never safe. Without a Supervisor-backed
+        // stop the daemon cannot prove the process is gone, so an upgrade of a
+        // native package is refused rather than overwriting a live ELF.
+        if (!backend_stop_hook_) {
+            const std::string message =
+                "cannot confirm the native backend is stopped; configure the process "
+                "supervisor before upgrading a native package";
+            fail_operation(operation_id, temp_path, "", message);
+            return Error::make(ErrorCode::unavailable, message);
+        }
         const Error stop_error = backend_stop_hook_(manifest.id);
         if (!stop_error.ok()) {
             const std::string message =
@@ -544,6 +554,25 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
             return Error::make(stop_error.code == ErrorCode::ok ? ErrorCode::unavailable
                                                                 : stop_error.code,
                                message);
+        }
+    }
+    // A native -> Web-only upgrade removes the backend entirely. Drop the
+    // Supervisor service definition before touching the package so a stale
+    // service can never point at removed files.
+    if (previous_backend_found && !manifest.backend.present &&
+        !previous_backend.service_id.empty()) {
+        if (!backend_service_remove_hook_) {
+            const std::string message =
+                "cannot remove the native backend Supervisor service in this configuration";
+            fail_operation(operation_id, temp_path, "", message);
+            return Error::make(ErrorCode::unavailable, message);
+        }
+        const Error service_error = backend_service_remove_hook_(previous_backend.service_id);
+        if (!service_error.ok()) {
+            const std::string message =
+                "cannot remove the native backend Supervisor service: " + service_error.message;
+            fail_operation(operation_id, temp_path, "", message);
+            return Error::make(service_error.code, message);
         }
     }
     error = move_into_place(temp_path, destination);
@@ -888,6 +917,22 @@ Error PackageManager::uninstall(std::string_view app_id, bool keep_data) {
             return Error::make(stop_error.code == ErrorCode::ok ? ErrorCode::unavailable
                                                                 : stop_error.code,
                                "cannot stop the native backend before uninstall: " + stop_error.message);
+        }
+        // SPEC-0011 section 9: uninstall removes the Supervisor service the
+        // extension manager created. Do it while the metadata still exists; a
+        // failure aborts before any file is deleted.
+        if (!backend.service_id.empty()) {
+            if (!backend_service_remove_hook_) {
+                return Error::make(ErrorCode::unavailable,
+                                   "cannot remove the native backend Supervisor service in this "
+                                   "configuration");
+            }
+            const Error service_error = backend_service_remove_hook_(backend.service_id);
+            if (!service_error.ok()) {
+                return Error::make(service_error.code,
+                                   "cannot remove the native backend Supervisor service: " +
+                                       service_error.message);
+            }
         }
     }
 

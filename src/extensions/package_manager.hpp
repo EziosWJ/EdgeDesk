@@ -93,6 +93,14 @@ public:
     using BackendStopHook = std::function<Error(std::string_view app_id)>;
     void set_backend_stop_hook(BackendStopHook hook) { backend_stop_hook_ = std::move(hook); }
 
+    // Removes the Supervisor service definition created for a native backend
+    // (uninstall or native -> Web-only upgrade). Implemented by the process
+    // assembly with the bounded Supervisor client; not_found is success.
+    using BackendServiceRemoveHook = std::function<Error(std::string_view service_id)>;
+    void set_backend_service_remove_hook(BackendServiceRemoveHook hook) {
+        backend_service_remove_hook_ = std::move(hook);
+    }
+
     // Cleans unfinished operations and orphan revision directories. Idempotent;
     // runs once at startup and is safe to call again.
     Error recover();
@@ -163,6 +171,7 @@ private:
     mutable std::unordered_map<std::string, std::shared_ptr<PathSandbox>> sandboxes_;
     NativeBackendInstaller* backend_installer_ = nullptr;
     BackendStopHook backend_stop_hook_;
+    BackendServiceRemoveHook backend_service_remove_hook_;
 };
 
 // Recursively removes a directory without following symlinks.

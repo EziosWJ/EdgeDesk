@@ -5,6 +5,26 @@
 > Process Supervisor V1.0 的宿主 L0/L1、musl/static-pie 与 ARM64/QEMU 记录见文末
 > “Process Supervisor V1.0 实际执行记录”。
 
+## 2026-10-23 SPEC-0011 原生应用包实际执行记录
+
+主机：Linux 6.18 WSL2，x86_64，glibc 2.39，GCC 13.3；以普通用户运行（非 root）。
+Supervisor 与 EdgeDesk 使用临时目录、回环端口和真实 Unix Socket。
+
+| 验证 | 命令 | 结果 |
+| --- | --- | --- |
+| L0 原生 + 前端 + SDK | `scripts/test-fast.sh` | 原生 **30/30 通过**；前端 **29 files / 183 tests 通过**；SDK/CLI **13/13 通过** |
+| L1 构建 + 集成 | `scripts/test-pr.sh` | `dev-disk` 构建通过；原生 30/30；`integration_test.sh` **全部通过**，含新增原生后端阶段（78 s） |
+| 原生后端端到端 | `scripts/native_backend_test.py`（由 `integration_test.sh` 调用，真实 Supervisor + 编译的 C 示例） | **PASS**：安装不启动；身份保存创建 STOPPED 服务；autostart 独立；启动 RUNNING；`backend.request` GET/POST/notes 持久化；查询串/app_id/无效会话拒绝；运行中升级自动停止且数据保留；脚本后端升级被拒且不改旧程序；卸载保留数据并删除服务；独立清理只删本应用数据 |
+| 前端目视 | Playwright + 本地 Chromium，1440×900 与 390×844 | **通过（已打开截图检查）**：后端状态/实时 Supervisor 状态、PID、架构、路径、身份表单与 root 警告、启停/重启、自启、未签名提示；390 宽度无横向溢出 |
+| 升级/回滚边界 | 单元 + 端到端 | 升级失败保持停止并标记 `upgrade_failed`；无自动回滚/自动启动；稳定程序原子覆盖 |
+
+未验证/未执行：
+
+- ARM64、ARM32 未构建也未运行；musl/static-pie 本轮未重跑。不得标记为通过。
+- 真实 root 身份切换、init/reboot/autostart 开机行为未验证；本轮身份切换为同 uid 普通用户。
+- 真实硬件上的非 root 跨用户 Socket 权限未验证（单元测试覆盖拒绝路径）。
+- WebSocket/流式代理、跨应用调用、数字签名、进程沙箱按 SPEC-0011 明确不属于 V1。
+
 ## 2026-10-18 V1.3 扩展平台实际执行记录
 
 | 验证 | 命令 | 结果 |
@@ -226,14 +246,18 @@ scripts/test-pr.sh
 | `semver_test` | 严格 SemVer 解析/拒绝（前导零、v 前缀、非法标识）、pre-release 排序、build 忽略、宿主 API 闭区间 | GCC 13.3 host | 通过 |
 | `manifest_test` | 核心字段、权限、来源通配符/CSP、声明∩批准来源（无授权/撤销不产生外部 source）、窗口边界、宿主不兼容、保留运行时不执行、非法 ID/版本/来源/图标；可选 `backend` 对象（`executable`/`args` 长度与数量上限、绝对路径/穿越/`.`/空段/尾斜杠/反斜杠/控制字符拒绝、未知身份/root/socket/host 键拒绝、非对象与数组拒绝、合法后端不再产生 reserved 警告、纯 Web 行为不变） | GCC 13.3 host | 通过 |
 | `elf_info_test` | ELF 头解析（magic/class/字节序/版本/类型/`e_machine`）、x86_64/aarch64/arm32 映射、架构不匹配稳定错误、可执行位、符号链接/硬链接/非普通文件/截断/未知机器拒绝、只读头部不执行 | GCC 13.3 host | 通过 |
-| `extension_store_test` | SQLite 0700/0600、应用/修订/权限/完整性、操作日志、KV 键限/5 MiB 配额/回滚事务/分页、重启持久化、`network_origins` 持久化/替换/级联、schema v1→v2 原地迁移、同一事务内删除 KV 后触发真实 SQLite 约束失败时行与配额全部回滚 | GCC 13.3 host | 通过 |
+| `extension_store_test` | SQLite 0700/0600、精确保留 0711 遍历权限并收紧更宽权限、应用/修订/权限/完整性、`app_backends` CRUD/状态/身份/自启、操作日志、KV 键限/5 MiB 配额/回滚事务/分页、重启持久化、`network_origins` 持久化/替换/级联、schema v1/v2→v3 原地迁移、同一事务内删除 KV 后触发真实 SQLite 约束失败时行与配额全部回滚 | GCC 13.3 host | 通过 |
 | `extension_package_test` | ZIP 安装、审批/静态资源/SPA、同版本覆盖、升级/降级、网络授权驱动 CSP、升级来源扩大需重新审批/回滚复核、完整性清单与实际文件集合精确比对（缺失/改内容/改大小/新增未登记文件/清单条目缺失/符号链接/FIFO/大小写冲突）、活动修订隔离与修复、历史修订失败不误伤活动修订、未登记资源拒绝服务、路径穿越/符号链接/重复名/本地头不一致、卸载保留/恢复/删除、修订保留与固定、启动孤儿清理、重装恢复/不恢复与陈旧保留行的 KV 删除仅在最终事务提交、升级失败保留 KV 与原活动修订、崩溃恢复保持 KV 与已提交修订一致（SQLite 触发器注入提交前后失败）；原生后端：有效 ELF 安装（服务行 `stopped`/`autostart=false`、程序 0755、数据目录、未创建运行目录/未启动进程）、脚本/非 ELF/错误架构/绝对路径/穿越/符号链接/硬链接/未知后端键/数组后端拒绝、未配置安装器拒绝、覆盖升级替换稳定可执行文件并保留身份与自启及数据、升级校验失败与停止钩子失败保持旧程序/旧修订、纯 Web 无后端行/目录、原生→Web 升级清理程序保留数据、卸载保留/删除数据、停止无法确认时拒绝卸载、提交后安装失败标记 `upgrade_failed`、重启恢复对缺失/损坏程序标记失败且幂等 | GCC 13.3 host | 通过 |
+| `native_backend_test` | 路径推导与稳定 service id 占位、纯 Web/缺失记录描述、精确 Supervisor 服务参数（绝对路径、argv、cwd、`EDGEDESK_APP_SOCKET`/`EDGEDESK_APP_DATA_DIR`、身份、`allow_root`、autostart、`restart_policy=on-failure`）、身份必填/root 确认/架构不匹配/程序缺失、运行目录 0770 与 stale/live socket 处理、非 root 异身份拒绝 | GCC 13.3 host | 通过 |
+| `native_backend_lifecycle_test` | 身份保存与 autostart 独立、无服务时创建、服务配置更新、运行目录权限、socket 清理、root/非 root 权限路径、归档/升级失败状态、`describe` 字段 | GCC 13.3 host | 通过 |
+| `backend_proxy_test` | 真实 UDS HTTP 服务：GET/POST、状态码透传、允许头过滤（仅 `content-type`/`x-*`）、hop-by-hop 拒绝、方法/路径/查询串/大小/未知参数校验、无记录/无 socket/超时/坏 JSON、Content-Length/chunked/close 定界、跨应用隔离 | GCC 13.3 host | 通过 |
 | `extension_memory_test` | 64 MiB 资产安装/静态服务峰值 `VmHWM` 增量（子进程隔离）、完整性精确集合、`RLIMIT_FSIZE`/`EFBIG` 中断清理、无挂起操作与应用记录 | GCC 13.3 host | 通过（安装 delta 468 KiB、静态 delta 264 KiB） |
 | `file_lock_test` | 共享/独占、硬链接别名、缺失目标父目录身份、多锁原子性、FileService 读写锁、Upload 移动锁转移 | GCC 13.3 host | 通过 |
 | `extension_test.py`（L1） | 安装/审批/静态 CSP（授权/撤销/升级复核）、运行会话、KV 配额/回滚、目录游标、锁冲突、1 MiB 分块上传/下载 SHA-256、2 MiB 静态资源流式 body/HEAD/ETag 304、裸 `/apps` 404、终端创建/关闭、扩展错误上报脱敏（伪造 Bearer/Cookie/API Key/密码/query/fragment 不落盘、JSONL 逐行可解析）、禁用即时失效、升级/同版本覆盖/降级、未登记资源 404、活动修订完整性隔离、历史修订失败不误伤活动应用/会话/授权、完整性失败修订拒绝激活、修复、卸载保留/恢复/删除、审计事件 | dev-disk + 真实 PTY/文件系统 | 通过 |
-| SDK CLI 测试 | manifest/资源/相对路径/符号链接/重复路径校验、ZIP 打包与检查 | Node 24.14 | 通过 |
+| `native_backend_test.py`（L1） | 真实 ELF 安装（不执行、STOPPED、autostart=false、0755 稳定程序）、身份保存创建服务、autostart 独立、启动/停止、Supervisor 实时状态、`backend.request` HTTP-over-UDS（GET/POST/JSON/头部过滤/错误）、非法路径与跨应用参数拒绝、运行中升级自动停止、数据保留、无效升级不修改旧程序、卸载保留数据并删除服务、独立 purge 与 appId 确认、审计 | dev-disk + 真实 Supervisor + 编译的 C 示例 | 通过 |
+| SDK CLI 测试 | manifest/资源/相对路径/符号链接/重复路径校验、可选 `backend`（路径/参数/未知键/ELF 架构）、ZIP 打包与可执行位、`init` 模板脚手架 | Node 24.14 | 通过（13/13） |
 | `embed_generator_test` | `#embed` 生成器的确定性、路径校验、ETag | Python 3.12 | 通过 |
-| 前端单元/DOM 测试 | **V1.2 桌面**：AppRegistry（默认注册、未知 appId、重复注册、元数据/尺寸校验、单/多实例、启动器搜索）、桌面图标布局（网格命中、拖拽换位、边界、去重）、WindowManager（单/多实例、稳定实例 ID、z-index 有界、最小化保持挂载/恢复、最大化几何还原、移动/缩放/视口约束、中等视口完整可见、关闭守卫）、DesktopPersistence（序列化往返、损坏 JSON、版本不兼容、未知 appId、重复单实例、非法几何、敏感字段剥离、localStorage 不可用、恢复时会话失效标记、防抖自动保存）、DesktopShell（单击/双击、Dock 启动/聚焦/多窗口选择、最小化恢复、真全屏与桌面框架恢复、启动器搜索/空态/Esc/焦点返回、Alt 快捷键与输入焦点保护、窄屏强制最大化、退出登录）、终端恢复（session_not_found 不创建替代会话、无 session ID 时才 create、attached 状态）、编辑器生命周期（最小化保留缓冲、未保存关闭确认、外部修改保护、文件消失拒绝保存）、NAS 设备概览（CPU/内存/存储/网卡/系统/服务小组件、多挂载点、多网卡、loopback 排除、缺失值 vs 0、采集中断、加载空态）。**V1.3 扩展平台**：动态应用注册、禁用关闭窗口、待审批应用不可启动、扩展元数据更新。**V1.2.1 回归**：顶部退出登录注销服务端会话并由脏编辑器否决退出、最小化后重开保留最大化状态。**V1.1 回归**：会话持久化、metrics 窗口有界、格式化、FloatingWindow DOM 交互、Sidebar、图表工具、Dashboard 旧断言已迁移、文件管理、认证、设置、偏好。 | Node 24.14 / vitest 3.2 / happy-dom | 通过（155 项）；`npm run build`（tsc + vite）通过 |
+| 前端单元/DOM 测试 | **V1.2 桌面**：AppRegistry（默认注册、未知 appId、重复注册、元数据/尺寸校验、单/多实例、启动器搜索）、桌面图标布局（网格命中、拖拽换位、边界、去重）、WindowManager（单/多实例、稳定实例 ID、z-index 有界、最小化保持挂载/恢复、最大化几何还原、移动/缩放/视口约束、中等视口完整可见、关闭守卫）、DesktopPersistence（序列化往返、损坏 JSON、版本不兼容、未知 appId、重复单实例、非法几何、敏感字段剥离、localStorage 不可用、恢复时会话失效标记、防抖自动保存）、DesktopShell（单击/双击、Dock 启动/聚焦/多窗口选择、最小化恢复、真全屏与桌面框架恢复、启动器搜索/空态/Esc/焦点返回、Alt 快捷键与输入焦点保护、窄屏强制最大化、退出登录）、终端恢复（session_not_found 不创建替代会话、无 session ID 时才 create、attached 状态）、编辑器生命周期（最小化保留缓冲、未保存关闭确认、外部修改保护、文件消失拒绝保存）、NAS 设备概览（CPU/内存/存储/网卡/系统/服务小组件、多挂载点、多网卡、loopback 排除、缺失值 vs 0、采集中断、加载空态）。**V1.3 扩展平台**：动态应用注册、禁用关闭窗口、待审批应用不可启动、扩展元数据更新。**V1.2.1 回归**：顶部退出登录注销服务端会话并由脏编辑器否决退出、最小化后重开保留最大化状态。**V1.1 回归**：会话持久化、metrics 窗口有界、格式化、FloatingWindow DOM 交互、Sidebar、图表工具、Dashboard 旧断言已迁移、文件管理、认证、设置、偏好。 | Node 24.14 / vitest 3.2 / happy-dom | 通过（183 项）；`npm run build`（tsc + vite）通过 |
 | `auth_test.py` | 初始化状态门禁、首次设置密码、重复初始化 409、密码登录、Cookie 属性（含 `--cookie-secure`）、改密后旧 Cookie/旧密码失效、Bearer 不受影响、CSRF、设置白名单、系统信息脱敏、重启后旧 Cookie 失效、损坏状态失败关闭、本机恢复 | dev-disk / host-embed / release-embed / release-embed-arm64 / release-disk / x86_64-musl / arm64-disk / arm64-musl | 全部通过 |
 | `api_test.py` | health 契约、密码登录/会话/Bearer、CSRF、目录浏览（含 `dirs_only` 只返回直接子目录）、文本读写、mkdir/create/rename/delete、流式上传字节一致、Range 206/416、路径沙箱拒绝、JSON 体积限制、系统指标（含 `network[].addresses` 字段） | 见下（三种二进制） | 通过 |
 | `ws_test.py` | 未认证/异源握手拒绝、终端 create/input/输出/resize/guard、断线重连（回放）、会话存活、显式关闭、metrics 快照+增量 | 同上 | 通过 |

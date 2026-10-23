@@ -53,6 +53,27 @@ void test_open_and_metadata(const fs::path& root) {
     CHECK_EQ(info.st_mode & 0777, static_cast<mode_t>(0700));
     CHECK(::stat(store->database_path().c_str(), &info) == 0);
     CHECK_EQ(info.st_mode & 0777, static_cast<mode_t>(0600));
+
+    // SPEC-0011: a non-root backend identity needs traversal-only access to
+    // EdgeDesk-owned roots. Exactly 0711 is preserved across reopens so a
+    // Supervisor autostart after an EdgeDesk restart can still reach the socket
+    // directory; anything broader is tightened back to 0700.
+    CHECK_EQ(::chmod(root.string().c_str(), 0711), 0);
+    {
+        Error reopen_error;
+        auto reopened = ExtensionStore::open(root.string(), reopen_error);
+        CHECK(reopened != nullptr);
+        CHECK(::stat(root.string().c_str(), &info) == 0);
+        CHECK_EQ(info.st_mode & 0777, static_cast<mode_t>(0711));
+    }
+    CHECK_EQ(::chmod(root.string().c_str(), 0777), 0);
+    {
+        Error reopen_error;
+        auto reopened = ExtensionStore::open(root.string(), reopen_error);
+        CHECK(reopened != nullptr);
+        CHECK(::stat(root.string().c_str(), &info) == 0);
+        CHECK_EQ(info.st_mode & 0777, static_cast<mode_t>(0700));
+    }
 }
 
 void test_apps_permissions_revisions(const fs::path& root) {

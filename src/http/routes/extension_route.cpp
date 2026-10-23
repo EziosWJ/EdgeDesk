@@ -3,6 +3,7 @@
 #include "core/types.hpp"
 #include "core/util.hpp"
 #include "extensions/extension_runtime.hpp"
+#include "extensions/native_backend_lifecycle.hpp"
 #include "extensions/package_manager.hpp"
 #include "http/upload_state.hpp"
 #include "security/auth.hpp"
@@ -208,6 +209,18 @@ int handle_detail(RouteContext& ctx, HttpRequest* req, HttpResponse* resp) {
     body["app"] = app_json(app);
     body["revisions"] = hv::Json::array();
     for (const auto& revision : revisions) body["revisions"].push_back(revision_json(revision, app));
+    // Optional native backend view (SPEC-0011). Pure Web applications get
+    // present=false; a describe failure never breaks the existing detail API.
+    if (ctx.native_backends != nullptr) {
+        nlohmann::json backend;
+        if (ctx.native_backends->describe(app_id, backend).ok()) {
+            body["backend"] = std::move(backend);
+        } else {
+            body["backend"] = {{"present", false}};
+        }
+    } else {
+        body["backend"] = {{"present", false}, {"reason", "extension platform unavailable"}};
+    }
     return http::write_json(resp, 200, body);
 }
 

@@ -29,7 +29,7 @@
   - 程序：`<apps_root>/native/<app_id>/backend`
   - 数据：`<apps_root>/data/<app_id>`（通过 `EDGEDESK_APP_DATA_DIR`）
   - 运行目录：`<apps_root>/run/<app_id>`，Socket：`<apps_root>/run/<app_id>/backend.sock`
-  - Supervisor serviceId：`app-<sha256(appId)[:32]>`
+  - Supervisor serviceId：首次创建前用 `app-<sha256(appId)[:32]>` 占位；Supervisor 在 `service.create` 时分配实际 id，宿主立即回写 `app_backends.service_id`，升级保留该 id。所有后续 start/stop/restart/logs 使用已保存的 id。
 - 环境变量名固定为 `EDGEDESK_APP_SOCKET` / `EDGEDESK_APP_DATA_DIR`，manifest 不能覆盖。
 - `BackendRecord.state` 只保存扩展管理器状态：`stopped`、`upgrading`、`upgrade_failed`。进程存活状态一律读取 Supervisor，不得复制。
 
@@ -73,8 +73,8 @@
 ## 3. 运行时代理契约（APPX-04）
 
 - 路径：`POST /api/extensions/runtime/backend/request`
-- 请求：`{"token":"<runtime session>","method":"GET|POST|PUT|PATCH|DELETE","path":"/relative","body":<optional JSON>,"contentType":"application/json"}`
-- 身份：只从已验证 `token` 得到 appId；请求中的任何 `app_id`/`socket`/`url`/`host` 字段一律忽略或拒绝。
+- 身份：只从请求头 `X-EdgeDesk-Runtime` 的 runtime session token 得到 appId（与其他 runtime 端点一致）；请求体里的 `token` 字段被忽略，任何 `app_id`/`socket`/`url`/`host` 字段一律拒绝。
+- 请求体：`{"method":"GET|POST|PUT|PATCH|DELETE","path":"/relative","body":<optional JSON>,"contentType":"application/json"}`
 - 成功响应（宿主到浏览器）固定 `200`：`{"status":<backend HTTP status>,"headers":{...},"body":<JSON|null>}`
 - 宿主不得透传 `Host`、`Connection`、`Upgrade`、`Transfer-Encoding`、`Content-Length` 等 hop-by-hop 头；响应只允许 `content-type` 与 `x-*`。
 - 稳定错误 slug：`backend_not_configured`、`backend_not_running`、`backend_unavailable`、`backend_timeout`、`backend_protocol_error`、`invalid_argument`、`runtime_session_invalid`。

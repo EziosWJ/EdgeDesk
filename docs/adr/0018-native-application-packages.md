@@ -1,6 +1,6 @@
 # ADR-0018：原生应用包与后端运行时集成
 
-- 状态：**Accepted（实施待开始）**
+- 状态：**Accepted（宿主 x86_64 已实现；跨架构、musl、root 身份与 init 验证未完成）**
 - 日期：2026-10-23
 - 关联：[SPEC-0011](../spec/0011-native-application-packages.md)、[SPEC-0007](../spec/0007-extension-applications.md)、[ADR-0011](0011-extension-runtime-and-packages.md)、[ADR-0012](0012-extension-security-and-communication.md)、[ADR-0015](0015-process-supervisor-architecture.md)、[ADR-0016](0016-process-supervisor-security.md)、[ADR-0017](0017-root-operations-profile.md)
 

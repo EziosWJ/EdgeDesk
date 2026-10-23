@@ -155,7 +155,15 @@ bool ensure_private_directory(const std::string& path, std::string& error) {
                     error = "directory is not owned by the service user: " + current;
                     return false;
                 }
-                if (::chmod(current.c_str(), 0700) != 0) {
+                // Traversal-only (0711) is the single non-private mode the
+                // native backend feature establishes for EdgeDesk-owned roots:
+                // a non-root backend identity must reach its own data/run
+                // directory. Preserve exactly that mode; every other mode is
+                // tightened back to 0700 on startup. Anything broader (group
+                // or other write/read) is still reduced.
+                const mode_t existing = info.st_mode & 07777;
+                const mode_t wanted = existing == 0711 ? 0711 : 0700;
+                if (::chmod(current.c_str(), wanted) != 0) {
                     error = "cannot tighten directory permissions: " + current + ": " + std::strerror(errno);
                     return false;
                 }

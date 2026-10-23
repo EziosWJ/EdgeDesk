@@ -35,6 +35,20 @@
 尚未验证：ARM64/musl/真实硬件 L2 矩阵；这些平台不得据本文宣称通过。发布前仍需按风险清单门槛
 执行 L2 并保留证据。
 
+## 2026-10-23 SPEC-0011 原生后端风险证据
+
+| 风险 | 实现控制 | 验证 | 状态 |
+| --- | --- | --- | --- |
+| 未签名原生 ELF 获得本机执行能力 | 管理员主动上传；安装只校验不执行；未签名提示；SHA-256 仅完整性 | `elf_info_test`、`extension_package_test`、L1 端到端 | 风险接受（来源由管理员负责） |
+| 原生后端无进程沙箱 | 复用管理员指定 Linux 用户/组与 `allow_root` 显式确认；不新增容器/namespace/seccomp | 单元 + 端到端（同 uid）；root/跨用户未验证 | 风险接受；root 后端为主机级权限 |
+| 宿主代理被用作任意本地服务通道 | 只从 `X-EdgeDesk-Runtime` 会话取 appId；Socket 路径由宿主推导；拒绝 app_id/socket/url 参数、查询串与跨应用访问；固定大小 worker + 超时 | `backend_proxy_test`、`native_backend_test.py` | 已实现 |
+| 覆盖运行中程序 | 升级前有界停止并轮询 Supervisor 状态，失败则不覆盖；安装/卸载不执行包内容 | `extension_package_test`、L1 端到端（运行中升级） | 已实现 |
+| 升级失败留下半成品 | 提交后覆盖失败标记 `upgrade_failed` 并保持停止；无自动回滚/自动启动 | 单元 + 端到端 | 风险接受（需管理员重装） |
+| 非 root 身份无法穿越私有数据根 | 仅对 EdgeDesk 拥有的 `apps/`、`data/`、`run/` 保留精确 `0711`；更宽权限收紧 | `extension_store_test`、`native_backend_lifecycle_test` | 已实现（真实跨用户未验证） |
+| Socket 被其他本地用户连接 | 运行目录 0770 归后端身份；Socket 权限由后端建立；无法安全建立时拒绝启动 | 单元测试 | 部分验证；真实跨用户/root 待验证 |
+
+发布门槛仍需 ARM64/ARM32、musl、真实 root 身份切换与 init/reboot 证据；不得据本节宣称生产通过。
+
 ## 风险摘要
 
 | ID | 风险 | 级别 | 决策状态 | 首期必须落实的边界 |

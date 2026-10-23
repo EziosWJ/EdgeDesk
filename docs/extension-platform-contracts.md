@@ -104,9 +104,9 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 | `app_kv` | `(app_id, key)` PK、`value` JSON 文本、`size_bytes` | 无 FK：卸载保留数据 |
 | `app_backends` | `app_id` PK、`service_id` UNIQUE、`executable_rel`、`args_json`、`arch`、`run_user`、`run_group`、`allow_root`、`autostart`、`state`、`error` | 每应用至多一行；app FK 级联；只保存宿主/管理员状态，进程存活状态读 Supervisor |
 
-- `PRAGMA journal_mode=WAL`、`foreign_keys=ON`、`synchronous=FULL`；数据库文件 `0600`，根目录 `0700`。
+- `PRAGMA journal_mode=WAL`、`foreign_keys=ON`、`synchronous=FULL`；数据库文件 `0600`，根目录 `0700`（存在非 root 原生后端身份时仅使用 `0711` 遍历权限；每次打开只保留精确的 `0711`，更宽的权限会被收紧回 `0700`）。
 - 所有跨表状态变更在 `BEGIN IMMEDIATE` 事务中提交；失败回滚。
-- `app_backends.state` 仅取 `stopped`、`upgrading`、`upgrade_failed`；不得写入 Supervisor 的运行态。`service_id` 为稳定的 `app-<sha256(appId)[:32]>` 映射，`executable_rel`/`args_json`/`arch` 来自通过校验的包，运行身份与 `autostart` 只由管理员设置。
+- `app_backends.state` 仅取 `stopped`、`upgrading`、`upgrade_failed`；不得写入 Supervisor 的运行态。`service_id` 保存 Supervisor 在 `service.create` 时分配的稳定 id（首次创建前使用 `app-<sha256(appId)[:32]>` 占位，创建后立即回写；升级保留该 id）；`executable_rel`/`args_json`/`arch` 来自通过校验的包，运行身份与 `autostart` 只由管理员设置。
 - 重装“保留但不恢复”或陈旧保留行的 KV 删除位于安装的最终事务内；ZIP/清单校验、修订目录移动、完整性写入或 SQLite 失败都会回滚并保留旧 KV 与原应用状态。
 - 扩展应用不能直接打开数据库，也不能用 localStorage/IndexedDB 作为持久化契约。
 

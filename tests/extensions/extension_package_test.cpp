@@ -1460,6 +1460,12 @@ void test_native_to_web_only_upgrade(const fs::path& base) {
         ++stop_calls;
         return Error::none();
     });
+    int removed_services = 0;
+    fixture.manager->set_backend_service_remove_hook([&](std::string_view service_id) {
+        CHECK(!service_id.empty());
+        ++removed_services;
+        return Error::none();
+    });
     const auto zip = make_zip(base, "native-toweb-2.zip",
                               app_items(manifest_json(id, "1.1.0"), "<h1>web</h1>"));
     InstallOptions options;
@@ -1467,6 +1473,7 @@ void test_native_to_web_only_upgrade(const fs::path& base) {
     InstallResult result;
     CHECK(fixture.manager->install(zip, options, result).ok());
     CHECK_EQ(stop_calls, 1);
+    CHECK_EQ(removed_services, 1);
 
     BackendRecord backend;
     CHECK(!get_backend_row(*fixture.manager, id, backend));
@@ -1496,9 +1503,16 @@ void test_native_uninstall_and_data_retention(const fs::path& base) {
         ++stop_calls;
         return Error::none();
     });
+    int removed_services = 0;
+    fixture.manager->set_backend_service_remove_hook([&](std::string_view service_id) {
+        CHECK(!service_id.empty());
+        ++removed_services;
+        return Error::none();
+    });
 
     CHECK(fixture.manager->uninstall(id, true).ok());
     CHECK_EQ(stop_calls, 1);
+    CHECK_EQ(removed_services, 1);
     BackendRecord backend;
     CHECK(!get_backend_row(*fixture.manager, id, backend));
     CHECK(!fs::exists(fs::path(fixture.root) / "native" / id));
@@ -1517,6 +1531,7 @@ void test_native_uninstall_and_data_retention(const fs::path& base) {
     }
     CHECK(fixture.manager->approve(id, {}, true, app).ok());
     CHECK(fixture.manager->uninstall(id, false).ok());
+    CHECK_EQ(removed_services, 2);
     CHECK(!fs::exists(fs::path(fixture.root) / "native" / id));
     CHECK(!fs::exists(data_dir));
     CHECK(fixture.manager->get_app(id, app, found).ok());

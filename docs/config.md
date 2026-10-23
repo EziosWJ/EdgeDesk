@@ -39,7 +39,7 @@ audit-log = /var/lib/edgedesk/audit.log
 | `--cookie-secure` | 关闭 | 为会话 Cookie 添加 `Secure`；HTTPS 部署必须开启。 |
 | `--trusted-proxy` | — | 可信反向代理 IP/CIDR（可重复）。只有来自这些地址的请求才解析 `X-Forwarded-For`。 |
 | `--data-dir` | `$XDG_DATA_HOME/edgedesk` 或 `$HOME/.local/share/edgedesk` | 持久化目录（0700）：`auth.json`、`settings.json`。`HOME`/`XDG_DATA_HOME` 都不可用时必须显式配置。 |
-| `--apps-root` | `/var/lib/edgedesk/apps` | 扩展应用包、不可变修订、SQLite 元数据/KV、临时操作与恢复日志。需要服务用户可写；不可用时扩展 API 返回 503，核心功能继续运行。 |
+| `--apps-root` | `/var/lib/edgedesk/apps` | 扩展应用包、不可变修订、原生后端程序/数据/运行目录、SQLite 元数据/KV、临时操作与恢复日志。需要服务用户可写；不可用时扩展 API 返回 503，核心功能继续运行。 |
 | `--audit-retention-days` | `90` | 审计保留天数（1–3650）；维护线程每日清理并记录 `audit.prune` 成功/失败。 |
 | `--reset-admin-password` | — | 本机恢复：重置管理员认证；要求服务已停止，不删除业务数据/设置/审计。 |
 | `--rate-limit` / `--rate-limit-burst` | `30` / `60` | 通用请求速率与突发额度。 |
@@ -126,10 +126,16 @@ edgedesk --reset-admin-password --data-dir /var/lib/edgedesk
 ## 扩展应用平台（V1.3）
 
 - 数据根目录 `--apps-root` 默认 `/var/lib/edgedesk/apps`，权限 `0700`：
-  - `extensions.db`（SQLite WAL，`0600`）保存应用状态、修订、权限、完整性索引、操作日志与 KV；
+  - `extensions.db`（SQLite WAL，`0600`）保存应用状态、修订、权限、完整性索引、原生后端映射、操作日志与 KV；
   - `revisions/<appId>/<revisionId>/` 保存不可变静态资源；
-  - `data/<appId>/` 保存平台托管数据目录；
+  - `native/<appId>/backend` 保存可选原生后端的稳定程序文件（0755，原子覆盖）；
+  - `data/<appId>/` 保存平台托管数据目录（原生后端通过 `EDGEDESK_APP_DATA_DIR` 写入）；
+  - `run/<appId>/backend.sock` 是宿主创建的运行目录与 Unix Socket（通过 `EDGEDESK_APP_SOCKET` 传入）；
   - `tmp/` 保存未完成安装与扩展上传恢复日志，启动时幂等清理。
+- 存在非 root 原生后端身份时，`apps/`、`apps/data/`、`apps/run/` 使用 `0711` 遍历权限；
+  每次启动只保留该精确模式，更宽权限会被收紧。程序目录不向普通后端用户开放写权限。
+- 原生后端运行身份、`allow_root` 与 autostart 由管理员在应用管理界面配置，不由
+  `--apps-root` 或 manifest 指定；Supervisor 需通过 `--supervisor-socket` 可访问。
 - 扩展平台是 SQLite 的**局部范围例外**；认证/设置仍用 JSON 文件，终端与指标不迁移。
 - `--apps-root` 不可创建/不可写或数据库 schema 高于当前程序时，扩展管理/运行 API 返回
   `503 extensions_unavailable`；启动日志明确告警，核心 API 不受影响。生产部署应由

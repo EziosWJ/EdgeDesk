@@ -384,11 +384,13 @@ Error NativeBackendInstaller::install(const std::string& revision_root, const Ma
     record.created_at = now_unix_seconds();
     if (previous != nullptr) {
         // An upgrade preserves the administrator's identity/autostart choice
-        // and never re-enables autostart or starts the process.
+        // and the Supervisor-assigned service id. Resetting the id would make
+        // the next start create a duplicate service (name conflict).
         record.run_user = previous->run_user;
         record.run_group = previous->run_group;
         record.allow_root = previous->allow_root;
         record.autostart = previous->autostart;
+        if (!previous->service_id.empty()) record.service_id = previous->service_id;
         if (previous->created_at > 0) record.created_at = previous->created_at;
     } else {
         record.run_user.clear();
