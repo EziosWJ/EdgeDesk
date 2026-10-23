@@ -140,6 +140,10 @@ private:
                    std::string revisions_dir, std::string data_dir);
 
     Error prepare_directories();
+    // Repairs backend rows after a crash: validates that each row still points
+    // at the stable program file of the active revision, and marks rows that
+    // cannot be started as upgrade_failed. Idempotent.
+    Error recover_backends();
     Error fail_operation(const std::string& operation_id, const std::string& temp_path,
                          const std::string& revision_path, const std::string& message);
     Error move_into_place(const std::string& source, const std::string& destination);

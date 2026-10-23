@@ -53,6 +53,19 @@
 - 宿主通过 `EDGEDESK_APP_SOCKET` / `EDGEDESK_APP_DATA_DIR` 传入运行路径；前端只能经 JSON-RPC `backend.request` 访问本应用后端（见 `api.md`）。
 - 未签名包仅依赖 SHA-256 完整性清单，不证明发布者身份；升级覆盖稳定程序路径且不自动回滚。
 
+### 2.2 原生后端安装、升级与卸载
+
+- 含 `backend` 的包在宿主未装配 `NativeBackendInstaller` 时直接拒绝安装，绝不静默忽略后端。
+- 校验发生在修订目录移动与元数据提交之前：路径经 `PathSandbox`/`openat` 解析，拒绝符号链接、越界与硬链接别名；ELF 只读取头部，要求普通文件、可执行位、`ET_EXEC`/`ET_DYN`、小端、32/64 位与 `e_machine` 一致，并与宿主架构匹配。校验失败时现有应用、活动修订、后端行与程序文件均不变。
+- ZIP 解压会把文件模式规范化为 0600；安装器在暂存区内仅在路径/类型检查通过后补充可执行位，最终稳定程序固定写入 0755。包内声明的模式不会带来额外权限。
+- 稳定程序路径为 `<apps_root>/native/<app_id>/backend`：安装器在程序目录创建临时文件、写入并 `fsync`，再同目录原子 `renameat` 覆盖，随后 `fsync` 目录；不保留历史二进制、不创建版本目录。程序目录 0755，宿主所有。
+- 持久化数据位于 `<apps_root>/data/<app_id>`（缺失时以 0700 创建，已有目录不改权限，属主切换属于生命周期层）；升级与卸载默认不删除。运行目录 `<apps_root>/run/<app_id>` 由生命周期层按需创建。
+- 升级（存在后端行）在修改任何文件前调用有界停止钩子；钩子失败则中止升级，旧应用与程序保持不变。升级成功保留管理员的运行用户/组、`allow_root` 与 `autostart`，后端状态写回 `stopped`，不自动启动。
+- 元数据事务提交后若程序文件复制/落地失败，应用保持停止且后端行标记 `upgrade_failed` 与明确错误；不自动回滚、不自动启动，管理员重新上传包恢复。
+- 原生后端升级为纯 Web 包时，先停止后端，提交新修订后删除服务映射、程序目录与运行目录，保留数据目录。
+- 卸载前必须能确认后端已停止（配置了停止钩子且调用成功），否则拒绝卸载并保留程序文件。卸载成功后删除服务映射、程序目录与运行目录；`keep_data=true`（默认）保留数据目录与平台 KV，`keep_data=false` 才删除该应用的数据目录。
+- 启动恢复逐行校验 `app_backends`：活动修订必须仍声明匹配的执行文件/参数，稳定程序必须存在、可执行且架构匹配；否则把行标记为 `upgrade_failed` 并记录诊断，绝不把缺失或损坏的程序报告为可启动。恢复操作幂等。
+
 ## 3. 生命周期状态机
 
 ```text
@@ -77,7 +90,7 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 - 服务重启：未完成 operation 的临时目录与未提交修订被幂等清理；活动指针指向的修订存在性会被校验。KV 删除与 app/revision/权限/完整性状态在同一 SQLite 事务提交，恢复后不会出现“KV 已删除但重装未提交”的组合。
 - 传输日志：扩展上传在 `apps_root/tmp/transfers/*.journal` 记录临时文件位置；重启时删除孤儿临时文件再删除日志。
 
-## 4. SQLite schema（`apps_root/extensions.db`，schema v2；v1 原地迁移）
+## 4. SQLite schema（`apps_root/extensions.db`，schema v3；v1/v2 原地迁移）
 
 | 表 | 关键列 | 约束 |
 | --- | --- | --- |
@@ -89,9 +102,11 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 | `integrity_entries` | `(revision_id, path)` PK、`size`、`sha256` | 逐文件 SHA-256 清单 |
 | `operations` | `operation_id` PK、`type`、`phase`、`temp_path`、`revision_id` | 启动恢复依据 |
 | `app_kv` | `(app_id, key)` PK、`value` JSON 文本、`size_bytes` | 无 FK：卸载保留数据 |
+| `app_backends` | `app_id` PK、`service_id` UNIQUE、`executable_rel`、`args_json`、`arch`、`run_user`、`run_group`、`allow_root`、`autostart`、`state`、`error` | 每应用至多一行；app FK 级联；只保存宿主/管理员状态，进程存活状态读 Supervisor |
 
 - `PRAGMA journal_mode=WAL`、`foreign_keys=ON`、`synchronous=FULL`；数据库文件 `0600`，根目录 `0700`。
 - 所有跨表状态变更在 `BEGIN IMMEDIATE` 事务中提交；失败回滚。
+- `app_backends.state` 仅取 `stopped`、`upgrading`、`upgrade_failed`；不得写入 Supervisor 的运行态。`service_id` 为稳定的 `app-<sha256(appId)[:32]>` 映射，`executable_rel`/`args_json`/`arch` 来自通过校验的包，运行身份与 `autostart` 只由管理员设置。
 - 重装“保留但不恢复”或陈旧保留行的 KV 删除位于安装的最终事务内；ZIP/清单校验、修订目录移动、完整性写入或 SQLite 失败都会回滚并保留旧 KV 与原应用状态。
 - 扩展应用不能直接打开数据库，也不能用 localStorage/IndexedDB 作为持久化契约。
 

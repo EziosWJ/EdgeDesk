@@ -179,6 +179,132 @@ void test_host_incompatible() {
     CHECK(!manifest.host_api_compatible());
 }
 
+void test_backend_manifest() {
+    auto document = base_manifest();
+    document["backend"] = {{"executable", "bin/backend"}, {"args", {"--serve", "", "0"}}};
+    Manifest manifest;
+    std::string error;
+    std::vector<std::string> warnings;
+    CHECK(parse_manifest(document, manifest, error, warnings));
+    if (!error.empty()) std::fprintf(stderr, "backend manifest error: %s\n", error.c_str());
+    CHECK(manifest.backend.present);
+    CHECK(manifest.has_backend());
+    CHECK_STR_EQ(manifest.backend.executable, "bin/backend");
+    CHECK_EQ(manifest.backend.args.size(), std::size_t{3});
+    CHECK_STR_EQ(manifest.backend.args[0], "--serve");
+    CHECK_STR_EQ(manifest.backend.args[1], "");
+    // A supported backend is no longer reported as a reserved runtime field.
+    CHECK(warnings.empty());
+
+    // scripts/runtime keep their existing warning.
+    auto reserved = document;
+    reserved["scripts"] = {{"postinstall", "ignored"}};
+    Manifest reserved_manifest;
+    std::string reserved_error;
+    std::vector<std::string> reserved_warnings;
+    CHECK(parse_manifest(reserved, reserved_manifest, reserved_error, reserved_warnings));
+    CHECK_EQ(reserved_warnings.size(), std::size_t{1});
+
+    // Optional args default to an empty argv array.
+    auto minimal = base_manifest();
+    minimal["backend"] = {{"executable", "backend"}};
+    Manifest minimal_manifest;
+    std::string minimal_error;
+    std::vector<std::string> minimal_warnings;
+    CHECK(parse_manifest(minimal, minimal_manifest, minimal_error, minimal_warnings));
+    CHECK(minimal_manifest.backend.present);
+    CHECK(minimal_manifest.backend.args.empty());
+    CHECK(minimal_warnings.empty());
+
+    // Web-only packages keep the previous behavior.
+    Manifest web_only;
+    std::string web_error;
+    std::vector<std::string> web_warnings;
+    CHECK(parse_manifest(base_manifest(), web_only, web_error, web_warnings));
+    CHECK(!web_only.backend.present);
+    CHECK(!web_only.has_backend());
+    CHECK(web_warnings.empty());
+}
+
+void test_invalid_backend_manifests() {
+    struct Case {
+        const char* label;
+        void (*mutate)(nlohmann::json&);
+    };
+    const Case cases[] = {
+        {"backend string", [](nlohmann::json& d) { d["backend"] = "backend"; }},
+        {"backend null", [](nlohmann::json& d) { d["backend"] = nullptr; }},
+        {"backend array", [](nlohmann::json& d) {
+             d["backend"] = nlohmann::json::array(
+                 {{{"executable", "one"}}, {{"executable", "two"}}});
+         }},
+        {"missing executable", [](nlohmann::json& d) { d["backend"] = {{"args", nlohmann::json::array()}}; }},
+        {"executable type", [](nlohmann::json& d) { d["backend"] = {{"executable", 1}}; }},
+        {"empty executable", [](nlohmann::json& d) { d["backend"] = {{"executable", ""}}; }},
+        {"absolute executable", [](nlohmann::json& d) { d["backend"] = {{"executable", "/bin/backend"}}; }},
+        {"traversal executable", [](nlohmann::json& d) { d["backend"] = {{"executable", "../backend"}}; }},
+        {"inner traversal", [](nlohmann::json& d) { d["backend"] = {{"executable", "bin/../backend"}}; }},
+        {"dot executable", [](nlohmann::json& d) { d["backend"] = {{"executable", "."}}; }},
+        {"dot relative", [](nlohmann::json& d) { d["backend"] = {{"executable", "./backend"}}; }},
+        {"empty component", [](nlohmann::json& d) { d["backend"] = {{"executable", "bin//backend"}}; }},
+        {"trailing slash", [](nlohmann::json& d) { d["backend"] = {{"executable", "bin/backend/"}}; }},
+        {"backslash", [](nlohmann::json& d) { d["backend"] = {{"executable", "bin\\backend"}}; }},
+        {"control executable", [](nlohmann::json& d) {
+             d["backend"] = {{"executable", std::string("bin/") + '\x01' + "backend"}};
+         }},
+        {"long executable", [](nlohmann::json& d) {
+             d["backend"] = {{"executable", std::string(4097, 'a')}};
+         }},
+        {"args type", [](nlohmann::json& d) { d["backend"] = {{"executable", "backend"}, {"args", "--serve"}}; }},
+        {"args entry type", [](nlohmann::json& d) {
+             d["backend"] = {{"executable", "backend"}, {"args", nlohmann::json::array({1})}};
+         }},
+        {"too many args", [](nlohmann::json& d) {
+             nlohmann::json args = nlohmann::json::array();
+             for (int index = 0; index < 129; ++index) args.push_back("");
+             d["backend"] = {{"executable", "backend"}, {"args", args}};
+         }},
+        {"long arg", [](nlohmann::json& d) {
+             d["backend"] = {{"executable", "backend"},
+                             {"args", nlohmann::json::array({std::string(8193, 'a')})}};
+         }},
+        {"total arg size", [](nlohmann::json& d) {
+             nlohmann::json args = nlohmann::json::array();
+             for (int index = 0; index < 17; ++index) args.push_back(std::string(8192, 'a'));
+             d["backend"] = {{"executable", "backend"}, {"args", args}};
+         }},
+        {"control arg", [](nlohmann::json& d) {
+             d["backend"] = {{"executable", "backend"},
+                             {"args", nlohmann::json::array({std::string("a\nb")})}};
+         }},
+    };
+    for (const auto& item : cases) {
+        auto document = base_manifest();
+        item.mutate(document);
+        Manifest manifest;
+        std::string error;
+        const bool ok = accepts(document, manifest, error);
+        if (ok) std::fprintf(stderr, "backend case unexpectedly accepted: %s\n", item.label);
+        CHECK(!ok);
+        CHECK(!error.empty());
+    }
+
+    // Identity/root/socket/host-path keys are rejected instead of silently
+    // ignored, so a package can never suggest host privileges.
+    const char* forbidden[] = {"run_user", "run_group", "root", "autostart", "socket", "data_dir", "url",
+                               "port"};
+    for (const char* key : forbidden) {
+        auto document = base_manifest();
+        document["backend"] = {{"executable", "backend"}, {key, "value"}};
+        Manifest manifest;
+        std::string error;
+        const bool ok = accepts(document, manifest, error);
+        if (ok) std::fprintf(stderr, "forbidden backend key accepted: %s\n", key);
+        CHECK(!ok);
+        CHECK(error.find(key) != std::string::npos);
+    }
+}
+
 void test_reserved_runtime_warning() {
     auto document = base_manifest();
     document["runtime"] = {{"backend", true}};
@@ -211,6 +337,8 @@ int main() {
     test_origins_imply_network_request();
     test_invalid_manifests();
     test_host_incompatible();
+    test_backend_manifest();
+    test_invalid_backend_manifests();
     test_reserved_runtime_warning();
     test_origin_matching_rules();
     return edgedesk::test::finish("manifest_test");

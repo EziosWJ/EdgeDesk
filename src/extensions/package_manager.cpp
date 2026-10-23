@@ -3,6 +3,8 @@
 #include "core/atomic_file.hpp"
 #include "core/fd.hpp"
 #include "core/util.hpp"
+#include "extensions/elf_info.hpp"
+#include "extensions/native_backend_installer.hpp"
 #include "extensions/zip_reader.hpp"
 #include "file/file_types.hpp"
 #include "file/path_sandbox.hpp"
@@ -134,6 +136,69 @@ void remove_path_best_effort(const std::string& path) {
     } else {
         ::unlink(path.c_str());
     }
+}
+
+bool backend_arch_from_name(std::string_view name, ElfArch& out) {
+    if (name == "x86_64") {
+        out = ElfArch::x86_64;
+        return true;
+    }
+    if (name == "aarch64") {
+        out = ElfArch::aarch64;
+        return true;
+    }
+    if (name == "arm32") {
+        out = ElfArch::arm32;
+        return true;
+    }
+    return false;
+}
+
+// Recovery-time check of the stable program file. Independent of the installer
+// object because PackageManager::create() runs before Application wires the
+// installer in.
+bool verify_installed_program(const std::string& apps_root, const BackendRecord& record,
+                              std::string& error) {
+    ElfArch expected = ElfArch::unknown;
+    if (!backend_arch_from_name(record.arch, expected)) {
+        error = "recorded backend architecture is invalid";
+        return false;
+    }
+    const std::string native_dir = apps_root + "/native";
+    const std::string program_dir = native_dir + "/" + record.app_id;
+    const std::string program = program_dir + "/" + kBackendExecutableName;
+    UniqueFd native_fd(::open(native_dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+    if (!native_fd.valid()) {
+        error = "native program root is missing";
+        return false;
+    }
+    UniqueFd program_fd(::openat(native_fd.get(), record.app_id.c_str(),
+                                 O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+    if (!program_fd.valid()) {
+        error = "application program directory is missing";
+        return false;
+    }
+    struct stat info {};
+    if (::fstatat(program_fd.get(), kBackendExecutableName, &info, AT_SYMLINK_NOFOLLOW) != 0) {
+        error = "installed backend program is missing";
+        return false;
+    }
+    if (!S_ISREG(info.st_mode)) {
+        error = "installed backend program is not a regular file";
+        return false;
+    }
+    ElfArch actual = ElfArch::unknown;
+    std::string inspect_error;
+    if (!inspect_elf(program, expected, actual, inspect_error)) {
+        error = inspect_error;
+        return false;
+    }
+    if (std::string(elf_arch_name(actual)) != record.arch) {
+        error = "installed backend architecture " + std::string(elf_arch_name(actual)) +
+                " does not match recorded " + record.arch;
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -360,6 +425,14 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
         fail_operation(operation_id, temp_path, "", message);
         return Error::make(ErrorCode::unsupported, message);
     }
+    if (manifest.backend.present && backend_installer_ == nullptr) {
+        // Never install a package whose declared backend would be silently
+        // ignored: without the installer the stable program file cannot exist.
+        const std::string message =
+            "native backend packages are not supported by this EdgeDesk configuration";
+        fail_operation(operation_id, temp_path, "", message);
+        return Error::make(ErrorCode::unsupported, message);
+    }
     bool has_index = false;
     bool has_manifest = false;
     for (const auto& file : integrity) {
@@ -383,6 +456,18 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
     const bool reinstall = found && existing.status == app_status::uninstalled;
     const bool upgrading = found && !reinstall;
 
+    // The previous backend row (if any) supplies the administrator identity and
+    // autostart choice for an upgrade. It is never derived from the package.
+    BackendRecord previous_backend;
+    bool previous_backend_found = false;
+    if (found) {
+        error = store_->get_backend(manifest.id, previous_backend, previous_backend_found);
+        if (!error.ok()) {
+            fail_operation(operation_id, temp_path, "", error.message);
+            return error;
+        }
+    }
+
     if (upgrading && !existing.active_version.empty()) {
         SemVer previous;
         std::string parse_error;
@@ -400,6 +485,18 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
                 fail_operation(operation_id, temp_path, "", message);
                 return Error::make(ErrorCode::conflict, message);
             }
+        }
+    }
+
+    // Validate the native backend before the revision is moved or any metadata
+    // is committed. A failure here leaves the existing app, active revision,
+    // backend row and files untouched.
+    BackendRecord validated_backend;
+    if (manifest.backend.present) {
+        error = backend_installer_->validate(temp_path, manifest, validated_backend);
+        if (!error.ok()) {
+            fail_operation(operation_id, temp_path, "", error.message);
+            return error;
         }
     }
 
@@ -436,6 +533,19 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
         return Error::make(ErrorCode::permission_denied, directory_error);
     }
     const std::string destination = revision_path(manifest.id, revision_id);
+    // Replacing a running program is never safe. The hook performs a bounded
+    // Supervisor stop; when it fails nothing has been modified yet.
+    if (previous_backend_found && backend_stop_hook_) {
+        const Error stop_error = backend_stop_hook_(manifest.id);
+        if (!stop_error.ok()) {
+            const std::string message =
+                "cannot stop the native backend before upgrade: " + stop_error.message;
+            fail_operation(operation_id, temp_path, "", message);
+            return Error::make(stop_error.code == ErrorCode::ok ? ErrorCode::unavailable
+                                                                : stop_error.code,
+                               message);
+        }
+    }
     error = move_into_place(temp_path, destination);
     if (!error.ok()) {
         fail_operation(operation_id, temp_path, "", error.message);
@@ -523,6 +633,52 @@ Error PackageManager::install(const std::string& zip_path, const InstallOptions&
     if (!error.ok()) {
         fail_operation(operation_id, temp_path, destination, error.message);
         return error;
+    }
+
+    if (manifest.backend.present) {
+        // The revision and metadata are committed. Copy the validated
+        // executable to the stable program path and persist the service
+        // mapping. No process is started and autostart stays as configured.
+        BackendRecord installed_backend;
+        std::string backend_warning;
+        const Error install_error = backend_installer_->install(
+            destination, manifest, previous_backend_found ? &previous_backend : nullptr,
+            installed_backend, backend_warning);
+        if (!install_error.ok()) {
+            const std::string message =
+                "native backend installation failed: " + install_error.message;
+            // Keep the app stopped and record the failure. There is no
+            // automatic rollback; the administrator reinstalls a good package.
+            BackendRecord failed = validated_backend;
+            failed.state = backend_state::upgrade_failed;
+            failed.error = message;
+            failed.created_at = previous_backend_found ? previous_backend.created_at : now_unix_seconds();
+            if (previous_backend_found) {
+                failed.run_user = previous_backend.run_user;
+                failed.run_group = previous_backend.run_group;
+                failed.allow_root = previous_backend.allow_root;
+                failed.autostart = previous_backend.autostart;
+            }
+            // The diagnostic is already in the operation row; surfacing a
+            // secondary store failure would hide the install failure.
+            (void)store_->upsert_backend(failed);
+            store_->update_operation(operation_id, "failed", revision_id, message);
+            return Error::make(install_error.code, message);
+        }
+        if (!backend_warning.empty()) warnings.push_back(backend_warning);
+    } else if (previous_backend_found) {
+        // Native -> Web-only upgrade: the backend was stopped before the
+        // commit. Remove the service mapping/program/run files and keep the
+        // persistent data directory untouched.
+        if (backend_installer_ == nullptr) {
+            warnings.push_back(
+                "native backend service mapping could not be removed: installer unavailable");
+        } else {
+            const Error remove_error = backend_installer_->remove(manifest.id, false);
+            if (!remove_error.ok()) {
+                warnings.push_back("native backend cleanup failed: " + remove_error.message);
+            }
+        }
     }
 
     if (!ensure_private_directory(data_dir_ + "/" + manifest.id, directory_error)) {
@@ -710,6 +866,31 @@ Error PackageManager::uninstall(std::string_view app_id, bool keep_data) {
     if (!found || app.status == app_status::uninstalled) {
         return Error::make(ErrorCode::not_found, "application not found");
     }
+
+    BackendRecord backend;
+    bool backend_found = false;
+    error = store_->get_backend(app_id, backend, backend_found);
+    if (!error.ok()) return error;
+    if (backend_found) {
+        // SPEC-0011 section 9: deleting a possibly running program is never
+        // acceptable. Without both the installer and a stop hook the state
+        // cannot be confirmed, so uninstall is refused.
+        if (backend_installer_ == nullptr) {
+            return Error::make(ErrorCode::unsupported,
+                               "native backend files cannot be removed by this configuration");
+        }
+        if (!backend_stop_hook_) {
+            return Error::make(ErrorCode::unavailable,
+                               "cannot confirm the native backend is stopped; refusing to uninstall");
+        }
+        const Error stop_error = backend_stop_hook_(app_id);
+        if (!stop_error.ok()) {
+            return Error::make(stop_error.code == ErrorCode::ok ? ErrorCode::unavailable
+                                                                : stop_error.code,
+                               "cannot stop the native backend before uninstall: " + stop_error.message);
+        }
+    }
+
     std::vector<RevisionRecord> revisions;
     error = store_->list_revisions(app_id, revisions);
     if (!error.ok()) return error;
@@ -749,6 +930,17 @@ Error PackageManager::uninstall(std::string_view app_id, bool keep_data) {
     {
         std::lock_guard<std::mutex> lock(sandbox_mutex_);
         for (const auto& revision : revisions) sandboxes_.erase(revision.revision_id);
+    }
+    if (backend_found) {
+        // The metadata transaction committed; drop the service mapping first
+        // (inside remove()), then the program/run files. Persistent data is
+        // purged only with an explicit keep_data=false.
+        const Error remove_error = backend_installer_->remove(app_id, !keep_data);
+        if (!remove_error.ok()) {
+            return Error::make(remove_error.code,
+                               "application uninstalled but native backend cleanup failed: " +
+                                   remove_error.message);
+        }
     }
     return Error::none();
 }
@@ -1226,6 +1418,74 @@ Error PackageManager::recover() {
                 !manifest.host_api_compatible()) {
                 store_->set_app_status(app.app_id, app_status::disabled);
             }
+        }
+    }
+    error = recover_backends();
+    if (!error.ok()) return error;
+    return Error::none();
+}
+
+Error PackageManager::recover_backends() {
+    std::vector<BackendRecord> backends;
+    Error error = store_->list_backends(backends);
+    if (!error.ok()) return error;
+    for (const auto& backend : backends) {
+        AppRecord app;
+        bool found = false;
+        error = store_->get_app(backend.app_id, app, found);
+        if (!error.ok()) return error;
+        if (!found || app.status == app_status::uninstalled) {
+            // No app owns this service mapping any more. Keep the data
+            // directory (it may be a retained app), remove the mapping and the
+            // now-orphaned program/run files.
+            Error removal = store_->delete_backend(backend.app_id);
+            if (!removal.ok()) return removal;
+            std::string ignored;
+            remove_tree_at(root_ + "/native/" + backend.app_id, ignored);
+            remove_tree_at(root_ + "/run/" + backend.app_id, ignored);
+            continue;
+        }
+
+        bool runnable = true;
+        std::string diagnostic;
+        RevisionRecord revision;
+        bool revision_found = false;
+        if (app.active_revision_id.empty()) {
+            runnable = false;
+            diagnostic = "application has no active revision";
+        } else {
+            error = store_->get_revision(app.active_revision_id, revision, revision_found);
+            if (!error.ok()) return error;
+            if (!revision_found) {
+                runnable = false;
+                diagnostic = "application active revision is missing";
+            }
+        }
+        if (runnable) {
+            const auto document = nlohmann::json::parse(revision.manifest_json, nullptr, false);
+            Manifest manifest;
+            std::vector<std::string> warnings;
+            std::string manifest_error;
+            if (document.is_discarded() ||
+                !parse_manifest(document, manifest, manifest_error, warnings) ||
+                !manifest.backend.present) {
+                runnable = false;
+                diagnostic = "active revision does not declare a native backend";
+            } else if (manifest.backend.executable != backend.executable_rel ||
+                       manifest.backend.args != backend.args) {
+                runnable = false;
+                diagnostic = "native backend metadata does not match the active revision";
+            } else if (!verify_installed_program(root_, backend, diagnostic)) {
+                runnable = false;
+            }
+        }
+        if (!runnable) {
+            // Never leave a partially installed backend looking startable.
+            const std::string message =
+                "native backend is not runnable after recovery: " + diagnostic;
+            const Error state_error =
+                store_->set_backend_state(backend.app_id, backend_state::upgrade_failed, message);
+            if (!state_error.ok() && state_error.code != ErrorCode::not_found) return state_error;
         }
     }
     return Error::none();

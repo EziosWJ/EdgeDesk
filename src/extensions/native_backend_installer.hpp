@@ -27,12 +27,15 @@ public:
     // relative path only, regular executable ELF for the host architecture.
     // Fills executable_rel/args/arch and service_id; administrator-owned
     // fields are left untouched. No filesystem change outside `extracted_root`.
+    // A manifest without `backend` is not an error: the method returns ok and
+    // leaves `out` untouched.
     Error validate(const std::string& extracted_root, const Manifest& manifest, BackendRecord& out);
 
     // Copies the validated executable into the stable program directory and
     // upserts the backend row in `stopped` state. `previous` preserves the
     // administrator identity/autostart across an upgrade; it may be null for a
     // first install. Must be called only after the revision is committed.
+    // Without a declared backend this returns invalid_argument.
     Error install(const std::string& revision_root, const Manifest& manifest,
                   const BackendRecord* previous, BackendRecord& out, std::string& warning);
 

@@ -15,6 +15,11 @@ constexpr std::size_t kMaxDescriptionBytes = 500;
 constexpr std::size_t kMaxPublisherBytes = 200;
 constexpr std::size_t kMaxIconBytes = 256;
 constexpr std::int32_t kMaxWindowDimension = 10000;
+// Native backend manifest limits (SPEC-0011 section 4.2).
+constexpr std::size_t kMaxBackendExecutableBytes = 4096;
+constexpr std::size_t kMaxBackendArgs = 128;
+constexpr std::size_t kMaxBackendArgBytes = 8192;
+constexpr std::size_t kMaxBackendArgsTotalBytes = 128 * 1024;
 
 bool has_control_characters(std::string_view text) {
     for (const char ch : text) {
@@ -85,6 +90,124 @@ bool safe_relative_asset_path(std::string_view path) {
         if (slash == std::string_view::npos) break;
         start = slash + 1;
     }
+    return true;
+}
+
+// A backend executable is always a normalized, package-relative file path.
+// It can never name a host path, an identity or a socket.
+bool safe_backend_executable_path(std::string_view path, std::string& error) {
+    if (path.empty()) {
+        error = "must not be empty";
+        return false;
+    }
+    if (path.size() > kMaxBackendExecutableBytes) {
+        error = "is too long";
+        return false;
+    }
+    if (path.front() == '/') {
+        error = "must be a relative path without a leading '/'";
+        return false;
+    }
+    if (path.back() == '/') {
+        error = "must name a file, not a directory";
+        return false;
+    }
+    if (path.find('\\') != std::string_view::npos) {
+        error = "must not contain backslashes";
+        return false;
+    }
+    if (has_control_characters(path)) {
+        error = "must not contain NUL or control characters";
+        return false;
+    }
+    std::size_t start = 0;
+    for (;;) {
+        const auto slash = path.find('/', start);
+        const auto part = path.substr(start, slash == std::string_view::npos ? path.size() - start : slash - start);
+        if (part.empty()) {
+            error = "must be a normalized path without empty components";
+            return false;
+        }
+        if (part == "." || part == "..") {
+            error = "must not contain '.' or '..' components";
+            return false;
+        }
+        if (slash == std::string_view::npos) break;
+        start = slash + 1;
+    }
+    return true;
+}
+
+// Parses the optional backend object. Only the in-package executable and its
+// argv are accepted; identity, root, socket and data-directory keys are
+// rejected rather than ignored so a package cannot suggest host privileges.
+bool parse_backend(const nlohmann::json& value, BackendSpec& out, std::string& error) {
+    if (!value.is_object()) {
+        error = "manifest field 'backend' must be a single object";
+        return false;
+    }
+    for (auto it = value.begin(); it != value.end(); ++it) {
+        if (it.key() != "executable" && it.key() != "args") {
+            error = "backend field '" + it.key() +
+                    "' is not allowed; the manifest cannot select identity, root, socket or host paths";
+            return false;
+        }
+    }
+    if (!value.contains("executable")) {
+        error = "backend.executable is required";
+        return false;
+    }
+    if (!value["executable"].is_string()) {
+        error = "backend.executable must be a string";
+        return false;
+    }
+    std::string executable = value["executable"].get<std::string>();
+    std::string path_error;
+    if (!safe_backend_executable_path(executable, path_error)) {
+        error = "backend.executable " + path_error;
+        return false;
+    }
+
+    std::vector<std::string> args;
+    if (value.contains("args")) {
+        const auto& items = value["args"];
+        if (!items.is_array()) {
+            error = "backend.args must be an array of strings";
+            return false;
+        }
+        if (items.size() > kMaxBackendArgs) {
+            error = "backend.args must contain at most " + std::to_string(kMaxBackendArgs) + " entries";
+            return false;
+        }
+        std::size_t total = 0;
+        for (const auto& item : items) {
+            if (!item.is_string()) {
+                error = "backend.args entries must be strings";
+                return false;
+            }
+            std::string arg = item.get<std::string>();
+            if (arg.size() > kMaxBackendArgBytes) {
+                error = "backend.args entries must not exceed " + std::to_string(kMaxBackendArgBytes) + " bytes";
+                return false;
+            }
+            if (has_control_characters(arg)) {
+                error = "backend.args entries must not contain NUL or control characters";
+                return false;
+            }
+            if (total > kMaxBackendArgsTotalBytes - arg.size()) {
+                error = "backend.args total size exceeds " + std::to_string(kMaxBackendArgsTotalBytes) + " bytes";
+                return false;
+            }
+            total += arg.size();
+            args.push_back(std::move(arg));
+        }
+    }
+
+    out = {};
+    out.present = true;
+    out.executable = std::move(executable);
+    out.args = std::move(args);
+    error.clear();
     return true;
 }
 
@@ -536,11 +659,20 @@ bool parse_manifest(const nlohmann::json& document, Manifest& out, std::string& 
         }
     }
 
-    // Execution-oriented reserved fields are accepted syntactically but never
-    // executed. Their presence is surfaced to the administrator.
+    // Optional native backend (SPEC-0011). The manifest selects only the
+    // in-package executable and argv; everything else is host-owned.
     if (document.contains("backend")) {
-        warnings.push_back("backend runtime fields are reserved and are not executed in this release");
+        BackendSpec backend;
+        std::string backend_error;
+        if (!parse_backend(document["backend"], backend, backend_error)) {
+            error = backend_error;
+            return false;
+        }
+        out.backend = std::move(backend);
     }
+    // Execution-oriented reserved fields are accepted syntactically but never
+    // executed. A valid `backend` declaration is a real supported capability
+    // and therefore no longer produces the legacy reserved-field warning.
     if (document.contains("scripts") || document.contains("runtime")) {
         warnings.push_back("script/runtime fields are reserved and are not executed in this release");
     }
