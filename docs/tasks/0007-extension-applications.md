@@ -6,6 +6,8 @@
 - 风险：[扩展应用风险清单](../security/extension-app-risk-register.md)
 - 原则：保留现有 EdgeDesk 业务功能与 V1.2 行为；本文中的 Issue 为建议拆分，尚未创建为 GitHub Issue。
 
+> **范围更新（2026-10-23）：** 本计划记录的 V1.3 静态 Web 扩展实现已完成。原生后端能力由 [SPEC-0011](../spec/0011-native-application-packages.md) 和 [实施计划](0011-native-application-packages.md) 单独跟踪。本文的“后端运行时不在首期范围”是 V1.3 历史基线，不限制 SPEC-0011 的新增能力。
+
 ## 0. 实现结果（2026-10-18）
 
 | 阶段 | 交付 | 验收证据 |
