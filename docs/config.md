@@ -185,6 +185,44 @@ EDGEDESK_PORT=8090 scripts/run-dev.sh
 `SIGINT` / `SIGTERM` 触发优雅退出：停止 HTTP 事件循环 → 关闭全部 PTY 会话
 （SIGHUP，700 ms 宽限后 SIGKILL）→ 停止采样线程 → 写入审计 `service stop`。
 
+## 一键安装（`deploy/install.sh`）
+
+仓库提供 POSIX `sh` 安装器（可在 dash、bash 与 BusyBox ash 下运行），推荐用于
+systemd、OpenRC 和 BusyBox init 目标。它会：
+
+1. 探测服务管理器（不只检查 PID 1；Alpine 可能以 BusyBox init 配合 OpenRC）；
+2. 交互或通过参数收集 `host`、`port`、文件根目录和安装前缀；
+3. 校验参数后生成 `/etc/edgedesk/edgedesk.conf`（`0640 root:<服务组>`），
+   由 systemd/OpenRC/BusyBox 统一通过 `--config` 加载；
+4. 安装 `edgedesk` 与 `edgedesk-supervisor`，并按探测结果注册服务。
+
+```bash
+sudo deploy/install.sh                       # 交互输入 host/port/file-root
+sudo deploy/install.sh --host 127.0.0.1 --port 8080 \
+  --source out/build/release-embed/bin --file-root /srv
+deploy/install.sh --detect                   # 只打印 init/PID1/可用管理命令
+deploy/install.sh --dry-run --source out/build/release-embed/bin
+sudo deploy/install.sh --uninstall           # 保留 /var/lib/edgedesk*
+```
+
+约束与行为：
+
+- 默认 `127.0.0.1`；非回环 `--host` 必须显式加 `--allow-non-loopback`
+  （交互终端会二次确认），并自行提供 TLS/VPN 网关；HTTPS 需 `--cookie-secure`。
+- 安装器不生成密码或 Token，管理员仍在首次登录时通过 Web UI 设置。
+- 端口必须是 1–65535 的十进制整数；路径必须为绝对路径且不含空白、引号、
+  `#` 或 `..`；`/etc/edgedesk` 只允许受控字符，避免 unit/脚本注入。
+- 已存在的文件默认拒绝覆盖；`--force` 覆盖并保留 `.bak`。
+- `--dry-run` 与 `--destdir` 不要求 root，也不修改当前系统；`--destdir` 用于
+  打包和测试，会跳过建用户与 init 注册。
+- `--no-supervisor` 只安装 Web 后端；`--no-enable` / `--no-start` 用于打包或
+  手工控制启动。
+- `--uninstall` 停止并注销服务、删除二进制与 `/etc/edgedesk`，保留数据；
+  `--purge` 额外删除数据、扩展目录和 Supervisor 状态，且拒绝过宽的 prefix。
+
+具体文件、权限和三种 init 的生成内容见 [`deploy/README.md`](../deploy/README.md)。
+真机验证状态见 [`docs/testing.md`](testing.md)；未实际运行的 init 不得宣称通过。
+
 ## 服务化示例（systemd）
 
 ```ini
