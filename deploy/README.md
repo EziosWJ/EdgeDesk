@@ -35,8 +35,11 @@ deploy/install.sh --destdir /tmp/edgedesk-stage \
 
 `--source` points at the directory containing `edgedesk` and
 `edgedesk-supervisor`. When omitted, the script looks next to itself, then in
-the repository build directories. `--web-root` is only needed for disk builds;
-`release-embed` already contains the frontend.
+its `bin/` subdirectory, then in the repository build directories. A release
+package can therefore be uploaded as `install.sh` + `bin/` and installed
+without `--source`; binaries already sitting at the install target are adopted
+in place instead of requiring `--force`. `--web-root` is only needed for disk
+builds; `release-embed` already contains the frontend.
 
 ## Detection
 

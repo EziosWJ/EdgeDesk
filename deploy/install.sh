@@ -349,7 +349,7 @@ resolve_source() {
     if [ -n "$SOURCE_DIR" ]; then
         return
     fi
-    for candidate in "$SCRIPT_DIR" "$SCRIPT_DIR/../bin" \
+    for candidate in "$SCRIPT_DIR" "$SCRIPT_DIR/bin" "$SCRIPT_DIR/../bin" \
         "$SCRIPT_DIR/../out/build/release-embed/bin" \
         "$SCRIPT_DIR/../out/build/dev-disk/bin" \
         "$SCRIPT_DIR/../out/build/host-embed/bin"; do
@@ -368,12 +368,35 @@ preflight_target() {
     fi
 }
 
+# Uploaded release packages may already contain the binaries at BIN_DIR.
+# That is not an overwrite: install_binary() adopts them in place.
+preflight_binary() {
+    if [ "$1" = "$(rooted "$2")" ]; then
+        return 0
+    fi
+    preflight_target "$2"
+}
+
 install_binary() {
     src=$1
     dst=$2
     [ -f "$src" ] || die "missing binary: $src"
     [ -x "$src" ] || die "binary is not executable: $src"
     target=$(rooted "$dst")
+    # A release package is often uploaded directly into BIN_DIR. Replacing a
+    # file with itself is pointless and would otherwise require --force.
+    if [ "$src" = "$target" ]; then
+        if [ "$DRY_RUN" -eq 1 ]; then
+            say "binary already at target: $target (0755 root:root)"
+            return
+        fi
+        chmod 0755 "$target"
+        if [ -z "$DESTDIR" ]; then
+            chown root:root "$target"
+        fi
+        say "binary already at target: $target"
+        return
+    fi
     if [ "$DRY_RUN" -eq 1 ]; then
         say "install $src -> $target (0755 root:root)"
         return
@@ -721,7 +744,7 @@ inittab_block() {
 
 preflight_install() {
     preflight_target "$CONFIG_FILE"
-    preflight_target "$BIN_DIR/edgedesk"
+    preflight_binary "$SOURCE_DIR/edgedesk" "$BIN_DIR/edgedesk"
     current_init=$(detect_init)
     case "$current_init" in
         systemd)
@@ -748,7 +771,7 @@ preflight_install() {
             ;;
     esac
     if [ "$WITH_SUPERVISOR" -eq 1 ]; then
-        preflight_target "$BIN_DIR/edgedesk-supervisor"
+        preflight_binary "$SOURCE_DIR/edgedesk-supervisor" "$BIN_DIR/edgedesk-supervisor"
     fi
 }
 

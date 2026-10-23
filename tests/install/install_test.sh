@@ -162,6 +162,26 @@ count=$(grep -c '^# BEGIN EDGEDESK' "$STAGE/etc/inittab" || true)
 ok "--force replaces the managed inittab block"
 
 # ---------------------------------------------------------------------------
+# Release layout: install.sh next to bin/, binaries already in place
+# ---------------------------------------------------------------------------
+
+mkdir -p "$WORK/pkg/bin"
+cp "$INSTALL" "$WORK/pkg/install.sh"
+cp "$WORK/bin/edgedesk" "$WORK/pkg/bin/edgedesk"
+cp "$WORK/bin/edgedesk-supervisor" "$WORK/pkg/bin/edgedesk-supervisor"
+
+sh "$WORK/pkg/install.sh" --dry-run --init systemd --yes \
+    --prefix "$WORK/pkg" --config-dir "$WORK/pkg/etc" \
+    --data-dir "$WORK/pkg/data" --state-dir "$WORK/pkg/run" \
+    --apps-root "$WORK/pkg/apps" --file-root "$WORK/srv" > "$WORK/pkg.out"
+
+assert_contains "$WORK/pkg.out" "binary already at target: $WORK/pkg/bin/edgedesk"
+if grep -Fq "install $WORK/pkg/bin/edgedesk ->" "$WORK/pkg.out"; then
+    fail "pre-placed binary must not be copied over itself"
+fi
+ok "script+bin layout resolves without --source and avoids self-overwrite"
+
+# ---------------------------------------------------------------------------
 # Overwrite protection and --no-supervisor
 # ---------------------------------------------------------------------------
 
