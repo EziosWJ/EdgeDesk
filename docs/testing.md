@@ -443,7 +443,8 @@ file out/build/arm64-disk/bin/edgedesk   # ELF 64-bit ... ARM aarch64
 | --- | --- | --- |
 | 语法 | `sh -n deploy/install.sh`、`dash -n deploy/install.sh` | 两种 shell 均通过 |
 | init 探测 | `deploy/install.sh --detect` | 本机输出 `init=systemd`、`pid1=systemd`、`uid=1000`、`systemd=yes` |
-| 暂存安装测试 | `ctest -R install_script_test` | **32 项断言通过**：systemd/OpenRC/BusyBox 暂存安装、配置与 unit 内容、`--ops` root 模式、inittab `--force` 幂等、覆盖保护、`--no-supervisor`、端口/host/路径校验、dry-run 不落盘、uninstall/`--purge`、过宽 prefix 与过宽 chown 路径拒绝 |
+| 暂存安装测试 | `ctest -R install_script_test` | **33 项断言通过**（无 `script(1)` 的平台上交互用例跳过，32 项）：systemd/OpenRC/BusyBox 暂存安装、配置与 unit 内容、`--ops` root 模式、inittab `--force` 幂等、覆盖保护、`--no-supervisor`、端口/host/路径校验、dry-run 不落盘、uninstall/`--purge`、过宽 prefix 与过宽 chown 路径拒绝 |
+| 交互提示可见性 | `tests/install/install_test.sh`（伪终端）与 `script -qec` 手工复现 | 提示经 stderr 显示在终端，四个问题均可回答；答案不再混入 `Listen host [...]` 文本。修复前提示被 `$(...)` 捕获，终端无任何输出且 `read` 永久阻塞 |
 | root 模式暂存 | 安装测试中的 `--ops` 用例 | Web unit `User=root`、`Group=root`、`UMask=0022`、`Environment=HOME=/root`、`StateDirectory=edgedesk`、`RuntimeDirectory=edgedesk`，无 `ProtectSystem`/`ProtectHome`/`PrivateTmp`/`ReadWritePaths`；Supervisor `--allow-uid 0` 且无挂载加固；OpenRC/BusyBox 适配器同步；默认 `file-root = /`；`--ops` 配非 root 用户、无 `--ops` 的 `--service-user root`、以及过宽 `--data-dir` 递归 chown 均被拒绝 |
 | script + bin/ 布局 | 测试用例与真机 dry-run | 无需 `--source`/`--force`；预置在目标目录的二进制被就地采用 |
 | L0 全量 | `scripts/test-fast.sh` | **25/25 通过**（含 `install_script_test`） |
@@ -518,9 +519,9 @@ Supervisor 集成测试（`scripts/supervisor_test.py`）实际覆盖：
 2026-10-23 安装器 `--ops` 改动复跑 L1 时，首次 `ctest -j4` 命中
 `supervisor_engine_test` 的退避计时断言（`backoff_durations[0] >= 180`）。该用例以
 2 ms 轮询测量约 200 ms 的 `BACKOFF` 窗口，并在 4 路并行负载下把窗口量短；随后
-`ctest -R supervisor_engine_test -j1 --repeat until-fail:5` **5/5 通过**，完整 L1
-复跑 **25/25 + 集成套件全过**。这是测试自身的并行计时抖动，本次改动只涉及安装器与
-文档，未修改 Supervisor 代码；该断言后续应改为直接注入时钟或放宽下界。
+`ctest -R supervisor_engine_test -j1 --repeat until-fail:5` **5/5 通过**。该用例现已
+改为用固定步进的合成时钟驱动 `poll()`（引擎的全部计时都取自 `now_ms` 参数），并在
+`ctest -j8 --repeat until-fail:3` 下 **25/25 × 3 全过**；产品代码未修改。
 
 ### 明确未验证项
 

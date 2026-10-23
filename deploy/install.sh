@@ -365,7 +365,10 @@ prompt_value() {
     label=$1
     default=$2
     answer=
-    printf '%s [%s]: ' "$label" "$default"
+    # Callers use HOST=$(prompt_value ...), so stdout is captured. The prompt
+    # must go to stderr or it is swallowed into the returned value and the
+    # terminal shows nothing while read blocks.
+    printf '%s [%s]: ' "$label" "$default" >&2
     read -r answer || true
     if [ -n "$answer" ]; then
         printf '%s' "$answer"
