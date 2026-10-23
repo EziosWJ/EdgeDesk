@@ -95,6 +95,15 @@
 | [SPEC-0009 Process Supervisor 实施计划](tasks/0009-process-supervisor.md) | Phase 0～5、PS-01～PS-10 建议任务拆分、验收标准与平台发布门槛 |
 | [SPEC-0010 Process Supervisor 加固计划](tasks/0010-process-supervisor-hardening.md) | PSH-01～PSH-11 独立 Ticket、依赖顺序、验收标准与发布门槛 |
 
+## 原生应用包扩展（SPEC-0011，待实施）
+
+- [SPEC-0011：原生应用包与后端运行时](spec/0011-native-application-packages.md)：在现有 Web 扩展包中增加可选单个 ELF 后端，复用 Process Supervisor，通过 HTTP over Unix Socket 通信。
+- [ADR-0018：原生应用包与后端运行时集成](adr/0018-native-application-packages.md)：记录包格式、运行身份、通信、覆盖升级和数据保留决策。
+- [SPEC-0011 实施计划与 Ticket 拆分](tasks/0011-native-application-packages.md)：APPX-01～APPX-07 对应独立 GitHub Issues。
+- GitHub Issues：[APPX-01 #57](https://github.com/EziosWJ/EdgeDesk/issues/57)、[APPX-02 #58](https://github.com/EziosWJ/EdgeDesk/issues/58)、[APPX-03 #59](https://github.com/EziosWJ/EdgeDesk/issues/59)、[APPX-04 #60](https://github.com/EziosWJ/EdgeDesk/issues/60)、[APPX-05 #61](https://github.com/EziosWJ/EdgeDesk/issues/61)、[APPX-06 #62](https://github.com/EziosWJ/EdgeDesk/issues/62)、[APPX-07 #63](https://github.com/EziosWJ/EdgeDesk/issues/63)。
+
+> 原生后端尚未实现。SPEC-0010 的进程身份、目录权限、持久化与恢复相关 P0/P1 修复是生产使用前置门槛。纯 Web 包继续沿用 SPEC-0007 的现有行为。
+
 ## 设计素材
 
 - [V1.2 独立页面原型总览](design/prototypes/index.html)：桌面、启动器、设备概览、文件管理、终端、设置与组件素材
