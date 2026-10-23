@@ -45,7 +45,7 @@
 - [扩展应用安全风险清单](security/extension-app-risk-register.md)：已接受风险、强制安全边界和发布门槛。
 - [扩展应用分阶段实施计划](tasks/0007-extension-applications.md)：阶段、建议 Issue 依赖、验收与发布门槛。
 
-> V1.3 已实现静态 Web 应用运行时：ZIP 安装、审批、SQLite 管理、iframe 沙箱、JSON-RPC/MessagePort、KV、文件传输、锁、管理 UI、SDK/CLI。数字签名、应用间通信、秘密存储与后端/脚本运行时不在首期范围。实现状态与证据见 [实现契约](extension-platform-contracts.md) 与 [测试矩阵](testing.md)。
+> V1.3 已实现静态 Web 应用运行时：ZIP 安装、审批、SQLite 管理、iframe 沙箱、JSON-RPC/MessagePort、KV、文件传输、锁、管理 UI、SDK/CLI。V1.3 不包含后端运行时；可选原生后端由待实施的 SPEC-0011 定义。强制数字签名、公共应用市场、秘密存储与跨应用后端调用仍不在 V1 范围。实现状态与证据见 [实现契约](extension-platform-contracts.md) 与 [测试矩阵](testing.md)。
 
 ## ADR（为什么这样做）
 
