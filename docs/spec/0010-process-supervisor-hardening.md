@@ -194,7 +194,7 @@
 宿主 L0/L1：
 
 - `scripts/test-fast.sh`：26/26 原生测试通过（含扩展后的 `process_control_test`、
-  `supervisor_engine_test` 26 个场景），前端 155 个测试通过。
+  `supervisor_engine_test` 28 个场景），前端 155 个测试通过。
 - `scripts/test-pr.sh`：前端测试 + 生产构建、`dev-disk` 26/26 ctest、完整集成套件
   （crud、backend restart、supervisor restart、manual stop restart、unavailable、
   supervisor 日志审计）全部通过，86 s。

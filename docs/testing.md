@@ -525,7 +525,7 @@ Supervisor 集成测试（`scripts/supervisor_test.py`）实际覆盖：
 
 | 验证 | 命令 | 实际结果 |
 | --- | --- | --- |
-| L0 原生 | `scripts/test-fast.sh` | **26/26 通过**；新增 `process_control_test`（PSH-01/02 身份探测），`supervisor_engine_test` 增至 26 个场景，总耗时约 10 s |
+| L0 原生 | `scripts/test-fast.sh` | **26/26 通过**；新增 `process_control_test`（PSH-01/02 身份探测），`supervisor_engine_test` 增至 28 个场景，总耗时约 10 s |
 | L0 前端 | 同上 | **27 个文件 / 155 个测试通过** |
 | L1 全量 | `scripts/test-pr.sh` | 前端 155 测试 + 生产构建、`dev-disk` 构建、**26/26 ctest**、完整集成套件通过，**87 s** |
 | 集成 stop/restart | `scripts/supervisor_test.py` | 返回 `operation_id`，轮询 `state=succeeded`；stop 后 PID 消失，restart 生成新 PID |
