@@ -4,6 +4,8 @@
 - 日期：2026-10-18
 - 关联：[SPEC-0007](../spec/0007-extension-applications.md)、[ADR-0001 技术栈](0001-technology-stack.md)、[ADR-0009 桌面架构](0009-desktop-workspace-architecture.md)、[ADR-0010 桌面持久化](0010-desktop-persistence-and-recovery.md)
 
+> **后续决策说明（2026-10-23）：** [ADR-0018](0018-native-application-packages.md) 扩展本 ADR 的静态 Web 包模型，增加可选单个 ELF 后端。本文仍然是 Web-only 包格式、静态资源 revision、iframe 运行时和 KV 的权威基线；“首期仅支持静态 Web 包”的历史限制由 ADR-0018/SPEC-0011 覆盖。未声明 backend 的旧包保持原行为。
+
 ## 背景
 
 EdgeDesk V1.2 已有原生应用注册表、统一 WindowManager、C++ HTTP 服务、文件与终端 API。扩展应用需要独立分发、升级和卸载，同时不能把任意第三方代码直接加载到宿主 DOM 权限域，也不能要求设备额外安装 Node、Python 或 Java 运行时。
