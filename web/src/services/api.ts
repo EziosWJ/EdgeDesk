@@ -112,6 +112,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
+  createFile: (path: string) =>
+    apiRequest<{ ok: boolean; path: string; entry: FileEntry }>('/api/files/create', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
   rename: (from: string, to: string, overwrite = false) =>
     apiRequest<{ ok: boolean }>('/api/files/rename', {
       method: 'POST',

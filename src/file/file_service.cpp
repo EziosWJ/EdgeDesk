@@ -270,6 +270,36 @@ Error FileService::mkdir(std::string_view path) const {
     return Error::none();
 }
 
+Error FileService::create_file(std::string_view path, FileEntry& info) const {
+    std::string normalized;
+    std::string message;
+    if (!PathSandbox::normalize(path, normalized, message)) {
+        return Error::make(ErrorCode::invalid_argument, message);
+    }
+    if (normalized == "/") {
+        return Error::make(ErrorCode::already_exists, "directory already exists: /");
+    }
+    FileLockGuard lock_guard;
+    Error lock_error = lock_guard.exclusive(sandbox_, locks_, normalized);
+    if (!lock_error.ok()) return lock_error;
+    UniqueFd dir;
+    std::string name;
+    Error error = sandbox_.open_parent(normalized, dir, name);
+    if (!error.ok()) return error;
+    // O_EXCL keeps creation non-destructive: an existing file, directory,
+    // symlink or hard-link alias is reported instead of being replaced.
+    const int fd = ::openat(dir.get(), name.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0644);
+    if (fd < 0) {
+        return errno_error("cannot create file " + normalized);
+    }
+    UniqueFd file(fd);
+    struct stat st {};
+    if (::fstat(file.get(), &st) != 0) {
+        return errno_error("cannot stat created file " + normalized);
+    }
+    return entry_from_stat(name, normalized, st, info);
+}
+
 Error FileService::rename(std::string_view from, std::string_view to, bool overwrite) const {
     std::string normalized_from;
     std::string normalized_to;

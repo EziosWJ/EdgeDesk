@@ -127,6 +127,15 @@ def test_files(cookie):
     status, _, _ = request("PUT", "/api/files/text?path=/bin.dat", b"a\x00b", cookie=cookie, headers=origin, raw=True)
     check(status == 415, f"binary text write status {status}")
 
+    # 新建空文件；同名文件不会被覆盖
+    status, payload, _ = request("POST", "/api/files/create", {"path": "/created.txt"}, cookie=cookie,
+                                 headers=origin)
+    check(status == 201, f"create status {status}")
+    created = json_body(payload)["entry"]
+    check(created["type"] == "file" and created["size"] == 0, f"create entry {created}")
+    status, _, _ = request("POST", "/api/files/create", {"path": "/created.txt"}, cookie=cookie, headers=origin)
+    check(status == 409, f"create existing status {status}")
+
     # mkdir + rename + delete
     status, _, _ = request("POST", "/api/files/mkdir", {"path": "/dir1"}, cookie=cookie, headers=origin)
     check(status == 201, f"mkdir status {status}")

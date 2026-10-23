@@ -440,6 +440,31 @@ describe('FileWorkspace', () => {
     expect(tableRows()).toContain('newdir');
   });
 
+  it('creates an empty file and opens it in the editor', async () => {
+    const mock = install();
+    await render('/');
+
+    act(() => buttonByText('新建文件').click());
+    const input = document.querySelector<HTMLInputElement>('.ed-modal input')!;
+    typeInto(input, 'notes.md');
+    const form = document.querySelector<HTMLFormElement>('.ed-modal')!;
+    act(() => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    await flush();
+
+    expect(mock.createdFiles).toEqual(['/notes.md']);
+    expect(container.textContent).toContain('已创建文件 notes.md');
+    expect(tableRows()).toContain('notes.md');
+    const editor = windowStore.getSnapshot().find((item) => item.appId === 'editor');
+    expect(editor?.payload).toEqual({ path: '/notes.md' });
+  });
+
+  it('renders the root slash once in the breadcrumb', async () => {
+    await render('/opt/app');
+    expect(breadcrumbs()).toEqual(['/', 'opt', 'app']);
+    const separators = [...container.querySelectorAll('.ed-crumb-sep')].map((node) => node.textContent ?? '');
+    expect(separators).toEqual(['/']);
+  });
+
   it('renders a paginated, sorted listing through the toolbar controls', async () => {
     const many: MockNode[] = Array.from({ length: 205 }, (_, index) => ({
       name: `file-${String(index).padStart(3, '0')}.txt`,

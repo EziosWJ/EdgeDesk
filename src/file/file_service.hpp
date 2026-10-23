@@ -45,6 +45,10 @@ public:
 
     Error mkdir(std::string_view path) const;
 
+    // Creates an empty regular file. Fails with `already_exists` when the
+    // destination is present, so it can never truncate an existing file.
+    Error create_file(std::string_view path, FileEntry& info) const;
+
     // overwrite=false refuses to replace an existing destination.
     Error rename(std::string_view from, std::string_view to, bool overwrite) const;
 
