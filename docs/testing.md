@@ -443,7 +443,8 @@ file out/build/arm64-disk/bin/edgedesk   # ELF 64-bit ... ARM aarch64
 | --- | --- | --- |
 | 语法 | `sh -n deploy/install.sh`、`dash -n deploy/install.sh` | 两种 shell 均通过 |
 | init 探测 | `deploy/install.sh --detect` | 本机输出 `init=systemd`、`pid1=systemd`、`uid=1000`、`systemd=yes` |
-| 暂存安装测试 | `ctest -R install_script_test` | **24 项断言通过**：systemd/OpenRC/BusyBox 暂存安装、配置与 unit 内容、inittab `--force` 幂等、覆盖保护、`--no-supervisor`、端口/host/路径校验、dry-run 不落盘、uninstall/`--purge`、过宽 prefix 拒绝 |
+| 暂存安装测试 | `ctest -R install_script_test` | **25 项断言通过**（无 `script(1)` 的平台上交互用例跳过）：systemd/OpenRC/BusyBox 暂存安装、配置与 unit 内容、inittab `--force` 幂等、覆盖保护、`--no-supervisor`、端口/host/路径校验、dry-run 不落盘、uninstall/`--purge`、过宽 prefix 拒绝 |
+| 交互提示可见性 | `tests/install/install_test.sh`（伪终端）与 `script -qec` 手工复现 | 提示经 stderr 显示在终端，四个问题均可回答；答案不再混入 `Listen host [...]` 文本。修复前提示被 `$(...)` 捕获，终端无任何输出且 `read` 永久阻塞 |
 | script + bin/ 布局 | 测试用例与真机 dry-run | 无需 `--source`/`--force`；预置在目标目录的二进制被就地采用 |
 | L0 全量 | `scripts/test-fast.sh` | **25/25 通过**（含 `install_script_test`） |
 | L1 全量 | `scripts/test-pr.sh` | 前端 **153 个测试** + 构建、`dev-disk` 构建、**25/25 ctest**、完整集成套件通过 |

@@ -266,4 +266,24 @@ assert_no_file "$WORK/stage-purge/var/lib/edgedesk-supervisor"
 assert_no_file "$WORK/stage-purge/etc/edgedesk/edgedesk.conf"
 ok "--purge removes data and supervisor state"
 
+# ---------------------------------------------------------------------------
+# Interactive prompts
+# ---------------------------------------------------------------------------
+# prompt_value is called as HOST=$(prompt_value ...), so its stdout is
+# captured. The prompt text must go to stderr; otherwise it is swallowed into
+# the answer and the terminal shows nothing while read blocks forever.
+# A real TTY is required for the prompts, so use script(1) when available.
+if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1; then
+    printf '\n\n\n\n' | script -qec "sh $INSTALL --file-root $WORK/missing-root" \
+        /dev/null > "$WORK/interactive.out" 2>&1 || true
+    assert_contains "$WORK/interactive.out" "Listen host ["
+    if grep -Fq "unsupported characters: Listen host" "$WORK/interactive.out"; then
+        fail "prompt text was captured into the answer instead of shown on the terminal"
+    fi
+    assert_contains "$WORK/interactive.out" "file-root directory does not exist"
+    ok "interactive prompts reach the terminal and keep answers clean"
+else
+    printf 'skip - interactive prompt check (script(1) not available)\n'
+fi
+
 printf 'PASS: %d checks\n' "$PASS"
