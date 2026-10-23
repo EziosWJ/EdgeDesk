@@ -718,9 +718,23 @@ SpawnOutcome spawn_service(const ServiceConfig& config, const ResolvedIdentity& 
         // direct child of the Supervisor via CLONE_PARENT but inherits this
         // process's session and process group.
         g_anchor_setup.commit_read = commit_pipe[0];
-        const pid_t anchor = ::clone(anchor_trampoline,
-                                     g_anchor_stack + kAnchorStackSize,
-                                     CLONE_PARENT | SIGCHLD, nullptr);
+        pid_t anchor = ::clone(anchor_trampoline,
+                               g_anchor_stack + kAnchorStackSize,
+                               CLONE_PARENT | SIGCHLD, nullptr);
+        if (anchor < 0) {
+            // QEMU user-mode on some architectures (notably aarch64 CI) rejects
+            // CLONE_PARENT with EINVAL. Fall back to a plain fork: the sentinel
+            // still inherits the session/PGID, closes every descriptor and keeps
+            // the PGID reserved. The trade-off is that it becomes a child of the
+            // service process instead of the Supervisor, so the Supervisor cannot
+            // reap it and a service that waits for all children may block until
+            // the stop-timeout SIGKILL; document this as the fallback boundary.
+            anchor = ::fork();
+            if (anchor == 0) {
+                anchor_trampoline(nullptr);
+                ::_exit(0);
+            }
+        }
         AnchorReport report;
         report.pid = anchor;
         report.error = anchor < 0 ? errno : 0;

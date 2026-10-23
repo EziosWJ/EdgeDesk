@@ -577,6 +577,8 @@ OpenRC/BusyBox、ARM64/QEMU 与 Bootlin musl 交叉构建仍未执行，不得�
 - **真实 reboot（PSH-10）**：已执行真实 `systemctl reboot` 并验证 boot ID 变化后的
   autostart 与人工停止语义。
 - **Buildroot/真实硬件、ARM32**：未构建、未运行。
+- **qemu-user aarch64**：CI 交叉构建并运行集成套件；本机无 qemu，未在本地重跑。
+  sentinel 在 `CLONE_PARENT` 返回 EINVAL 时回退为 `fork()`（见 ADR-0019 §1）。
 - **压力（PSH-11）**：已在隔离实例执行 30 分钟 / 1,000+ 生命周期操作；真实硬件长期
   运行与文件系统损坏注入仍未执行。
 - **systemd/OpenRC/BusyBox 之外的发行版与容器环境**：未验证。
@@ -604,8 +606,9 @@ OpenRC/BusyBox、ARM64/QEMU 与 Bootlin musl 交叉构建仍未执行，不得�
 | 宿主 L1 | `scripts/test-pr.sh` | 前端构建 + 26/26 ctest + 完整集成套件通过（86 s） |
 | static-pie L2 | `ctest --preset release-embed` | 26/26 通过；两个二进制均为 static-pie |
 | 权限隔离（A） | 隔离 root Supervisor + Python JSON-RPC 客户端 | 46/46：UID/GID/补充组、cwd、anchor UID=0、socket 0660 root:pshclients、`SO_PEERCRED` 拒绝、SIGTERM/SIGKILL、孤儿清理、DB/日志 0600/0700 |
-| systemd（B） | `systemctl restart/stop/start`、`kill -9` Supervisor | 24/24：graceful restart 重启服务；SIGKILL 后 2 s respawn 并以原 PID 接管；stop/start 恢复 `desired_state=running` |
-| 真实 reboot | `systemctl reboot`，SSH 恢复后重新验证 | 19/19：新 boot ID、autostart 启动、人工停止保持、DB v2/quick_check、anchor 重建 |
+| 最终二进制部署 | `/bin/sleep`（Ubuntu coreutils multicall）+ anchor FD 检查 | 13/13：staging 0711、`AT_EXECFN` 保留、anchor 提交后 0 FD、comm=`edgedesk-anchor` |
+| systemd（B，最终二进制） | `systemctl restart/stop/start`、`kill -9` Supervisor | 24/24：graceful restart 重启服务；SIGKILL 后 2 s respawn 并以原 PID 接管；stop/start 恢复 `desired_state=running` |
+| 真实 reboot（最终二进制） | `systemctl reboot`，SSH 恢复后重新验证 | 19/19：新 boot ID `f80646e8-…`、autostart 启动、人工停止保持、DB v2/quick_check、anchor 重建 |
 | 压力（C） | 隔离实例，7 类并发 worker，1,000+ 操作 / 30 分钟 | 结果见 SPEC-0010 §6；结束后无测试进程、无 anchor、SQLite 完整、资源有界 |
 
 ### root/权限验收细节
@@ -625,8 +628,10 @@ OpenRC/BusyBox、ARM64/QEMU 与 Bootlin musl 交叉构建仍未执行，不得�
 
 - 系统数据库从 schema v1 迁移到 v2（新增 anchor 列），`PRAGMA quick_check=ok`，
   原有 0 行数据保持不变。
-- 真实 reboot 前后 boot ID 由 `07ebc04e-f5ca-4196-871b-3bf2d9d0ca95` 变为
-  `8e30915e-c4e6-4e17-a5db-907fc3726e82`。
+- 最终二进制真实 reboot 前后 boot ID 由
+  `8e30915e-c4e6-4e17-a5db-907fc3726e82` 变为
+  `f80646e8-2a16-4ee2-a7a3-5d235ef900a3`（更早一轮为
+  `07ebc04e-…` → `8e30915e-…`）。
 - `autostart=true` 的测试服务在新 boot 自动启动并以 pshsvc 运行；人工停止的服务
   保持 `STOPPED`、`desired_state=stopped`、身份列清零。
 - `systemctl --failed` 为空；journal 无 error/failure 记录。

@@ -304,6 +304,9 @@ Web 后端仍只监听管理员配置的 HTTP 地址（Phase 1 仅回环），Su
 | `--version` / `--help` | — | 版本/用法 |
 
 数据目录以 `0700` 创建，数据库和日志以 `0600` 创建；Socket 默认 `0660`。
+可执行文件 staging 目录由 Supervisor 内部管理，默认为
+`/run/edgedesk-supervisor-exec`（root，`0711`，允许非 root 服务穿越）或
+`/tmp/edgedesk-supervisor-exec-<uid>`（非 root，`0700`），无需配置。
 数据库损坏、`PRAGMA quick_check` 失败或 `user_version` 高于当前 schema 时，
 Supervisor 启动失败并保留原始文件，不会静默重建或清空。
 

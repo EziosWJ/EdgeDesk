@@ -206,12 +206,17 @@
 - Phase A（root、隔离实例）：46/46 检查通过。覆盖 UID/GID/补充组、cwd、anchor 身份、
   socket 权限与 `SO_PEERCRED`、SIGTERM 及时退出、超时 SIGKILL（~1.7 s，`stop_timeout_ms=1500`）、
   孤儿后代清理、root 服务显式确认、无效用户、DB/日志 0600/0700。
-- Phase B（systemd）：24/24 检查通过。`systemctl restart` 后服务重新启动；
+- 最终二进制系统部署：13/13 检查通过——root 所属 0711 staging、Ubuntu coreutils
+  multicall `/bin/sleep` 正常启动（证明 `AT_EXECFN` 保留）、anchor 提交后 FD 数为 0、
+  comm=`edgedesk-anchor`、服务删除后数据库行清除。
+- Phase B（systemd，最终二进制）：24/24 检查通过。`systemctl restart` 后服务重新启动；
   `kill -9` Supervisor 后 systemd 在 2 s 内 respawn，新 Supervisor 以相同 PID 接管进程；
   `systemctl stop/start` 停止并恢复 `desired_state=running` 的服务。
-- 真实 reboot：19/19 检查通过。boot ID 从 `07ebc04e-…` 变为 `8e30915e-…`；
-  `autostart=true` 服务自动启动，人工停止的服务保持 `STOPPED`；DB v2、
-  `PRAGMA quick_check=ok`、anchor 重新创建且 UID=0。
+- 真实 reboot（最终二进制）：19/19 检查通过。boot ID 从
+  `8e30915e-c4e6-4e17-a5db-907fc3726e82` 变为
+  `f80646e8-2a16-4ee2-a7a3-5d235ef900a3`；`autostart=true` 服务自动启动，
+  人工停止的服务保持 `STOPPED`；DB v2、`PRAGMA quick_check=ok`、anchor 重新创建且
+  UID=0、`systemctl --failed` 为空。
 - v1→v2 迁移在系统实例真实数据库（0 行）上执行，`user_version=2`。
 
 ### 未验证项目

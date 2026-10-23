@@ -55,6 +55,12 @@ SPEC-0010 修复了进程组身份校验、后代清理、持久化失败语义�
 anchor 的创建/回收不依赖 pidfd 或新内核特性；`close_range` 不可用时回退为有界
 `close()` 循环。SIGKILL 之后必须再次 probe 确认 `absent` 才完成操作。
 
+**兼容回退边界**：在缺少 `CLONE_PARENT` 支持的内核/模拟器（已观察到 qemu-user
+aarch64 CI 返回 EINVAL）上，sentinel 用普通 `fork()` 创建。它仍继承服务会话/PGID、
+关闭全部 FD 并保留 PGID，但父进程是服务进程而非 Supervisor：Supervisor 无法 `waitpid`
+回收它，且若服务在退出时 `waitpid(-1)` 等待所有子进程，可能一直等到停止超时的 SIGKILL。
+真实 ARM64 Linux 上 `CLONE_PARENT` 可用；该回退只影响不支持的执行环境。
+
 ### 2. 启动握手与持久化顺序（PSH-04）
 
 服务启动遵循固定顺序，避免 API 谎报成功后留下无身份的孤儿：
