@@ -44,12 +44,14 @@ bool LogStore::valid_id(std::string_view id) {
 
 std::unique_ptr<LogStore> LogStore::open(const std::string& directory, Error& error) {
     std::string message;
-    if (!ensure_private_directory(directory, message)) {
+    int directory_fd = -1;
+    if (!ensure_private_directory(directory, message, &directory_fd)) {
+        if (directory_fd >= 0) ::close(directory_fd);
         error = Error::make(ErrorCode::permission_denied, message);
         return nullptr;
     }
     error = Error::none();
-    return std::unique_ptr<LogStore>(new LogStore(directory));
+    return std::unique_ptr<LogStore>(new LogStore(directory, directory_fd));
 }
 
 LogStore::~LogStore() {
@@ -57,28 +59,37 @@ LogStore::~LogStore() {
         if (item.second.fd >= 0) ::close(item.second.fd);
     }
     files_.clear();
+    if (directory_fd_ >= 0) ::close(directory_fd_);
+}
+
+std::string LogStore::name_for(std::string_view id) const {
+    return std::string(id) + ".log";
 }
 
 std::string LogStore::path_for(std::string_view id) const {
-    return directory_ + "/" + std::string(id) + ".log";
+    return directory_ + "/" + name_for(id);
 }
 
 Error LogStore::open_append_locked(std::string_view id, OpenFile& out) {
     if (!valid_id(id)) {
         return Error::make(ErrorCode::invalid_argument, "invalid service ID for log file");
     }
+    const std::string name = name_for(id);
     const std::string path = path_for(id);
-    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW, 0600);
+    const int fd = ::openat(directory_fd_, name.c_str(),
+                            O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW |
+                                O_NONBLOCK,
+                            0600);
     if (fd < 0) {
         return Error::make(ErrorCode::io_error,
                            "cannot open service log " + path + ": " + std::strerror(errno), errno);
     }
     struct stat info {};
-    if (::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode)) {
+    if (::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || info.st_uid != ::geteuid()) {
         const int saved = errno;
         ::close(fd);
         return Error::make(ErrorCode::io_error,
-                           "service log is not a regular file: " + path +
+                           "service log is not a regular file owned by the supervisor: " + path +
                                (saved != 0 ? ": " + std::string(std::strerror(saved)) : std::string()));
     }
     (void)::fchmod(fd, 0600);
@@ -112,10 +123,13 @@ Error LogStore::append(std::string_view id, std::string_view data, std::uint64_t
     if (file->size + data.size() > limit) {
         if (file->fd >= 0) ::close(file->fd);
         file->fd = -1;
+        const std::string name = name_for(id);
+        const std::string rotated = name + ".1";
         const std::string path = path_for(id);
-        const std::string rotated = path + ".1";
-        ::unlink(rotated.c_str());
-        if (::rename(path.c_str(), rotated.c_str()) != 0 && errno != ENOENT) {
+        // renameat/unlinkat stay relative to the verified directory descriptor.
+        (void)::unlinkat(directory_fd_, rotated.c_str(), 0);
+        if (::renameat(directory_fd_, name.c_str(), directory_fd_, rotated.c_str()) != 0 &&
+            errno != ENOENT) {
             return Error::make(ErrorCode::io_error,
                                "cannot rotate service log " + path + ": " + std::strerror(errno), errno);
         }
@@ -143,7 +157,9 @@ Error LogStore::read(std::string_view id, std::uint64_t tail_bytes, bool has_cur
         return Error::make(ErrorCode::invalid_argument, "invalid service ID for log read");
     }
     const std::string path = path_for(id);
-    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    const std::string name = name_for(id);
+    const int fd = ::openat(directory_fd_, name.c_str(),
+                            O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
     if (fd < 0) {
         if (errno == ENOENT) return Error::none();
         return Error::make(ErrorCode::io_error,
@@ -216,12 +232,14 @@ Error LogStore::remove(std::string_view id) {
         return Error::make(ErrorCode::invalid_argument, "invalid service ID for log removal");
     }
     close(id);
+    const std::string name = name_for(id);
     const std::string path = path_for(id);
-    if (::unlink(path.c_str()) != 0 && errno != ENOENT) {
+    if (::unlinkat(directory_fd_, name.c_str(), 0) != 0 && errno != ENOENT) {
         return Error::make(ErrorCode::io_error,
                            "cannot remove service log " + path + ": " + std::strerror(errno), errno);
     }
-    if (::unlink((path + ".1").c_str()) != 0 && errno != ENOENT) {
+    const std::string rotated = name + ".1";
+    if (::unlinkat(directory_fd_, rotated.c_str(), 0) != 0 && errno != ENOENT) {
         return Error::make(ErrorCode::io_error,
                            "cannot remove rotated service log " + path + ": " + std::strerror(errno),
                            errno);

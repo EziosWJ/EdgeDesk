@@ -332,7 +332,7 @@ IPC 调用必须使用有界等待与独立执行上下文，不能无限阻塞 
 - 进程身份由 boot ID、`/proc/<pid>/stat` starttime、PID 与 PGID 共同校验；
   Supervisor 崩溃后重新启动时只接管身份可验证的进程，验证不了时进入 `UNKNOWN`，
   不盲目拉起第二份实例。
-- 持久化使用独立 SQLite schema v1（`PRAGMA user_version` + `quick_check`），
+- 持久化使用独立 SQLite schema（`PRAGMA user_version` + `quick_check`；SPEC-0010 起为 v2，v1 自动前向迁移），
   数据目录 `0700`、数据库 `0600`；损坏或更高版本 schema 时启动失败并保留原文件。
 - IPC 使用 Unix `AF_UNIX`/`SOCK_STREAM` NDJSON JSON-RPC 2.0；创建时校验 Socket
   目录归属和写权限，连接时检查 `SO_PEERCRED` 的 UID/GID 允许列表，没有 TCP listener。

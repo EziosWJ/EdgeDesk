@@ -426,6 +426,182 @@ void test_private_directory_rejects_wrong_owner() {
     expect_metadata_unchanged("/tmp", tmp_before);
 }
 
+// PSH-03/PSH-04: the runtime row carries the sentinel identity, the durable
+// inconsistency marker uses the pinned directory, and a v1 database migrates
+// forward without losing rows.
+void test_marker_and_schema_v2() {
+    const fs::path root = make_root("edgedesk-supervisor-marker-test");
+    const std::string database = (root / "state" / "supervisor.db").string();
+
+    Error error;
+    auto store = SupervisorStore::open(database, error);
+    CHECK(store != nullptr);
+    if (!store) return;
+    CHECK(!store->inconsistent_marker_present());
+    CHECK(store->mark_inconsistent("unit test").ok());
+    CHECK(store->inconsistent_marker_present());
+    CHECK(fs::exists(root / "state" / ".persistence-inconsistent"));
+    CHECK(store->clear_inconsistent_marker().ok());
+    CHECK(!store->inconsistent_marker_present());
+    CHECK(!fs::exists(root / "state" / ".persistence-inconsistent"));
+
+    ServiceRecord record = make_record("anchored");
+    record.runtime.anchor_pid = 4242;
+    record.runtime.anchor_start_ticks = 987654321;
+    CHECK(store->insert(record).ok());
+    CHECK(store->save_runtime(record.config.id, record.runtime).ok());
+    ServiceRecord loaded;
+    bool found = false;
+    CHECK(store->get(record.config.id, loaded, found).ok());
+    CHECK(found);
+    CHECK_EQ(loaded.runtime.anchor_pid, 4242);
+    CHECK_EQ(loaded.runtime.anchor_start_ticks, static_cast<std::uint64_t>(987654321));
+
+    store.reset();
+
+    // Build a SPEC-0009/v1 database (no anchor columns) and verify the forward
+    // migration keeps the row readable with zeroed anchor identity.
+    const fs::path v1_root = make_root("edgedesk-supervisor-v1-test");
+    const std::string v1_database = (v1_root / "supervisor.db").string();
+    {
+        sqlite3* db = nullptr;
+        CHECK_EQ(sqlite3_open(v1_database.c_str(), &db), SQLITE_OK);
+        const char* schema =
+            "CREATE TABLE services("
+            "id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE,executable TEXT NOT NULL,"
+            "args_json TEXT NOT NULL,cwd TEXT NOT NULL,env_json TEXT NOT NULL,"
+            "run_user TEXT NOT NULL,run_group TEXT NOT NULL,allow_root INTEGER NOT NULL DEFAULT 0,"
+            "autostart INTEGER NOT NULL DEFAULT 0,restart_policy TEXT NOT NULL,"
+            "max_restarts INTEGER NOT NULL,restart_window_sec INTEGER NOT NULL,"
+            "restart_delay_ms INTEGER NOT NULL,max_restart_delay_ms INTEGER NOT NULL,"
+            "stable_after_sec INTEGER NOT NULL,stop_timeout_ms INTEGER NOT NULL,"
+            "log_max_bytes INTEGER NOT NULL,created_at INTEGER NOT NULL,"
+            "updated_at INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'STOPPED',"
+            "desired_state TEXT NOT NULL DEFAULT 'stopped',boot_id TEXT NOT NULL DEFAULT '',"
+            "pid INTEGER NOT NULL DEFAULT 0,pgid INTEGER NOT NULL DEFAULT 0,"
+            "start_ticks INTEGER NOT NULL DEFAULT 0,started_at_ms INTEGER NOT NULL DEFAULT 0,"
+            "last_exit_code INTEGER NOT NULL DEFAULT -1,last_signal INTEGER NOT NULL DEFAULT 0,"
+            "last_exit_at INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',"
+            "restart_count INTEGER NOT NULL DEFAULT 0,window_restarts INTEGER NOT NULL DEFAULT 0,"
+            "window_started_at INTEGER NOT NULL DEFAULT 0,"
+            "failed_locked INTEGER NOT NULL DEFAULT 0);"
+            "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);"
+            "INSERT INTO schema_migrations(version, applied_at) VALUES(1, 1);"
+            "PRAGMA user_version=1;";
+        CHECK_EQ(sqlite3_exec(db, schema, nullptr, nullptr, nullptr), SQLITE_OK);
+        const std::string insert =
+            "INSERT INTO services(id,name,executable,args_json,cwd,env_json,run_user,"
+            "run_group,restart_policy,max_restarts,restart_window_sec,restart_delay_ms,"
+            "max_restart_delay_ms,stable_after_sec,stop_timeout_ms,log_max_bytes,"
+            "created_at,updated_at) VALUES('legacy','legacy','/bin/true','[]','/','{}','" +
+            current_user() + "','" + current_group() +
+            "','never',1,60,1000,1000,300,10000,1048576,1,1)";
+        CHECK_EQ(sqlite3_exec(db, insert.c_str(), nullptr, nullptr, nullptr), SQLITE_OK);
+        sqlite3_close(db);
+    }
+    {
+        Error migrate_error;
+        auto migrated = SupervisorStore::open(v1_database, migrate_error);
+        CHECK(migrated != nullptr);
+        if (migrated) {
+            std::vector<ServiceRecord> rows;
+            CHECK(migrated->load_all(rows).ok());
+            CHECK_EQ(rows.size(), static_cast<std::size_t>(1));
+            if (rows.size() == 1) {
+                CHECK_EQ(rows[0].config.id, std::string("legacy"));
+                CHECK_EQ(rows[0].runtime.anchor_pid, 0);
+                CHECK_EQ(rows[0].runtime.anchor_start_ticks, static_cast<std::uint64_t>(0));
+            }
+        }
+    }
+    {
+        sqlite3* db = nullptr;
+        CHECK_EQ(sqlite3_open(v1_database.c_str(), &db), SQLITE_OK);
+        sqlite3_stmt* stmt = nullptr;
+        CHECK_EQ(sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &stmt, nullptr), SQLITE_OK);
+        CHECK_EQ(sqlite3_step(stmt), SQLITE_ROW);
+        CHECK_EQ(sqlite3_column_int(stmt, 0), 2);
+        sqlite3_finalize(stmt);
+        sqlite3_close(db);
+    }
+
+    std::error_code ignored;
+    fs::remove_all(root, ignored);
+    fs::remove_all(v1_root, ignored);
+}
+
+// PSH-03: the database path is resolved through a pinned directory descriptor,
+// so replacing the configured directory cannot redirect later writes, and
+// symlink/non-regular database files are rejected.
+void test_database_path_swap_and_file_types() {
+    const fs::path root = make_root("edgedesk-supervisor-db-swap-test");
+    const fs::path state = root / "state";
+    const fs::path old_state = root / "state-old";
+    const fs::path attacker = root / "attacker";
+    CHECK(fs::create_directories(state));
+    CHECK(fs::create_directories(attacker));
+    const std::string database = (state / "supervisor.db").string();
+
+    Error error;
+    auto store = SupervisorStore::open(database, error);
+    CHECK(store != nullptr);
+    if (!store) return;
+    ServiceRecord record = make_record("swap");
+    CHECK(store->insert(record).ok());
+    CHECK(store->save_runtime(record.config.id, record.runtime).ok());
+
+    // Replace the configured path after the store pinned the directory inode.
+    // SQLite canonicalizes the database pathname when it opens the file, so a
+    // post-open rename can make later journal writes fail closed; the critical
+    // property is that no write is ever redirected through the new symlink.
+    std::error_code ignored;
+    fs::rename(state, old_state, ignored);
+    CHECK(!ignored);
+    fs::create_directory_symlink(attacker, state, ignored);
+    CHECK(fs::is_symlink(state));
+    record.runtime.state = ServiceState::running;
+    record.runtime.desired_state = "running";
+    const Error swap_error = store->save_runtime(record.config.id, record.runtime);
+    CHECK(!fs::exists(attacker / "supervisor.db"));
+    CHECK(!fs::exists(attacker / "supervisor.db-wal"));
+    CHECK(!fs::exists(attacker / "supervisor.db-shm"));
+    CHECK(fs::exists(old_state / "supervisor.db"));
+    if (!swap_error.ok()) {
+        CHECK(swap_error.code == ErrorCode::permission_denied ||
+              swap_error.code == ErrorCode::io_error ||
+              swap_error.code == ErrorCode::busy);
+    }
+    store.reset();
+
+    // A symlinked database file is rejected.
+    const fs::path symlink_db = root / "link.db";
+    {
+        std::ofstream out(root / "outside.db");
+        out << "do not touch";
+    }
+    fs::create_symlink(root / "outside.db", symlink_db, ignored);
+    {
+        Error link_error;
+        auto rejected_store = SupervisorStore::open(symlink_db.string(), link_error);
+        CHECK(rejected_store == nullptr);
+        CHECK(!link_error.ok());
+        CHECK(link_error.message.find("symlink") != std::string::npos);
+    }
+
+    // A FIFO posing as the database is not a regular file.
+    const fs::path fifo_db = root / "fifo.db";
+    CHECK(::mkfifo(fifo_db.c_str(), 0600) == 0);
+    {
+        Error fifo_error;
+        auto rejected_store = SupervisorStore::open(fifo_db.string(), fifo_error);
+        CHECK(rejected_store == nullptr);
+        CHECK(!fifo_error.ok());
+        CHECK(fifo_error.message.find("regular file") != std::string::npos);
+    }
+
+    fs::remove_all(root, ignored);
+}
+
 } // namespace
 
 int main() {
@@ -439,5 +615,7 @@ int main() {
     test_private_directory_creates_nested_and_reopens();
     test_private_directory_never_tightens_system_ancestors();
     test_private_directory_rejects_wrong_owner();
+    test_marker_and_schema_v2();
+    test_database_path_swap_and_file_types();
     return edgedesk::test::finish("supervisor_store_test");
 }

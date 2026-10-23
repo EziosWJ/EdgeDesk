@@ -61,7 +61,7 @@ src/
 ├── supervisor/               独立进程，不链接 libhv
 │   ├── main.cpp              前台 CLI、信号、Socket/数据库/日志目录装配
 │   ├── supervisor_types.*    配置/状态模型、身份解析、路径与范围校验
-│   ├── supervisor_store.*    SQLite schema v1、事务、恢复元数据（局部例外）
+│   ├── supervisor_store.*    SQLite schema v2、事务、恢复元数据（局部例外）
 │   ├── supervisor_engine.*   状态机、重启策略、退避、进程组停止、崩溃接管
 │   ├── process_control.*     fork/setsid/fexecve、/proc 身份、信号与指标采样
 │   ├── log_store.*           有界轮转日志、游标/尾部读取
@@ -279,7 +279,7 @@ EdgeDesk Web API -> SupervisorService（有界 worker 队列）
                                              |
                                              v
                               edgedesk-supervisor（独立守护进程）
-                                  | SQLite（独立数据库，schema v1）
+                                  | SQLite（独立数据库，schema v2）
                                   | 单线程 poll() 生命周期/自动重启
                                   | 进程组、运行身份、日志与主进程指标
 
@@ -296,12 +296,16 @@ systemd / OpenRC / BusyBox init -> 负责 Supervisor 自身的启动与 respawn
 - Supervisor 只在 Unix Socket 上监听，创建时校验目录所有权/权限，连接时检查
   `SO_PEERCRED`；不存在 TCP 管理 listener。
 - 业务服务由 Supervisor 直接启动：绝对可执行路径 + argv 数组，`fork`/`setsid`/
-  `fexecve`（脚本经已检查 inode 的 `/proc/self/fd/<fd>`），不经过 Shell。运行身份
-  必须在配置中显式给出，root 需要 `allow_root=true`。
+  `execve`，不经过 Shell。可执行文件只打开一次；为保留 `AT_EXECFN`/comm 的文件名
+  语义，执行私有 staging 目录中指向已验证 FD 的同名符号链接（直接 `fexecve` 会让
+  multicall 程序看到 FD 号）。运行身份必须在配置中显式给出，root 需要
+  `allow_root=true`。
 - 子进程在持久化 PID/PGID/boot ID/starttime 之前阻塞在启动握手上；持久化失败会
   回收子进程，不会留下无身份的孤儿。
-- 进程组信号只发送给三态身份探测（`verified`/`absent`/`uncertain`）中 `verified`
-  的组；证据不足时进入 `UNKNOWN`，不猜测 PGID，也不启动第二份实例。
+- 每个实例有一个 root 身份 sentinel（anchor）：它在服务会话/PGID 内、关闭全部继承
+  FD、屏蔽可捕获信号，存活期间内核不会复用该 PGID。进程组信号只发送给四态探测
+  （`verified`/`anchor_only`/`absent`/`uncertain`）授权的组；证据不足时进入
+  `UNKNOWN`，不猜测 PGID，也不启动第二份实例。
 - stop/restart 是异步操作：请求立即返回 `operation_id`，通过
   `/api/supervisor/operations/{id}` 查询；宽限期与清理不占用 Web 工作线程。
 - 被动日志轮询不逐请求写审计；管理操作、认证失败和 root 特权拒绝仍然审计。
@@ -310,8 +314,9 @@ systemd / OpenRC / BusyBox init -> 负责 Supervisor 自身的启动与 respawn
 - 日志、IPC 消息、队列和连接数均有上限；CPU/RSS 不可用时返回 `null`。
 - 前端 `web/src/features/processes/` 注册为内置应用 `processes`，通过现有桌面
   Store 管理窗口，仅调用认证后的 `/api/supervisor/*`。
-- init 适配文件位于 `deploy/`；systemd、OpenRC、BusyBox 真机验证尚未在当前环境
-  执行，不能把“脚本存在”当作平台验收通过。
+- init 适配文件位于 `deploy/`；systemd 已在 Ubuntu 26.04 虚拟机完成启停、respawn
+  与真实 reboot 验收，OpenRC/BusyBox 尚未在真实 init 环境执行，不能把“脚本存在”
+  当作平台验收通过。
 - 完整设计和行为契约见 [SPEC-0009](spec/0009-process-supervisor.md)，技术决策见
   [ADR-0015](adr/0015-process-supervisor-architecture.md)、
   [ADR-0016](adr/0016-process-supervisor-security.md) 与

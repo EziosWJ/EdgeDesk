@@ -81,12 +81,25 @@ struct Harness {
             engine->shutdown(steady_millis(), 1000);
             engine.reset();
         }
+        // Kill both the workload groups and any sentinel that outlived a failed
+        // shutdown, then wait (bounded) and reap every remaining child so a
+        // later test never sees this harness's orphans.
         for (const int pid : spawned_pids) {
             if (pid > 1) {
+                (void)::kill(-pid, SIGKILL);
                 (void)::kill(pid, SIGKILL);
-                int status = 0;
-                (void)::waitpid(pid, &status, WNOHANG);
             }
+        }
+        for (int attempt = 0; attempt < 500; ++attempt) {
+            int status = 0;
+            const pid_t reaped = ::waitpid(-1, &status, WNOHANG);
+            if (reaped > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            if (reaped < 0 && errno == ECHILD) break;
+            // reaped == 0: children still exist but have not exited yet.
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         std::error_code ignored;
         fs::remove_all(root, ignored);
@@ -1094,6 +1107,309 @@ void test_operation_retention_bound() {
     CHECK_EQ(get_record(harness, id)["state"].get<std::string>(), "STOPPED");
 }
 
+// PSH-04: an unfinished start (persisted STARTING without a process identity)
+// must not be reinterpreted as "desired=running" after a restart. A stale row
+// produced by a failed write is the dangerous case.
+void test_incomplete_start_is_not_auto_started() {
+    Harness harness;
+    harness.root = make_root("edgedesk-engine-incomplete-start-test");
+    const std::string database = (harness.root / "state" / "supervisor.db").string();
+    const std::string logs = (harness.root / "logs").string();
+    CHECK(create_engine(harness, database, logs));
+    if (!harness.engine) return;
+
+    ServiceConfig config = config_for("incomplete", "/bin/sleep", {"60"});
+    config.autostart = true;
+    config.restart_policy = RestartPolicy::always;
+    const std::string id = create_service(harness, config);
+    CHECK(!id.empty());
+    if (id.empty()) return;
+
+    harness.engine.reset();
+    {
+        Error error;
+        auto store = SupervisorStore::open(database, error);
+        CHECK(store != nullptr);
+        if (!store) return;
+        ServiceRecord record;
+        bool found = false;
+        CHECK(store->get(id, record, found).ok());
+        CHECK(found);
+        // Exactly the row a failed identity write leaves behind: the start
+        // intent is durable but no PID/start time/anchor ever was.
+        record.runtime.state = ServiceState::starting;
+        record.runtime.desired_state = "running";
+        record.runtime.boot_id = read_boot_id();
+        record.runtime.pid = 0;
+        record.runtime.pgid = 0;
+        record.runtime.start_ticks = 0;
+        record.runtime.anchor_pid = 0;
+        record.runtime.anchor_start_ticks = 0;
+        CHECK(store->save_runtime(id, record.runtime).ok());
+    }
+
+    CHECK(create_engine(harness, database, logs));
+    if (!harness.engine) return;
+    for (int index = 0; index < 30; ++index) {
+        (void)harness.engine->poll(steady_millis());
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const json record = get_record(harness, id);
+    CHECK_EQ(record["state"].get<std::string>(), "FAILED");
+    CHECK_EQ(record.value("desired_state", std::string()), "stopped");
+    CHECK(record["pid"].is_null());
+    CHECK_EQ(record.value("restart_count", 0), 0);
+    CHECK(record.value("last_error", std::string()).find("interrupted") !=
+          std::string::npos);
+
+    // A manual start still works once the operator asks for it.
+    json params;
+    params["id"] = id;
+    CHECK(harness.engine->rpc("service.start", params).ok);
+    json running;
+    CHECK(wait_state(*harness.engine, id, ServiceState::running, &running));
+    harness.spawned_pids.push_back(running.value("pid", 0));
+    CHECK_EQ(stop_service(*harness.engine, id).value("state", std::string()), "succeeded");
+}
+
+// PSH-04: the durable inconsistency marker suppresses autostart (including a
+// new boot cycle) until the operator starts the service explicitly.
+void test_persistence_marker_blocks_autostart() {
+    Harness harness;
+    harness.root = make_root("edgedesk-engine-marker-test");
+    const std::string database = (harness.root / "state" / "supervisor.db").string();
+    const std::string logs = (harness.root / "logs").string();
+    CHECK(create_engine(harness, database, logs, "boot-A"));
+    if (!harness.engine) return;
+
+    ServiceConfig config = config_for("marker", "/bin/sleep", {"60"});
+    config.autostart = true;
+    const std::string id = create_service(harness, config);
+    CHECK(!id.empty());
+    if (id.empty()) return;
+    harness.engine.reset();
+
+    {
+        Error error;
+        auto store = SupervisorStore::open(database, error);
+        CHECK(store != nullptr);
+        if (!store) return;
+        CHECK(store->mark_inconsistent("test injection").ok());
+        CHECK(store->inconsistent_marker_present());
+    }
+
+    // A new boot ID would normally start an autostart service.
+    CHECK(create_engine(harness, database, logs, "boot-B"));
+    if (!harness.engine) return;
+    for (int index = 0; index < 30; ++index) {
+        (void)harness.engine->poll(steady_millis());
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const json record = get_record(harness, id);
+    CHECK_EQ(record["state"].get<std::string>(), "STOPPED");
+    CHECK_EQ(record.value("desired_state", std::string()), "stopped");
+    CHECK(record["pid"].is_null());
+
+    // Normalization persisted; the marker is cleared for the next start.
+    {
+        Error error;
+        auto store = SupervisorStore::open(database, error);
+        CHECK(store != nullptr);
+        if (store) CHECK(!store->inconsistent_marker_present());
+    }
+
+    json params;
+    params["id"] = id;
+    CHECK(harness.engine->rpc("service.start", params).ok);
+    json running;
+    CHECK(wait_state(*harness.engine, id, ServiceState::running, &running));
+    harness.spawned_pids.push_back(running.value("pid", 0));
+    CHECK_EQ(stop_service(*harness.engine, id).value("state", std::string()), "succeeded");
+}
+
+// PSH-04: once a runtime write fails, no automatic restart may happen, and the
+// next Supervisor start refuses to derive a start from the stale record.
+void test_persistence_failure_disables_auto_restart() {
+    Harness harness;
+    harness.root = make_root("edgedesk-engine-persist-restart-test");
+    const std::string database = (harness.root / "state" / "supervisor.db").string();
+    const std::string logs = (harness.root / "logs").string();
+    auto fail = std::make_shared<std::atomic<bool>>(false);
+    CHECK(create_engine(harness, database, logs, {},
+                        [fail]() -> bool { return fail->load(); }));
+    if (!harness.engine) return;
+
+    ServiceConfig config = config_for("persist-restart", "/bin/sleep", {"60"});
+    config.restart_policy = RestartPolicy::always;
+    config.restart_delay_ms = 10;
+    config.max_restart_delay_ms = 20;
+    const std::string id = create_service(harness, config);
+    CHECK(!id.empty());
+    if (id.empty()) return;
+
+    json params;
+    params["id"] = id;
+    CHECK(harness.engine->rpc("service.start", params).ok);
+    json running;
+    CHECK(wait_state(*harness.engine, id, ServiceState::running, &running));
+    const int pid = running.value("pid", 0);
+    harness.spawned_pids.push_back(pid);
+    CHECK(pid > 0);
+    if (pid <= 0) return;
+
+    fail->store(true);
+    CHECK_EQ(::kill(pid, SIGKILL), 0);
+
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(kPollTimeoutMs);
+    bool stopped = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+        (void)harness.engine->poll(steady_millis());
+        const json record = get_record(harness, id);
+        const std::string state = record.value("state", std::string());
+        if (state == "FAILED" || state == "UNKNOWN") {
+            stopped = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(stopped);
+    const json failed_record = get_record(harness, id);
+    CHECK_EQ(failed_record.value("desired_state", std::string()), "stopped");
+    CHECK(failed_record["pid"].is_null());
+
+    // No replacement process may exist after the failure.
+    CHECK_EQ(::kill(pid, 0), -1);
+
+    // The next Supervisor must not autostart the service from a stale row even
+    // though desired_state was running when the write failed.
+    harness.engine.reset();
+    fail->store(false);
+    CHECK(create_engine(harness, database, logs, {}, {}));
+    if (!harness.engine) return;
+    for (int index = 0; index < 30; ++index) {
+        (void)harness.engine->poll(steady_millis());
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const json recovered = get_record(harness, id);
+    CHECK_EQ(recovered.value("desired_state", std::string()), "stopped");
+    CHECK(recovered["pid"].is_null());
+    CHECK(recovered.value("state", std::string()) != "RUNNING");
+}
+
+// PSH-06: a pending operation at the head of the queue must not prevent older
+// completed operations from being evicted.
+void test_operation_pruning_with_pending_front() {
+    Harness harness;
+    harness.root = make_root("edgedesk-engine-operation-pending-test");
+    CHECK(create_engine(harness, (harness.root / "state" / "supervisor.db").string(),
+                        (harness.root / "logs").string()));
+    if (!harness.engine) return;
+
+    ServiceConfig blocking = config_for(
+        "pending-stop", "/bin/sh", {"-c", "trap '' TERM; while :; do sleep 1; done"});
+    blocking.restart_policy = RestartPolicy::never;
+    blocking.stop_timeout_ms = 300;
+    const std::string blocking_id = create_service(harness, blocking);
+    CHECK(!blocking_id.empty());
+    if (blocking_id.empty()) return;
+
+    ServiceConfig quick = config_for("quick-stop", "/bin/sleep", {"60"});
+    quick.restart_policy = RestartPolicy::never;
+    const std::string quick_id = create_service(harness, quick);
+    CHECK(!quick_id.empty());
+    if (quick_id.empty()) return;
+
+    json blocking_params;
+    blocking_params["id"] = blocking_id;
+    CHECK(harness.engine->rpc("service.start", blocking_params).ok);
+    json running;
+    CHECK(wait_state(*harness.engine, blocking_id, ServiceState::running, &running));
+    harness.spawned_pids.push_back(running.value("pid", 0));
+
+    RpcResult pending = harness.engine->rpc("service.stop", blocking_params);
+    CHECK(pending.ok);
+    CHECK_EQ(pending.result.value("state", std::string()), "pending");
+    const std::string pending_id = pending.result.value("operation_id", std::string());
+    CHECK(!pending_id.empty());
+
+    json quick_params;
+    quick_params["id"] = quick_id;
+    std::string first_completed;
+    std::string last_completed;
+    for (int index = 0; index < 300; ++index) {
+        RpcResult result = harness.engine->rpc("service.stop", quick_params);
+        CHECK(result.ok);
+        if (!result.ok) return;
+        const std::string operation_id =
+            result.result.value("operation_id", std::string());
+        if (first_completed.empty()) first_completed = operation_id;
+        last_completed = operation_id;
+    }
+    CHECK(!first_completed.empty());
+
+    bool found = false;
+    (void)get_operation(*harness.engine, first_completed, &found);
+    CHECK(!found);
+    (void)get_operation(*harness.engine, last_completed, &found);
+    CHECK(found);
+    (void)get_operation(*harness.engine, pending_id, &found);
+    CHECK(found);
+
+    const json operation = wait_operation(*harness.engine, pending_id);
+    CHECK_EQ(operation.value("state", std::string()), "succeeded");
+}
+
+// PSH-02: restart_policy=never must still terminate descendants left behind by
+// the leader before the service becomes STOPPED.
+void test_orphan_cleanup_with_never_policy() {
+    Harness harness;
+    harness.root = make_root("edgedesk-engine-orphan-never-test");
+    CHECK(create_engine(harness, (harness.root / "state" / "supervisor.db").string(),
+                        (harness.root / "logs").string()));
+    if (!harness.engine) return;
+
+    const std::string descendant_file = (harness.root / "orphan.pid").string();
+    const fs::path script = harness.root / "orphan-never.sh";
+    {
+        std::ofstream output(script);
+        output << "#!/bin/sh\n"
+               << "trap '' TERM\n"
+               << "sleep 300 &\n"
+               << "echo $! > " << descendant_file << "\n"
+               << "exit 0\n";
+    }
+    CHECK(::chmod(script.c_str(), 0755) == 0);
+
+    ServiceConfig config = config_for("orphan-never", script.string(), {});
+    config.restart_policy = RestartPolicy::never;
+    config.stop_timeout_ms = 200;
+    const std::string id = create_service(harness, config);
+    CHECK(!id.empty());
+    if (id.empty()) return;
+
+    json params;
+    params["id"] = id;
+    CHECK(harness.engine->rpc("service.start", params).ok);
+
+    int descendant = 0;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(kPollTimeoutMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        (void)harness.engine->poll(steady_millis());
+        std::ifstream input(descendant_file);
+        if (input) input >> descendant;
+        const json record = get_record(harness, id);
+        if (record.value("state", std::string()) == "STOPPED") break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(descendant > 0);
+    if (descendant > 0) CHECK_EQ(::kill(descendant, 0), -1);
+    const json record = get_record(harness, id);
+    CHECK_EQ(record["state"].get<std::string>(), "STOPPED");
+    CHECK(record["pid"].is_null());
+}
+
 void test_unknown_parameters_rejected() {
     Harness harness;
     harness.root = make_root("edgedesk-engine-params-test");
@@ -1133,6 +1449,11 @@ int main() {
     test_interrupted_stop_recovery();
     test_recovery_unverifiable_identity();
     test_shebang_script_start();
+    test_incomplete_start_is_not_auto_started();
+    test_persistence_marker_blocks_autostart();
+    test_persistence_failure_disables_auto_restart();
+    test_operation_pruning_with_pending_front();
+    test_orphan_cleanup_with_never_policy();
     test_unknown_parameters_rejected();
     return edgedesk::test::finish("supervisor_engine_test");
 }

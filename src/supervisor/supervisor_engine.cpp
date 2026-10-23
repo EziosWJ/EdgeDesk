@@ -9,8 +9,10 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <fcntl.h>
 #include <limits>
 #include <set>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -138,6 +140,65 @@ std::uint64_t jitter_for(std::string_view id, std::uint64_t sequence, std::int64
     return hash % static_cast<std::uint64_t>(span + 1);
 }
 
+std::string default_exec_staging_directory() {
+    if (::geteuid() == 0) return "/run/edgedesk-supervisor-exec";
+    return "/tmp/edgedesk-supervisor-exec-" +
+           std::to_string(static_cast<unsigned>(::geteuid()));
+}
+
+// The staging base only holds executable symlinks. It must be owned by the
+// supervisor and not writable by anyone else; root additionally needs x bits so
+// a service running as another user can traverse to its own per-spawn symlink.
+Error prepare_exec_staging_directory(const std::string& path) {
+    if (path.empty() || path.front() != '/') {
+        return Error::make(ErrorCode::invalid_argument,
+                           "executable staging directory must be an absolute path");
+    }
+    struct stat info {};
+    if (::lstat(path.c_str(), &info) != 0) {
+        if (errno != ENOENT) {
+            return Error::make(ErrorCode::io_error,
+                               "cannot inspect executable staging directory " + path + ": " +
+                                   std::strerror(errno), errno);
+        }
+        const mode_t mode = ::geteuid() == 0 ? 0711 : 0700;
+        if (::mkdir(path.c_str(), mode) != 0 && errno != EEXIST) {
+            return Error::make(ErrorCode::io_error,
+                               "cannot create executable staging directory " + path + ": " +
+                                   std::strerror(errno), errno);
+        }
+    }
+    const int fd = ::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) {
+        return Error::make(ErrorCode::permission_denied,
+                           "cannot open executable staging directory " + path + ": " +
+                               std::strerror(errno), errno);
+    }
+    Error error = Error::none();
+    if (::fstat(fd, &info) != 0 || !S_ISDIR(info.st_mode)) {
+        error = Error::make(ErrorCode::permission_denied,
+                            "executable staging path is not a directory: " + path);
+    } else if (info.st_uid != ::geteuid()) {
+        error = Error::make(ErrorCode::permission_denied,
+                            "executable staging directory is not owned by the supervisor: " + path);
+    } else if ((info.st_mode & 0022) != 0) {
+        error = Error::make(ErrorCode::permission_denied,
+                            "executable staging directory is writable by group/other: " + path);
+    } else {
+        const mode_t wanted = ::geteuid() == 0
+                                  ? static_cast<mode_t>((info.st_mode & 07777) | 0011)
+                                  : static_cast<mode_t>(0700);
+        if ((info.st_mode & 07777) != wanted && ::fchmod(fd, wanted) != 0) {
+            error = Error::make(ErrorCode::permission_denied,
+                                "cannot restrict executable staging directory " + path + ": " +
+                                    std::strerror(errno), errno);
+        }
+    }
+    ::close(fd);
+    return error;
+}
+
+
 } // namespace
 
 struct SupervisorEngine::ServiceHandle {
@@ -150,6 +211,13 @@ struct SupervisorEngine::ServiceHandle {
     std::string exec_error;
     bool adopted = false;
     bool log_discarding = false;
+    // Per-spawn executable staging symlink (not persisted; only needed while
+    // this instance is being started/alive).
+    std::string exec_staging_link;
+    std::string exec_staging_directory;
+    // A runtime write failed. Automatic starts/restarts are disabled until a
+    // later manual start successfully persists its intent (PSH-04).
+    bool persistence_degraded = false;
 
     std::int64_t backoff_deadline_ms = 0;
     std::int64_t stable_deadline_ms = 0;
@@ -230,10 +298,28 @@ Error SupervisorEngine::initialize() {
     logs_ = LogStore::open(options_.log_directory, error);
     if (!logs_) return error;
 
+    exec_staging_ = options_.exec_staging_directory.empty()
+                        ? default_exec_staging_directory()
+                        : options_.exec_staging_directory;
+    error = prepare_exec_staging_directory(exec_staging_);
+    if (!error.ok() && options_.exec_staging_directory.empty()) {
+        // /run may be read-only in some containers; /tmp is the portable
+        // fallback (systemd's PrivateTmp keeps it private to the daemon).
+        exec_staging_ = "/tmp/edgedesk-supervisor-exec-" +
+                        std::to_string(static_cast<unsigned>(::geteuid()));
+        error = prepare_exec_staging_directory(exec_staging_);
+    }
+    if (!error.ok()) return error;
+
     std::vector<ServiceRecord> records;
     error = store_->load_all(records);
     if (!error.ok()) return error;
 
+    // A previous supervisor observed a runtime write failure. Its database rows
+    // may describe an intent that was never committed, so this start must not
+    // turn stale desired_state into a new process (PSH-04). The marker is only
+    // cleared after every loaded row has been normalized and persisted.
+    const bool inconsistent = store_->inconsistent_marker_present();
     const std::int64_t now = steady_millis();
     for (auto& record : records) {
         ServiceHandle handle;
@@ -244,12 +330,6 @@ Error SupervisorEngine::initialize() {
         }
         auto& config = handle.record.config;
 
-        const auto clear_identity = [&runtime]() {
-            runtime.pid = 0;
-            runtime.pgid = 0;
-            runtime.start_ticks = 0;
-            runtime.started_at_ms = 0;
-        };
         // Persisted STOPPING/BACKOFF work is resumed before a new instance may
         // run (SPEC-0010 PSH-02/PSH-05). The runtime identity is kept until the
         // old group is confirmed gone.
@@ -265,26 +345,48 @@ Error SupervisorEngine::initialize() {
             handle.stable_deadline_ms = 0;
             const GroupProbe probe =
                 probe_service_group(runtime.pgid, runtime.pid, runtime.start_ticks,
-                                    runtime.boot_id, boot_id_);
+                                    runtime.boot_id, boot_id_, runtime.anchor_pid,
+                                    runtime.anchor_start_ticks);
             if (probe.state == GroupState::uncertain) {
                 runtime.state = ServiceState::unknown;
                 runtime.last_error = "cannot verify recovered process group: " + probe.detail;
                 return;
             }
             if (probe.state == GroupState::absent) {
-                clear_identity();
+                clear_identity(handle);
                 runtime.state = restart_after ? ServiceState::backoff : ServiceState::stopped;
                 if (restart_after) handle.backoff_deadline_ms = now;
                 return;
             }
             handle.adopted = true;
+            if (probe.state == GroupState::anchor_only) {
+                std::string signal_error;
+                if (signal_service_group(probe, SIGKILL, signal_error)) {
+                    handle.stop_kill_sent = true;
+                } else {
+                    const GroupProbe after = probe_service_group(
+                        runtime.pgid, runtime.pid, runtime.start_ticks, runtime.boot_id,
+                        boot_id_, runtime.anchor_pid, runtime.anchor_start_ticks);
+                    if (after.state == GroupState::absent) {
+                        clear_identity(handle);
+                        runtime.state = restart_after ? ServiceState::backoff
+                                                      : ServiceState::stopped;
+                        if (restart_after) handle.backoff_deadline_ms = now;
+                    } else {
+                        runtime.state = ServiceState::unknown;
+                        runtime.last_error = "cannot reap recovered identity anchor: " +
+                                             signal_error;
+                    }
+                }
+                return;
+            }
             std::string signal_error;
             if (!signal_service_group(probe, SIGTERM, signal_error)) {
-                const GroupProbe after = probe_service_group(runtime.pgid, runtime.pid,
-                                                             runtime.start_ticks,
-                                                             runtime.boot_id, boot_id_);
+                const GroupProbe after = probe_service_group(
+                    runtime.pgid, runtime.pid, runtime.start_ticks, runtime.boot_id, boot_id_,
+                    runtime.anchor_pid, runtime.anchor_start_ticks);
                 if (after.state == GroupState::absent) {
-                    clear_identity();
+                    clear_identity(handle);
                     runtime.state = restart_after ? ServiceState::backoff : ServiceState::stopped;
                     if (restart_after) handle.backoff_deadline_ms = now;
                 } else {
@@ -298,30 +400,50 @@ Error SupervisorEngine::initialize() {
         bool start_expected = false;
         if (!same_boot) {
             // A new system boot clears boot-specific overrides. autostart now
-            // decides whether the service should be running.
+            // decides whether the service should be running, except after a
+            // persistence failure where no automatic start is permitted.
             runtime.boot_id = boot_id_;
             runtime.state = ServiceState::stopped;
-            clear_identity();
+            clear_identity(handle);
             runtime.window_restarts = 0;
             runtime.window_started_at = 0;
             runtime.failed_locked = false;
-            runtime.desired_state = config.autostart ? "running" : "stopped";
-            start_expected = config.autostart;
+            runtime.desired_state =
+                (config.autostart && !inconsistent) ? "running" : "stopped";
+            start_expected = config.autostart && !inconsistent;
+            if (inconsistent && config.autostart) {
+                runtime.last_error =
+                    "previous Supervisor persistence failure; automatic start disabled";
+            }
         } else {
             runtime.boot_id = boot_id_;
             const bool wants_running = runtime.desired_state == "running";
+            const bool may_start = wants_running && !inconsistent;
             const bool interrupted_cleanup = runtime.state == ServiceState::stopping ||
                                              runtime.state == ServiceState::backoff;
+            const bool interrupted_start =
+                runtime.state == ServiceState::starting && runtime.pid <= 0;
             const bool leader_ok =
                 runtime.pid > 0 && runtime.start_ticks > 0 &&
                 process_identity_matches(runtime.pid, boot_id_, runtime.start_ticks);
             GroupProbe probe;
             if (runtime.pgid > 0 && runtime.start_ticks > 0) {
                 probe = probe_service_group(runtime.pgid, runtime.pid, runtime.start_ticks,
-                                            runtime.boot_id, boot_id_);
+                                            runtime.boot_id, boot_id_, runtime.anchor_pid,
+                                            runtime.anchor_start_ticks);
             }
 
-            if (runtime.pid > 0 && runtime.start_ticks == 0) {
+            if (interrupted_start) {
+                // The start intent was persisted but no process identity ever
+                // was. A write failure may be why; never reinterpret the stale
+                // desired_state as a request to start now (PSH-04).
+                clear_identity(handle);
+                runtime.state = ServiceState::failed;
+                runtime.desired_state = "stopped";
+                runtime.last_error =
+                    "interrupted service start: process identity was never persisted; "
+                    "manual start required";
+            } else if (runtime.pid > 0 && runtime.start_ticks == 0) {
                 // A persisted PID without a verifiable start time could be a
                 // reused PID. Never signal it or start a second copy.
                 runtime.state = ServiceState::unknown;
@@ -353,19 +475,25 @@ Error SupervisorEngine::initialize() {
                     }
                 }
                 if (runtime.started_at_ms <= 0) runtime.started_at_ms = now_unix_millis();
-            } else if (leader_ok || probe.state == GroupState::verified) {
+            } else if (leader_ok || probe.state == GroupState::verified ||
+                       probe.state == GroupState::anchor_only) {
                 // The persisted desired state asks for stopped, or a restart
                 // was interrupted. Verify identity, then stop/clean the old
                 // group before anything else. A pending desired=running starts
                 // only after that cleanup completes.
-                begin_cleanup(wants_running);
+                begin_cleanup(may_start);
             } else {
-                clear_identity();
+                clear_identity(handle);
                 runtime.state = ServiceState::stopped;
                 if (runtime.failed_locked) {
                     runtime.state = ServiceState::failed;
-                } else if (wants_running) {
+                } else if (may_start) {
                     start_expected = true;
+                } else if (wants_running) {
+                    runtime.state = ServiceState::failed;
+                    runtime.desired_state = "stopped";
+                    runtime.last_error =
+                        "previous Supervisor persistence failure; automatic start disabled";
                 }
             }
         }
@@ -378,6 +506,11 @@ Error SupervisorEngine::initialize() {
         if (!error.ok()) return error;
         services_.emplace(handle.record.config.id, std::move(handle));
     }
+    if (inconsistent) {
+        // Normalization is durable only once every row above was written.
+        const Error clear_error = store_->clear_inconsistent_marker();
+        if (!clear_error.ok()) return clear_error;
+    }
     return Error::none();
 }
 
@@ -389,6 +522,7 @@ SupervisorEngine::~SupervisorEngine() {
     for (auto& item : services_) {
         close_fd(item.second.log_fd);
         close_fd(item.second.exec_fd);
+        remove_exec_staging(item.second);
     }
 }
 
@@ -636,6 +770,7 @@ RpcResult SupervisorEngine::handle_delete(const nlohmann::json& params) {
     }
     close_fd(handle->log_fd);
     close_fd(handle->exec_fd);
+    remove_exec_staging(*handle);
     services_.erase(id);
     nlohmann::json result;
     result["deleted"] = true;
@@ -662,10 +797,7 @@ RpcResult SupervisorEngine::handle_start(std::string_view id, std::int64_t now_m
             return failure(ErrorCode::conflict, "service_unknown",
                            "service process identity is unknown; refusing to start a duplicate");
         }
-        handle->record.runtime.pid = 0;
-        handle->record.runtime.pgid = 0;
-        handle->record.runtime.start_ticks = 0;
-        handle->record.runtime.started_at_ms = 0;
+        clear_identity(*handle);
     } else if (group_uncertain(*handle)) {
         return failure(ErrorCode::conflict, "service_unknown",
                        "cannot verify whether a previous process group still belongs to this "
@@ -765,10 +897,7 @@ RpcResult SupervisorEngine::handle_stop(std::string_view id, std::int64_t now_ms
             return success(operation_json(operations_.at(operation_id)));
         }
         runtime.state = ServiceState::stopped;
-        runtime.pid = 0;
-        runtime.pgid = 0;
-        runtime.start_ticks = 0;
-        runtime.started_at_ms = 0;
+        clear_identity(*handle);
         persist = save(*handle);
         return stopped_result(persist.ok(), "supervisor_unavailable",
                               "cannot persist stopped state: " + persist.message);
@@ -782,10 +911,7 @@ RpcResult SupervisorEngine::handle_stop(std::string_view id, std::int64_t now_ms
         runtime.state = ServiceState::stopped;
         runtime.desired_state = "stopped";
         runtime.failed_locked = false;
-        runtime.pid = 0;
-        runtime.pgid = 0;
-        runtime.start_ticks = 0;
-        runtime.started_at_ms = 0;
+        clear_identity(*handle);
         runtime.last_error.clear();
         const Error persist = save(*handle);
         return stopped_result(persist.ok(), "supervisor_unavailable",
@@ -844,10 +970,7 @@ RpcResult SupervisorEngine::handle_restart(std::string_view id, std::int64_t now
             return failure(ErrorCode::conflict, "service_unknown",
                            "service process identity is unknown; refusing to start a duplicate");
         }
-        handle->record.runtime.pid = 0;
-        handle->record.runtime.pgid = 0;
-        handle->record.runtime.start_ticks = 0;
-        handle->record.runtime.started_at_ms = 0;
+        clear_identity(*handle);
     } else if (state != ServiceState::running && state != ServiceState::starting) {
         if (group_uncertain(*handle)) {
             return failure(ErrorCode::conflict, "service_unknown",
@@ -988,10 +1111,8 @@ Error SupervisorEngine::spawn_locked(ServiceHandle& handle, std::int64_t now_ms)
     runtime.state = ServiceState::starting;
     runtime.desired_state = "running";
     runtime.boot_id = boot_id_;
-    runtime.pid = 0;
-    runtime.pgid = 0;
-    runtime.start_ticks = 0;
-    runtime.started_at_ms = 0;
+    clear_identity(handle);
+    remove_exec_staging(handle);
     runtime.last_error.clear();
     error = save(handle);
     if (!error.ok()) {
@@ -1000,8 +1121,10 @@ Error SupervisorEngine::spawn_locked(ServiceHandle& handle, std::int64_t now_ms)
         runtime.last_error = "cannot persist start intent: " + error.message;
         return error;
     }
+    // The intent is durable again; a later failure re-enters degraded mode.
+    handle.persistence_degraded = false;
 
-    SpawnOutcome outcome = spawn_service(handle.record.config, identity);
+    SpawnOutcome outcome = spawn_service(handle.record.config, identity, exec_staging_);
     if (!outcome.error.ok()) {
         runtime.state = ServiceState::failed;
         runtime.desired_state = "stopped";
@@ -1009,6 +1132,8 @@ Error SupervisorEngine::spawn_locked(ServiceHandle& handle, std::int64_t now_ms)
         (void)save(handle);
         return outcome.error;
     }
+    handle.exec_staging_link = outcome.exec_staging_link;
+    handle.exec_staging_directory = outcome.exec_staging_directory;
     if (outcome.pid <= 0) {
         abort_service_child(outcome.handshake_fd);
         close_fd(outcome.log_read_fd);
@@ -1016,22 +1141,26 @@ Error SupervisorEngine::spawn_locked(ServiceHandle& handle, std::int64_t now_ms)
         runtime.state = ServiceState::failed;
         runtime.desired_state = "stopped";
         runtime.last_error = "spawn returned no child PID";
+        remove_exec_staging(handle);
         (void)save(handle);
         return Error::make(ErrorCode::io_error, runtime.last_error);
     }
-    if (outcome.start_ticks == 0) {
-        // Without a kernel start time the process identity can never be
-        // verified after a Supervisor restart. The child is blocked on the
-        // handshake; abort it and reap before reporting failure.
+    if (outcome.start_ticks == 0 || outcome.anchor_pid <= 0 ||
+        outcome.anchor_start_ticks == 0) {
+        // Without a kernel start time (or a verified sentinel) the process
+        // identity can never be verified after a Supervisor restart. The child
+        // is blocked on the handshake; abort it and reap both processes.
         abort_service_child(outcome.handshake_fd);
         (void)::kill(outcome.pid, SIGKILL);
         reap_child(outcome.pid);
+        if (outcome.anchor_pid > 1) reap_child(outcome.anchor_pid);
         close_fd(outcome.log_read_fd);
         close_fd(outcome.exec_read_fd);
         runtime.state = ServiceState::failed;
         runtime.desired_state = "stopped";
         runtime.last_error =
-            "cannot determine child start time; refusing to manage the process";
+            "cannot determine a verifiable process identity; refusing to manage the process";
+        remove_exec_staging(handle);
         (void)save(handle);
         return Error::make(ErrorCode::unavailable, runtime.last_error);
     }
@@ -1039,22 +1168,26 @@ Error SupervisorEngine::spawn_locked(ServiceHandle& handle, std::int64_t now_ms)
     runtime.pid = outcome.pid;
     runtime.pgid = outcome.pgid;
     runtime.start_ticks = outcome.start_ticks;
+    runtime.anchor_pid = outcome.anchor_pid;
+    runtime.anchor_start_ticks = outcome.anchor_start_ticks;
     runtime.started_at_ms = now_unix_millis();
     runtime.last_error.clear();
-    // Persist PID/PGID/boot ID/start time before the child is allowed to exec.
+    // Persist PID/PGID/boot ID/start time and the sentinel identity before the
+    // child is allowed to exec.
     error = save(handle);
     if (!error.ok()) {
         abort_service_child(outcome.handshake_fd);
         reap_child(outcome.pid);
+        if (outcome.anchor_pid > 1) reap_child(outcome.anchor_pid);
+        runtime.anchor_pid = 0;
+        runtime.anchor_start_ticks = 0;
+        clear_identity(handle);
         close_fd(outcome.log_read_fd);
         close_fd(outcome.exec_read_fd);
-        runtime.pid = 0;
-        runtime.pgid = 0;
-        runtime.start_ticks = 0;
-        runtime.started_at_ms = 0;
         runtime.state = ServiceState::failed;
         runtime.desired_state = "stopped";
         runtime.last_error = "cannot persist process identity: " + error.message;
+        remove_exec_staging(handle);
         (void)save(handle);
         return error;
     }
@@ -1074,15 +1207,16 @@ Error SupervisorEngine::spawn_locked(ServiceHandle& handle, std::int64_t now_ms)
         }
         (void)::kill(outcome.pid, SIGKILL);
         reap_child(outcome.pid);
+        if (outcome.anchor_pid > 1) reap_child(outcome.anchor_pid);
+        runtime.anchor_pid = 0;
+        runtime.anchor_start_ticks = 0;
+        clear_identity(handle);
         close_fd(outcome.log_read_fd);
         close_fd(outcome.exec_read_fd);
-        runtime.pid = 0;
-        runtime.pgid = 0;
-        runtime.start_ticks = 0;
-        runtime.started_at_ms = 0;
         runtime.state = ServiceState::failed;
         runtime.desired_state = "stopped";
         runtime.last_error = detail;
+        remove_exec_staging(handle);
         (void)save(handle);
         return Error::make(ErrorCode::unavailable, detail);
     }
@@ -1136,6 +1270,24 @@ void SupervisorEngine::initiate_stop(ServiceHandle& handle, bool restart_after,
         complete_stop(handle, now_ms);
         return;
     }
+    if (probe.state == GroupState::anchor_only) {
+        // The workload is already gone; reap the sentinel immediately. SIGKILL
+        // is safe because the sentinel still reserves the PGID.
+        std::string signal_error;
+        if (signal_service_group(probe, SIGKILL, signal_error)) {
+            handle.stop_kill_sent = true;
+            runtime.state = ServiceState::stopping;
+            return;
+        }
+        const GroupProbe after = probe_group(handle);
+        if (after.state == GroupState::absent) {
+            complete_stop(handle, now_ms);
+            return;
+        }
+        runtime.state = ServiceState::unknown;
+        runtime.last_error = "cannot reap process group sentinel: " + signal_error;
+        return;
+    }
     std::string signal_error;
     if (signal_service_group(probe, SIGTERM, signal_error)) return;
     const GroupProbe after = probe_group(handle);
@@ -1151,10 +1303,8 @@ void SupervisorEngine::complete_stop(ServiceHandle& handle, std::int64_t now_ms)
     auto& runtime = handle.record.runtime;
     const bool restart = handle.restart_after_stop;
     runtime.state = ServiceState::stopped;
-    runtime.pid = 0;
-    runtime.pgid = 0;
-    runtime.start_ticks = 0;
-    runtime.started_at_ms = 0;
+    clear_identity(handle);
+    remove_exec_staging(handle);
     runtime.last_error.clear();
     handle.restart_after_stop = false;
     handle.stop_kill_sent = false;
@@ -1183,7 +1333,8 @@ void SupervisorEngine::complete_stop(ServiceHandle& handle, std::int64_t now_ms)
     }
 
     bool restarted = false;
-    if (restart && !shutting_down_ && runtime.desired_state == "running") {
+    if (restart && !shutting_down_ && runtime.desired_state == "running" &&
+        !handle.persistence_degraded) {
         const Error error = spawn_locked(handle, now_ms);
         if (!error.ok()) {
             runtime.state = ServiceState::failed;
@@ -1200,6 +1351,19 @@ void SupervisorEngine::complete_stop(ServiceHandle& handle, std::int64_t now_ms)
 void SupervisorEngine::schedule_restart(ServiceHandle& handle, std::int64_t now_ms) {
     auto& runtime = handle.record.runtime;
     const auto& config = handle.record.config;
+    if (handle.persistence_degraded) {
+        // A previous runtime write failed; do not launch a replacement from a
+        // record whose durable state may not match memory (PSH-04).
+        runtime.state = ServiceState::failed;
+        runtime.desired_state = "stopped";
+        runtime.last_error =
+            "automatic restart disabled after a runtime persistence failure";
+        handle.pending_auto_restart = false;
+        handle.backoff_deadline_ms = 0;
+        (void)save(handle);
+        fail_pending(handle.record.config.id, "supervisor_unavailable", runtime.last_error);
+        return;
+    }
     if (runtime.window_started_at <= 0 ||
         now_ms - runtime.window_started_at > static_cast<std::int64_t>(config.restart_window_sec) * 1000) {
         runtime.window_restarts = 0;
@@ -1250,9 +1414,20 @@ void SupervisorEngine::apply_exit(ServiceHandle& handle, bool failed, int exit_c
     runtime.last_exit_at = now_unix_millis();
 
     if (shutting_down_) {
-        // Keep the process-group identity while descendants are still alive so
-        // shutdown() can terminate and persist them; never lose the target.
-        if (group_alive(handle)) {
+        // Keep the process-group identity while descendants (or the sentinel)
+        // still exist so shutdown() can terminate and persist them; never lose
+        // the target.
+        GroupProbe probe = probe_group(handle);
+        if (probe.state == GroupState::anchor_only) {
+            std::string signal_error;
+            (void)signal_service_group(probe, SIGKILL, signal_error);
+            probe = probe_group(handle);
+        }
+        if (probe.state == GroupState::uncertain) {
+            runtime.state = ServiceState::unknown;
+            runtime.last_error =
+                "cannot verify the surviving process group during shutdown: " + probe.detail;
+        } else if (probe.state != GroupState::absent) {
             runtime.state = ServiceState::stopping;
             handle.restart_after_stop = false;
             handle.stop_kill_sent = false;
@@ -1262,18 +1437,41 @@ void SupervisorEngine::apply_exit(ServiceHandle& handle, bool failed, int exit_c
             handle.cleanup_deadline_ms = 0;
         } else {
             runtime.state = ServiceState::stopped;
-            runtime.pid = 0;
-            runtime.pgid = 0;
-            runtime.start_ticks = 0;
-            runtime.started_at_ms = 0;
+            clear_identity(handle);
+            remove_exec_staging(handle);
         }
         (void)save(handle);
         return;
     }
 
+    GroupProbe probe = probe_group(handle);
+    // When only the sentinel is left there is nothing to terminate; reap it
+    // immediately so the exit path can schedule/complete as if the group were
+    // already gone (PSH-02).
+    if (probe.state == GroupState::anchor_only) {
+        std::string signal_error;
+        if (!signal_service_group(probe, SIGKILL, signal_error)) {
+            const GroupProbe after = probe_group(handle);
+            if (after.state != GroupState::absent) {
+                runtime.state = ServiceState::unknown;
+                runtime.desired_state = "stopped";
+                runtime.last_error = "cannot reap service identity anchor: " + signal_error;
+                handle.pending_auto_restart = false;
+                handle.backoff_deadline_ms = 0;
+                handle.cleanup_deadline_ms = 0;
+                (void)save(handle);
+                fail_pending(handle.record.config.id, "service_unknown", runtime.last_error);
+                return;
+            }
+            probe = after;
+        } else {
+            probe = probe_group(handle);
+        }
+    }
+
     // An unverifiable surviving group can neither be signalled nor replaced by
     // a second instance (PSH-01/PSH-02).
-    if (group_uncertain(handle)) {
+    if (probe.state == GroupState::uncertain) {
         runtime.state = ServiceState::unknown;
         runtime.desired_state = "stopped";
         runtime.last_error =
@@ -1288,15 +1486,14 @@ void SupervisorEngine::apply_exit(ServiceHandle& handle, bool failed, int exit_c
     }
 
     const bool want_restart =
-        restart_policy_wants_restart(handle.record.config.restart_policy, failed);
+        restart_policy_wants_restart(handle.record.config.restart_policy, failed) &&
+        !handle.persistence_degraded;
     if (!want_restart) {
         runtime.desired_state = "stopped";
-        if (!group_alive(handle)) {
+        if (probe.state == GroupState::absent) {
             runtime.state = ServiceState::stopped;
-            runtime.pid = 0;
-            runtime.pgid = 0;
-            runtime.start_ticks = 0;
-            runtime.started_at_ms = 0;
+            clear_identity(handle);
+            remove_exec_staging(handle);
             (void)save(handle);
             complete_pending(handle.record.config.id, now_ms, false);
             return;
@@ -1312,7 +1509,6 @@ void SupervisorEngine::apply_exit(ServiceHandle& handle, bool failed, int exit_c
         handle.cleanup_deadline_ms = 0;
         handle.backoff_deadline_ms = 0;
         handle.stable_deadline_ms = 0;
-        const GroupProbe probe = probe_group(handle);
         if (probe.state == GroupState::verified) {
             std::string signal_error;
             (void)signal_service_group(probe, SIGTERM, signal_error);
@@ -1321,7 +1517,7 @@ void SupervisorEngine::apply_exit(ServiceHandle& handle, bool failed, int exit_c
         return;
     }
 
-    if (group_alive(handle)) {
+    if (probe.state == GroupState::verified) {
         // Descendants still exist. Terminate them before a new instance is
         // started so two copies cannot run concurrently.
         runtime.state = ServiceState::backoff;
@@ -1329,18 +1525,13 @@ void SupervisorEngine::apply_exit(ServiceHandle& handle, bool failed, int exit_c
         handle.cleanup_kill_sent = false;
         handle.cleanup_deadline_ms = now_ms + handle.record.config.stop_timeout_ms;
         handle.backoff_deadline_ms = 0;
-        const GroupProbe probe = probe_group(handle);
-        if (probe.state == GroupState::verified) {
-            std::string signal_error;
-            (void)signal_service_group(probe, SIGTERM, signal_error);
-        }
+        std::string signal_error;
+        (void)signal_service_group(probe, SIGTERM, signal_error);
         (void)save(handle);
         return;
     }
-    runtime.pid = 0;
-    runtime.pgid = 0;
-    runtime.start_ticks = 0;
-    runtime.started_at_ms = 0;
+    clear_identity(handle);
+    remove_exec_staging(handle);
     schedule_restart(handle, now_ms);
 }
 
@@ -1393,6 +1584,8 @@ void SupervisorEngine::handle_adopted_gone(ServiceHandle& handle, std::int64_t n
 Error SupervisorEngine::save(ServiceHandle& handle) {
     if (options_.persistence_fault && options_.persistence_fault()) {
         ++persistence_errors_;
+        mark_persistence_failure(handle, "injected runtime persistence failure for " +
+                                             handle.record.config.id);
         return Error::make(ErrorCode::io_error,
                            "injected runtime persistence failure for " +
                                handle.record.config.id);
@@ -1402,6 +1595,8 @@ Error SupervisorEngine::save(ServiceHandle& handle) {
         ++persistence_errors_;
         handle.record.runtime.last_error =
             "cannot persist service state: " + error.message;
+        mark_persistence_failure(handle, "cannot persist service " + handle.record.config.id +
+                                             ": " + error.message);
         std::fprintf(stderr, "edgedesk-supervisor: cannot persist service %s: %s\n",
                      handle.record.config.id.c_str(), error.message.c_str());
     }
@@ -1478,6 +1673,8 @@ void SupervisorEngine::drain_exec(ServiceHandle& handle) {
             handle.exec_confirmed = false;
             handle.exec_error = "cannot start service: " + std::string(std::strerror(value));
             handle.record.runtime.last_error = handle.exec_error;
+            std::fprintf(stderr, "edgedesk-supervisor: %s: %s\n",
+                         handle.record.config.id.c_str(), handle.exec_error.c_str());
             save(handle);
             close_fd(handle.exec_fd);
             return;
@@ -1640,12 +1837,36 @@ std::string SupervisorEngine::record_completed_operation(ServiceHandle& handle,
 }
 
 void SupervisorEngine::prune_operations() {
-    while (operations_.size() > kMaxRetainedOperations && !operation_order_.empty()) {
-        const std::string& id = operation_order_.front();
-        const auto found = operations_.find(id);
-        if (found != operations_.end() && found->second.state == "pending") break;
-        operation_order_.pop_front();
-        if (found != operations_.end()) operations_.erase(found);
+    // Completed operations are evicted oldest-first even when an older pending
+    // operation sits at the front of the queue. The previous implementation
+    // stopped at the first pending entry, so a long-lived stop let every later
+    // completed operation accumulate without bound (PSH-06).
+    if (operations_.size() <= kMaxRetainedOperations) {
+        // Still drop queue entries whose operation object is already gone.
+        operation_order_.erase(
+            std::remove_if(operation_order_.begin(), operation_order_.end(),
+                           [this](const std::string& id) {
+                               return operations_.find(id) == operations_.end();
+                           }),
+            operation_order_.end());
+        return;
+    }
+    for (auto it = operation_order_.begin();
+         it != operation_order_.end() && operations_.size() > kMaxRetainedOperations;) {
+        const auto found = operations_.find(*it);
+        if (found == operations_.end()) {
+            it = operation_order_.erase(it);
+            continue;
+        }
+        if (found->second.state == "pending") {
+            // Necessary in-flight operations are never discarded. There are at
+            // most one stop and one restart per service, so this cannot grow
+            // without a corresponding service record.
+            ++it;
+            continue;
+        }
+        operations_.erase(found);
+        it = operation_order_.erase(it);
     }
 }
 
@@ -1737,13 +1958,14 @@ GroupProbe SupervisorEngine::probe_group(const ServiceHandle& handle) const {
         return probe;
     }
     const std::string& boot_id = runtime.boot_id.empty() ? boot_id_ : runtime.boot_id;
-    return probe_service_group(runtime.pgid, runtime.pid, runtime.start_ticks, boot_id,
-                               boot_id_);
+    return probe_service_group(runtime.pgid, runtime.pid, runtime.start_ticks, boot_id, boot_id_,
+                               runtime.anchor_pid, runtime.anchor_start_ticks);
 }
 
 bool SupervisorEngine::group_alive(const ServiceHandle& handle) const {
-    // Verified members or an unverifiable group both mean "something may still
-    // exist"; callers that intend to signal must use group_verifiable().
+    // Verified members, an unverifiable group and a leftover sentinel all mean
+    // "something may still exist"; callers that intend to signal must use
+    // probe_group() and honor the state.
     return probe_group(handle).state != GroupState::absent;
 }
 
@@ -1753,6 +1975,77 @@ bool SupervisorEngine::group_verifiable(const ServiceHandle& handle) const {
 
 bool SupervisorEngine::group_uncertain(const ServiceHandle& handle) const {
     return probe_group(handle).state == GroupState::uncertain;
+}
+
+bool SupervisorEngine::group_anchor_only(const ServiceHandle& handle) const {
+    return probe_group(handle).state == GroupState::anchor_only;
+}
+
+void SupervisorEngine::clear_identity(ServiceHandle& handle) {
+    auto& runtime = handle.record.runtime;
+    if (runtime.anchor_pid > 1) {
+        // The sentinel may still be a zombie waiting for poll(); remember it so
+        // the reap does not look like an unknown child. The set is bounded.
+        retired_anchor_pids_.insert(runtime.anchor_pid);
+        if (retired_anchor_pids_.size() > 4096) retired_anchor_pids_.clear();
+    }
+    runtime.pid = 0;
+    runtime.pgid = 0;
+    runtime.start_ticks = 0;
+    runtime.started_at_ms = 0;
+    runtime.anchor_pid = 0;
+    runtime.anchor_start_ticks = 0;
+}
+
+void SupervisorEngine::remove_exec_staging(ServiceHandle& handle) {
+    if (!handle.exec_staging_link.empty()) {
+        (void)::unlink(handle.exec_staging_link.c_str());
+        handle.exec_staging_link.clear();
+    }
+    if (!handle.exec_staging_directory.empty()) {
+        (void)::rmdir(handle.exec_staging_directory.c_str());
+        handle.exec_staging_directory.clear();
+    }
+}
+
+void SupervisorEngine::mark_persistence_failure(ServiceHandle& handle,
+                                                std::string_view context) {
+    handle.persistence_degraded = true;
+    // No automatic replacement instance may start from a runtime record that
+    // may not have been written (PSH-04).
+    handle.pending_auto_restart = false;
+    handle.cleanup_deadline_ms = 0;
+    handle.backoff_deadline_ms = 0;
+    (void)store_->mark_inconsistent(context);
+}
+
+void SupervisorEngine::handle_anchor_exit(ServiceHandle& handle, std::int64_t now_ms) {
+    (void)now_ms;
+    auto& runtime = handle.record.runtime;
+    const ServiceState state = runtime.state;
+    runtime.anchor_pid = 0;
+    runtime.anchor_start_ticks = 0;
+    if (state == ServiceState::stopping || state == ServiceState::backoff ||
+        shutting_down_) {
+        // Expected: group cleanup killed the sentinel together with the group.
+        (void)save(handle);
+        return;
+    }
+    if (state == ServiceState::running || state == ServiceState::starting) {
+        runtime.state = ServiceState::unknown;
+        runtime.desired_state = "stopped";
+        runtime.last_error =
+            "service identity anchor exited unexpectedly; the process group can no longer "
+            "be proven safe";
+        runtime.failed_locked = false;
+        handle.pending_auto_restart = false;
+        handle.cleanup_deadline_ms = 0;
+        handle.backoff_deadline_ms = 0;
+        (void)save(handle);
+        fail_pending(handle.record.config.id, "service_unknown", runtime.last_error);
+        return;
+    }
+    (void)save(handle);
 }
 
 void SupervisorEngine::run_timers(std::int64_t now_ms) {
@@ -1770,12 +2063,14 @@ void SupervisorEngine::run_timers(std::int64_t now_ms) {
 
         if (runtime.state == ServiceState::backoff) {
             if (shutting_down_) {
-                if (!group_alive(handle)) {
+                const GroupProbe probe = probe_group(handle);
+                if (probe.state == GroupState::anchor_only) {
+                    std::string signal_error;
+                    (void)signal_service_group(probe, SIGKILL, signal_error);
+                }
+                if (probe_group(handle).state == GroupState::absent) {
                     runtime.state = ServiceState::stopped;
-                    runtime.pid = 0;
-                    runtime.pgid = 0;
-                    runtime.start_ticks = 0;
-                    runtime.started_at_ms = 0;
+                    clear_identity(handle);
                     (void)save(handle);
                 }
                 continue;
@@ -1796,11 +2091,25 @@ void SupervisorEngine::run_timers(std::int64_t now_ms) {
                     handle.pending_auto_restart = false;
                     handle.cleanup_kill_sent = false;
                     handle.cleanup_deadline_ms = 0;
-                    runtime.pid = 0;
-                    runtime.pgid = 0;
-                    runtime.start_ticks = 0;
-                    runtime.started_at_ms = 0;
+                    clear_identity(handle);
+                    remove_exec_staging(handle);
                     schedule_restart(handle, now_ms);
+                } else if (probe.state == GroupState::anchor_only) {
+                    // Only the sentinel remains; reap it now instead of waiting
+                    // for the stop timeout.
+                    std::string signal_error;
+                    if (!signal_service_group(probe, SIGKILL, signal_error)) {
+                        runtime.state = ServiceState::unknown;
+                        runtime.desired_state = "stopped";
+                        runtime.last_error = "cannot reap service identity anchor: " +
+                                             signal_error;
+                        handle.pending_auto_restart = false;
+                        (void)save(handle);
+                        fail_pending(item.first, "service_unknown", runtime.last_error);
+                    } else {
+                        handle.cleanup_kill_sent = true;
+                        handle.cleanup_deadline_ms = now_ms + kStopKillGraceMs;
+                    }
                 } else if (now_ms >= handle.cleanup_deadline_ms) {
                     if (!handle.cleanup_kill_sent) {
                         std::string signal_error;
@@ -1826,23 +2135,42 @@ void SupervisorEngine::run_timers(std::int64_t now_ms) {
                         "cannot verify process group before restart: " + probe.detail;
                     (void)save(handle);
                     fail_pending(item.first, "service_unknown", runtime.last_error);
-                } else if (probe.state == GroupState::verified) {
+                } else if (probe.state == GroupState::verified || probe.state == GroupState::anchor_only) {
                     runtime.state = ServiceState::backoff;
                     handle.pending_auto_restart = true;
                     handle.cleanup_kill_sent = false;
-                    handle.cleanup_deadline_ms = now_ms + handle.record.config.stop_timeout_ms;
+                    handle.cleanup_deadline_ms = now_ms;
                     std::string signal_error;
-                    (void)signal_service_group(probe, SIGTERM, signal_error);
-                    (void)save(handle);
-                } else {
-                    const Error error = spawn_locked(handle, now_ms);
-                    if (!error.ok()) {
-                        runtime.state = ServiceState::failed;
-                        runtime.desired_state = "stopped";
-                        runtime.last_error = error.message;
-                        fail_pending(item.first, "service_restart_failed", runtime.last_error);
+                    if (probe.state == GroupState::anchor_only) {
+                        (void)signal_service_group(probe, SIGKILL, signal_error);
+                        handle.cleanup_kill_sent = true;
+                        handle.cleanup_deadline_ms = now_ms + kStopKillGraceMs;
+                    } else {
+                        (void)signal_service_group(probe, SIGTERM, signal_error);
+                        handle.cleanup_deadline_ms =
+                            now_ms + handle.record.config.stop_timeout_ms;
                     }
                     (void)save(handle);
+                } else {
+                    if (handle.persistence_degraded) {
+                        runtime.state = ServiceState::failed;
+                        runtime.desired_state = "stopped";
+                        runtime.last_error =
+                            "automatic restart disabled after a runtime persistence failure";
+                        (void)save(handle);
+                        fail_pending(item.first, "supervisor_unavailable",
+                                     runtime.last_error);
+                    } else {
+                        const Error error = spawn_locked(handle, now_ms);
+                        if (!error.ok()) {
+                            runtime.state = ServiceState::failed;
+                            runtime.desired_state = "stopped";
+                            runtime.last_error = error.message;
+                            fail_pending(item.first, "service_restart_failed",
+                                         runtime.last_error);
+                        }
+                        (void)save(handle);
+                    }
                 }
             }
             continue;
@@ -1861,6 +2189,35 @@ void SupervisorEngine::run_timers(std::int64_t now_ms) {
             }
             if (probe.state == GroupState::absent) {
                 complete_stop(handle, now_ms);
+                continue;
+            }
+            if (probe.state == GroupState::anchor_only) {
+                // The workload is gone; reap the sentinel now rather than
+                // waiting for the SIGTERM grace period.
+                if (!handle.stop_kill_sent) {
+                    std::string signal_error;
+                    if (!signal_service_group(probe, SIGKILL, signal_error)) {
+                        const GroupProbe after = probe_group(handle);
+                        if (after.state == GroupState::absent) {
+                            complete_stop(handle, now_ms);
+                            continue;
+                        }
+                        runtime.state = ServiceState::unknown;
+                        runtime.desired_state = "stopped";
+                        runtime.last_error = "cannot reap process group sentinel: " + signal_error;
+                        (void)save(handle);
+                        fail_pending(item.first, "service_unknown", runtime.last_error);
+                        continue;
+                    }
+                    handle.stop_kill_sent = true;
+                }
+                if (now_ms >= handle.stop_verify_deadline_ms) {
+                    runtime.state = ServiceState::unknown;
+                    runtime.desired_state = "stopped";
+                    runtime.last_error = "identity anchor did not exit after SIGKILL";
+                    (void)save(handle);
+                    fail_pending(item.first, "service_unknown", runtime.last_error);
+                }
                 continue;
             }
             if (!handle.stop_kill_sent && now_ms >= handle.stop_term_deadline_ms) {
@@ -1943,15 +2300,23 @@ std::vector<RpcCompletion> SupervisorEngine::poll(std::int64_t now_ms) {
         const pid_t pid = ::waitpid(-1, &status, WNOHANG);
         if (pid > 0) {
             ServiceHandle* handle = nullptr;
+            bool is_anchor = false;
             for (auto& item : services_) {
                 if (item.second.record.runtime.pid == pid) {
                     handle = &item.second;
                     break;
                 }
+                if (item.second.record.runtime.anchor_pid == pid) {
+                    handle = &item.second;
+                    is_anchor = true;
+                    break;
+                }
             }
-            if (handle != nullptr) {
+            if (handle != nullptr && is_anchor) {
+                handle_anchor_exit(*handle, now_ms);
+            } else if (handle != nullptr) {
                 handle_child_exit(*handle, status, now_ms);
-            } else {
+            } else if (retired_anchor_pids_.erase(static_cast<int>(pid)) == 0) {
                 std::fprintf(stderr,
                              "edgedesk-supervisor: reaped unknown child %d\n",
                              static_cast<int>(pid));
@@ -2029,6 +2394,16 @@ void SupervisorEngine::shutdown(std::int64_t now_ms, int grace_ms) {
             std::string signal_error;
             (void)signal_service_group(probe, SIGTERM, signal_error);
             (void)save(handle);
+        } else if (probe.state == GroupState::anchor_only) {
+            runtime.state = ServiceState::stopping;
+            handle.restart_after_stop = false;
+            handle.stop_term_deadline_ms = deadline;
+            handle.stop_verify_deadline_ms = deadline + kStopKillGraceMs;
+            handle.pending_auto_restart = false;
+            handle.cleanup_deadline_ms = 0;
+            std::string signal_error;
+            handle.stop_kill_sent = signal_service_group(probe, SIGKILL, signal_error);
+            (void)save(handle);
         } else if (probe.state == GroupState::uncertain) {
             runtime.state = ServiceState::unknown;
             runtime.last_error =
@@ -2038,10 +2413,7 @@ void SupervisorEngine::shutdown(std::int64_t now_ms, int grace_ms) {
                    runtime.state == ServiceState::starting ||
                    runtime.state == ServiceState::backoff) {
             runtime.state = ServiceState::stopped;
-            runtime.pid = 0;
-            runtime.pgid = 0;
-            runtime.start_ticks = 0;
-            runtime.started_at_ms = 0;
+            clear_identity(handle);
             (void)save(handle);
         }
     }
@@ -2050,10 +2422,12 @@ void SupervisorEngine::shutdown(std::int64_t now_ms, int grace_ms) {
         (void)poll(steady_millis());
         bool alive = false;
         for (const auto& item : services_) {
-            if (item.second.record.runtime.state == ServiceState::stopping &&
-                probe_group(item.second).state == GroupState::verified) {
-                alive = true;
-                break;
+            if (item.second.record.runtime.state == ServiceState::stopping) {
+                const GroupState state = probe_group(item.second).state;
+                if (state == GroupState::verified || state == GroupState::anchor_only) {
+                    alive = true;
+                    break;
+                }
             }
         }
         if (!alive) break;
@@ -2067,7 +2441,8 @@ void SupervisorEngine::shutdown(std::int64_t now_ms, int grace_ms) {
         auto& runtime = handle.record.runtime;
         if (runtime.state != ServiceState::stopping) continue;
         const GroupProbe probe = probe_group(handle);
-        if (probe.state == GroupState::verified) {
+        if (probe.state == GroupState::verified ||
+            probe.state == GroupState::anchor_only) {
             std::string signal_error;
             (void)signal_service_group(probe, SIGKILL, signal_error);
         }
@@ -2077,10 +2452,12 @@ void SupervisorEngine::shutdown(std::int64_t now_ms, int grace_ms) {
         (void)poll(steady_millis());
         bool alive = false;
         for (const auto& item : services_) {
-            if (item.second.record.runtime.state == ServiceState::stopping &&
-                probe_group(item.second).state == GroupState::verified) {
-                alive = true;
-                break;
+            if (item.second.record.runtime.state == ServiceState::stopping) {
+                const GroupState state = probe_group(item.second).state;
+                if (state == GroupState::verified || state == GroupState::anchor_only) {
+                    alive = true;
+                    break;
+                }
             }
         }
         if (!alive) break;
@@ -2094,10 +2471,7 @@ void SupervisorEngine::shutdown(std::int64_t now_ms, int grace_ms) {
             const GroupProbe probe = probe_group(handle);
             if (probe.state == GroupState::absent) {
                 runtime.state = ServiceState::stopped;
-                runtime.pid = 0;
-                runtime.pgid = 0;
-                runtime.start_ticks = 0;
-                runtime.started_at_ms = 0;
+                clear_identity(handle);
             } else if (probe.state == GroupState::uncertain) {
                 runtime.state = ServiceState::unknown;
                 runtime.last_error =

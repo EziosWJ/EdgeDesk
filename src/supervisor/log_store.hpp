@@ -43,16 +43,22 @@ public:
     void close(std::string_view id);
 
 private:
-    explicit LogStore(std::string directory) : directory_(std::move(directory)) {}
+    explicit LogStore(std::string directory, int directory_fd)
+        : directory_(std::move(directory)), directory_fd_(directory_fd) {}
     struct OpenFile {
         int fd = -1;
         std::uint64_t size = 0;
     };
     std::string path_for(std::string_view id) const;
+    std::string name_for(std::string_view id) const;
     Error open_append_locked(std::string_view id, OpenFile& out);
     static bool valid_id(std::string_view id);
 
     std::string directory_;
+    // Open descriptor for the verified log directory. Every file operation is
+    // performed with *at() calls relative to this descriptor, so replacing the
+    // configured path cannot redirect logs after startup (PSH-03).
+    int directory_fd_ = -1;
     std::map<std::string, OpenFile> files_;
 };
 

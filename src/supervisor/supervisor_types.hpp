@@ -69,6 +69,11 @@ struct ServiceRuntime {
     int pid = 0;
     int pgid = 0;
     std::uint64_t start_ticks = 0;
+    // Sentinel process that keeps the numeric PGID reserved for this instance.
+    // It is not part of the service workload and is never reported as such
+    // (ADR-0019 §1). Zero means the instance predates the anchor or is stopped.
+    int anchor_pid = 0;
+    std::uint64_t anchor_start_ticks = 0;
     std::int64_t started_at_ms = 0;
     int last_exit_code = -1;
     int last_signal = 0;

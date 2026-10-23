@@ -1,6 +1,6 @@
 # SPEC-0010 实施计划：Process Supervisor 可靠性与安全加固
 
-- 状态：**PSH-01～PSH-08 已实现；PSH-09～PSH-11 未执行**
+- 状态：**PSH-01～PSH-11 已实现；宿主、L1、root/systemd/真实 reboot 与隔离压力验收已完成；OpenRC/BusyBox/ARM64 未验证**
 - 需求基线：[SPEC-0010](../spec/0010-process-supervisor-hardening.md)
 - 原始功能基线：[SPEC-0009](../spec/0009-process-supervisor.md)
 - 总跟踪 Issue：[#45](https://github.com/EziosWJ/EdgeDesk/issues/45)
@@ -66,21 +66,21 @@ PSH-01 与 PSH-03 可以并行；PSH-07 与 PSH-08 可独立实施。涉及进�
 ## 4. 总体发布门槛
 
 - [x] PSH-01～PSH-08 所有功能/回归验收通过（2026-10-23；证据见 SPEC-0010 §6）。
-- [ ] PSH-09 root UID/GID 切换与失败清理有真实执行证据。
-- [ ] PSH-10 对目标 init 与 reboot/autostart 提供实际验证记录（systemd 安装/启停已有测试机记录；OpenRC/BusyBox 与 reboot 未验证）。
-- [ ] PSH-11 压力测试达到约定资源上限，未发现未处理的死锁、资源泄漏或无界增长。
-- [x] 最终合并树 L0/L1 和适用 L2 测试全部通过（本轮 L0 26/26；L1 前端 155 测试 + 26/26 ctest + 集成套件通过；未改 CMake/第三方库，故未重跑 L2）。
-- [x] 文件管理、终端、仪表盘、认证、设置、桌面、扩展平台回归通过（同一 L1 套件）。
+- [x] PSH-09 在 Ubuntu 26.04 虚拟机以 root 运行 Supervisor，验证 UID/GID/补充组、root
+  确认、无效用户、SIGTERM/SIGKILL、子进程清理与 socket/DB/日志权限（46/46 检查）。
+- [x] PSH-10 systemd 启停、graceful restart、SIGKILL respawn 接管、真实 reboot 后的
+  autostart/人工停止语义（24/24 + 19/19 检查）。OpenRC/BusyBox 仍未验证。
+- [x] PSH-11 在隔离实例完成 1,000+ 生命周期操作与 30 分钟持续压力；资源、SQLite、
+  日志、孤儿清理与操作记录有界（详见 SPEC-0010 §6）。
+- [x] 最终合并树 L0/L1 和适用的 x86_64 musl static-pie 构建/ctest 全部通过。
+- [x] 文件管理、终端、仪表盘、认证、设置、桌面、扩展平台回归通过（L1 套件）。
 - [x] 更新 docs/testing.md，所有未运行平台和未完成测试明确标记“未验证”。
 - [x] 将 SPEC-0010 和本计划状态更新为与实际证据一致的状态。
 
 ## 5. 当前已知验证缺口
 
-PSH-01～PSH-08 的宿主实现与回归测试已完成；以下内容仍不可宣称完成：
+以下内容仍不可宣称完成：
 
-- root Supervisor 的真实跨 UID/GID 身份切换及系统调用失败清理（PSH-09）。
-- OpenRC、BusyBox init 的真实启动、停止和 Supervisor 崩溃 respawn（PSH-10）。
-- 真实 reboot 后的 autostart 与人工停止语义（PSH-10）。
-- 长时间高频日志、慢 IPC 客户端、队列饱和和多服务并发的压力表现（PSH-11）。
-- musl/static-PIE 与 ARM64/QEMU 上对加固后行为的重新验证（本轮未重跑 L2）。
-- 并发路径替换、持久化失败下的自动重启、带参数解释器与 FD 继承范围的专项测试。
+- OpenRC、BusyBox init 的真实启动、停止、Supervisor 崩溃 respawn 与 reboot 语义。
+- ARM64/QEMU 与 Bootlin musl 交叉构建在本轮未重跑；本轮仅验证 x86_64 musl static-pie。
+- 真实硬件断电、文件系统损坏与磁盘满故障注入（只做了 SQLite 写入失败的注入测试）。

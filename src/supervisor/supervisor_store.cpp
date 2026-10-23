@@ -154,6 +154,8 @@ ServiceRecord row_to_record(sqlite3_stmt* stmt, Error& error) {
     record.runtime.window_restarts = static_cast<std::uint64_t>(column_i64(stmt, 32));
     record.runtime.window_started_at = column_i64(stmt, 33);
     record.runtime.failed_locked = column_i64(stmt, 34) != 0;
+    record.runtime.anchor_pid = static_cast<int>(column_i64(stmt, 35));
+    record.runtime.anchor_start_ticks = static_cast<std::uint64_t>(column_i64(stmt, 36));
     error = Error::none();
     return record;
 }
@@ -164,7 +166,7 @@ constexpr const char* kServiceColumns =
     "stable_after_sec,stop_timeout_ms,log_max_bytes,created_at,updated_at,"
     "state,desired_state,boot_id,pid,pgid,start_ticks,started_at_ms,last_exit_code,"
     "last_signal,last_exit_at,last_error,restart_count,window_restarts,window_started_at,"
-    "failed_locked";
+    "failed_locked,anchor_pid,anchor_start_ticks";
 
 constexpr const char* kInsertService =
     "INSERT INTO services("
@@ -173,8 +175,9 @@ constexpr const char* kInsertService =
     "stable_after_sec,stop_timeout_ms,log_max_bytes,created_at,updated_at,"
     "state,desired_state,boot_id,pid,pgid,start_ticks,started_at_ms,last_exit_code,"
     "last_signal,last_exit_at,last_error,restart_count,window_restarts,window_started_at,"
-    "failed_locked) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,"
-    "?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35)";
+    "failed_locked,anchor_pid,anchor_start_ticks) "
+    "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,"
+    "?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37)";
 
 constexpr const char* kUpdateService =
     "UPDATE services SET name=?1,executable=?2,args_json=?3,cwd=?4,env_json=?5,run_user=?6,"
@@ -185,7 +188,8 @@ constexpr const char* kUpdateService =
 constexpr const char* kSaveRuntime =
     "UPDATE services SET state=?1,desired_state=?2,boot_id=?3,pid=?4,pgid=?5,start_ticks=?6,"
     "started_at_ms=?7,last_exit_code=?8,last_signal=?9,last_exit_at=?10,last_error=?11,"
-    "restart_count=?12,window_restarts=?13,window_started_at=?14,failed_locked=?15 WHERE id=?16";
+    "restart_count=?12,window_restarts=?13,window_started_at=?14,failed_locked=?15,"
+    "anchor_pid=?16,anchor_start_ticks=?17 WHERE id=?18";
 
 // Splits an absolute path into components without resolving anything. ".", "..",
 // NUL bytes and a path that collapses to the filesystem root are rejected before
@@ -292,7 +296,8 @@ Error sqlite_error_to_error(int code, const std::string& context) {
     }
 }
 
-bool ensure_private_directory(const std::string& path, std::string& error) {
+bool ensure_private_directory(const std::string& path, std::string& error, int* directory_fd) {
+    if (directory_fd != nullptr) *directory_fd = -1;
     std::vector<std::string> components;
     if (!parse_directory_components(path, components, error)) return false;
 
@@ -356,6 +361,7 @@ bool ensure_private_directory(const std::string& path, std::string& error) {
 
         current = std::move(child);
     }
+    if (directory_fd != nullptr) *directory_fd = current.release();
     error.clear();
     return true;
 }
@@ -366,17 +372,35 @@ std::unique_ptr<SupervisorStore> SupervisorStore::open(const std::string& databa
         error = Error::make(ErrorCode::invalid_argument, "supervisor database path must be absolute");
         return nullptr;
     }
+    if (database_path.find('\0') != std::string::npos) {
+        error = Error::make(ErrorCode::invalid_argument,
+                            "supervisor database path contains a NUL byte");
+        return nullptr;
+    }
     const auto slash = database_path.rfind('/');
     const std::string directory = slash == 0 ? "/" : database_path.substr(0, slash);
-    std::string directory_error;
-    if (!ensure_private_directory(directory, directory_error)) {
-        error = Error::make(ErrorCode::permission_denied, directory_error);
+    const std::string basename = database_path.substr(slash + 1);
+    if (basename.empty() || basename == "." || basename == "..") {
+        error = Error::make(ErrorCode::invalid_argument,
+                            "supervisor database path must name a file: " + database_path);
         return nullptr;
     }
 
+    std::string directory_error;
+    int raw_directory_fd = -1;
+    if (!ensure_private_directory(directory, directory_error, &raw_directory_fd)) {
+        error = Error::make(ErrorCode::permission_denied, directory_error);
+        return nullptr;
+    }
+    UniqueFd directory_fd(raw_directory_fd);
+
+    // Validate an existing database through the pinned directory descriptor.
+    // AT_SYMLINK_NOFOLLOW rejects a swapped-in symlink, and the ownership check
+    // keeps SQLite from following a file another user planted in the directory.
     struct stat info {};
-    const bool existed = ::lstat(database_path.c_str(), &info) == 0;
-    if (existed) {
+    const int stat_result =
+        ::fstatat(directory_fd.get(), basename.c_str(), &info, AT_SYMLINK_NOFOLLOW);
+    if (stat_result == 0) {
         if (S_ISLNK(info.st_mode)) {
             error = Error::make(ErrorCode::permission_denied,
                                 "refusing symlinked supervisor database: " + database_path);
@@ -392,21 +416,33 @@ std::unique_ptr<SupervisorStore> SupervisorStore::open(const std::string& databa
                                 "supervisor database is not owned by the service user: " + database_path);
             return nullptr;
         }
-        if (::chmod(database_path.c_str(), 0600) != 0) {
+        if (::fchmodat(directory_fd.get(), basename.c_str(), 0600, 0) != 0) {
             error = Error::make(ErrorCode::permission_denied,
                                 "cannot tighten supervisor database permissions: " +
                                     std::string(std::strerror(errno)));
             return nullptr;
         }
+    } else if (errno != ENOENT) {
+        error = Error::make(ErrorCode::permission_denied,
+                            "cannot inspect supervisor database: " +
+                                std::string(std::strerror(errno)));
+        return nullptr;
     }
 
+    // Resolve the database through the verified directory descriptor. Renaming
+    // or replacing the configured directory no longer redirects the database or
+    // its journal/WAL/SHM files. The final component was validated with
+    // AT_SYMLINK_NOFOLLOW above; SQLITE_OPEN_NOFOLLOW cannot be combined with a
+    // /proc/self/fd path, and the directory is private to this user.
+    const std::string opened_path =
+        "/proc/self/fd/" + std::to_string(directory_fd.get()) + "/" + basename;
     sqlite3* db = nullptr;
     const mode_t previous_umask = ::umask(0077);
     const int result = sqlite3_open_v2(
-        database_path.c_str(), &db,
+        opened_path.c_str(), &db,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nullptr);
+    ::umask(previous_umask);
     if (result != SQLITE_OK) {
-        ::umask(previous_umask);
         error = sqlite_error_to_error(result, "cannot open supervisor database: " +
                                                   std::string(db != nullptr ? sqlite3_errmsg(db)
                                                                             : std::strerror(errno)));
@@ -414,16 +450,31 @@ std::unique_ptr<SupervisorStore> SupervisorStore::open(const std::string& databa
         return nullptr;
     }
     sqlite3_busy_timeout(db, 5000);
-    std::unique_ptr<SupervisorStore> store(new SupervisorStore(database_path, db));
+    std::unique_ptr<SupervisorStore> store(
+        new SupervisorStore(database_path, db, directory_fd.get()));
+    const int pinned_directory_fd = directory_fd.get();
+    directory_fd.release();  // Owned by the store from here on.
     error = store->initialize_schema();
-    ::umask(previous_umask);
     if (!error.ok()) return nullptr;
-    (void)::chmod(database_path.c_str(), 0600);
+
+    // Re-check the file SQLite actually opened: it must be the regular 0600
+    // file this user owns, not a file reached through a swapped component.
+    struct stat opened_info {};
+    if (::fstatat(pinned_directory_fd, basename.c_str(), &opened_info,
+                  AT_SYMLINK_NOFOLLOW) != 0 ||
+        !S_ISREG(opened_info.st_mode) || opened_info.st_uid != ::geteuid()) {
+        error = Error::make(ErrorCode::permission_denied,
+                            "supervisor database is not a regular file owned by the service user: " +
+                                database_path);
+        return nullptr;
+    }
+    (void)::fchmodat(pinned_directory_fd, basename.c_str(), 0600, 0);
     return store;
 }
 
 SupervisorStore::~SupervisorStore() {
     if (db_ != nullptr) sqlite3_close(db_);
+    if (directory_fd_ >= 0) ::close(directory_fd_);
 }
 
 Error SupervisorStore::initialize_schema() {
@@ -452,7 +503,8 @@ Error SupervisorStore::initialize_schema() {
                           : error;
     }
     const int version = static_cast<int>(column_i64(version_stmt.get(), 0));
-    if (version > schema_version()) {        return Error::make(ErrorCode::io_error,
+    if (version > schema_version()) {
+        return Error::make(ErrorCode::io_error,
                            "supervisor database schema version " + std::to_string(version) +
                                " is newer than supported version " +
                                std::to_string(schema_version()));
@@ -460,24 +512,39 @@ Error SupervisorStore::initialize_schema() {
     if (version == 0) {
         error = exec_sql(db_, "BEGIN IMMEDIATE", "begin schema transaction");
         if (!error.ok()) return error;
-        error = apply_schema_v1();
+        error = apply_schema_v2();
         if (!error.ok()) {
             exec_sql(db_, "ROLLBACK", "rollback schema transaction");
             return error;
         }
-        error = set_user_version(1);
+        error = set_user_version(schema_version());
         if (!error.ok()) {
             exec_sql(db_, "ROLLBACK", "rollback schema transaction");
             return error;
         }
         return exec_sql(db_, "COMMIT", "commit schema transaction");
     }
-    // Version 1 is the initial schema. Future versions append forward-only
-    // migrations here; older versions are never recreated from scratch.
+    if (version == 1) {
+        error = exec_sql(db_, "BEGIN IMMEDIATE", "begin schema migration");
+        if (!error.ok()) return error;
+        error = migrate_schema_v1();
+        if (!error.ok()) {
+            exec_sql(db_, "ROLLBACK", "rollback schema migration");
+            return error;
+        }
+        error = set_user_version(schema_version());
+        if (!error.ok()) {
+            exec_sql(db_, "ROLLBACK", "rollback schema migration");
+            return error;
+        }
+        return exec_sql(db_, "COMMIT", "commit schema migration");
+    }
+    // Future versions append forward-only migrations here; older versions are
+    // never recreated from scratch.
     return Error::none();
 }
 
-Error SupervisorStore::apply_schema_v1() {
+Error SupervisorStore::apply_schema_v2() {
     const char* schema =
         "CREATE TABLE IF NOT EXISTS schema_migrations("
         "version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);"
@@ -516,11 +583,29 @@ Error SupervisorStore::apply_schema_v1() {
         "restart_count INTEGER NOT NULL DEFAULT 0,"
         "window_restarts INTEGER NOT NULL DEFAULT 0,"
         "window_started_at INTEGER NOT NULL DEFAULT 0,"
-        "failed_locked INTEGER NOT NULL DEFAULT 0);"
+        "failed_locked INTEGER NOT NULL DEFAULT 0,"
+        "anchor_pid INTEGER NOT NULL DEFAULT 0,"
+        "anchor_start_ticks INTEGER NOT NULL DEFAULT 0);"
         "CREATE INDEX IF NOT EXISTS services_name_idx ON services(name);";
     Error error = exec_sql(db_, schema, "create supervisor schema");
     if (!error.ok()) return error;
-    return exec_sql(db_, "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, " +
+    return exec_sql(db_, "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(2, " +
+                             std::to_string(now_unix_seconds()) + ")",
+                    "record schema migration");
+}
+
+Error SupervisorStore::migrate_schema_v1() {
+    // Forward-only migration from the original SPEC-0009 schema. The anchor
+    // columns are additive with safe defaults so a database created by an older
+    // binary remains readable (legacy rows then have anchor_pid = 0).
+    Error error = exec_sql(db_, "ALTER TABLE services ADD COLUMN anchor_pid INTEGER NOT NULL DEFAULT 0",
+                           "add anchor_pid column");
+    if (!error.ok()) return error;
+    error = exec_sql(db_,
+                     "ALTER TABLE services ADD COLUMN anchor_start_ticks INTEGER NOT NULL DEFAULT 0",
+                     "add anchor_start_ticks column");
+    if (!error.ok()) return error;
+    return exec_sql(db_, "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(2, " +
                              std::to_string(now_unix_seconds()) + ")",
                     "record schema migration");
 }
@@ -610,6 +695,8 @@ Error SupervisorStore::insert(ServiceRecord& record) {
     stmt.i64(33, static_cast<std::int64_t>(r.window_restarts));
     stmt.i64(34, r.window_started_at);
     stmt.i64(35, r.failed_locked ? 1 : 0);
+    stmt.i64(36, r.anchor_pid);
+    stmt.i64(37, static_cast<std::int64_t>(r.anchor_start_ticks));
     const int step = stmt.step();
     if (step != SQLITE_DONE) {
         return sqlite_error_to_error(step, std::string("insert service: ") + sqlite3_errmsg(db_));
@@ -685,7 +772,9 @@ Error SupervisorStore::save_runtime(std::string_view id, const ServiceRuntime& r
     stmt.i64(13, static_cast<std::int64_t>(runtime.window_restarts));
     stmt.i64(14, runtime.window_started_at);
     stmt.i64(15, runtime.failed_locked ? 1 : 0);
-    stmt.text(16, id);
+    stmt.i64(16, runtime.anchor_pid);
+    stmt.i64(17, static_cast<std::int64_t>(runtime.anchor_start_ticks));
+    stmt.text(18, id);
     const int step = stmt.step();
     if (step != SQLITE_DONE) {
         return sqlite_error_to_error(step, std::string("save runtime: ") + sqlite3_errmsg(db_));
@@ -696,8 +785,69 @@ Error SupervisorStore::save_runtime(std::string_view id, const ServiceRuntime& r
     return Error::none();
 }
 
-Error SupervisorStore::count(std::uint64_t& out) const {
-    out = 0;
+namespace {
+constexpr const char* kInconsistentMarker = ".persistence-inconsistent";
+} // namespace
+
+Error SupervisorStore::mark_inconsistent(std::string_view reason) {
+    if (directory_fd_ < 0) return Error::make(ErrorCode::unavailable, "data directory is closed");
+    const int fd = ::openat(directory_fd_, kInconsistentMarker,
+                            O_WRONLY | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) {
+        return Error::make(ErrorCode::io_error,
+                           std::string("cannot create persistence marker: ") + std::strerror(errno),
+                           errno);
+    }
+    std::string text = "persistence write failed: ";
+    text.append(reason.substr(0, 512));
+    text.push_back('\n');
+    std::size_t written = 0;
+    int saved = 0;
+    while (written < text.size()) {
+        const ssize_t result = ::write(fd, text.data() + written, text.size() - written);
+        if (result < 0) {
+            if (errno == EINTR) continue;
+            saved = errno;
+            break;
+        }
+        written += static_cast<std::size_t>(result);
+    }
+    if (saved == 0 && ::fsync(fd) != 0) saved = errno;
+    ::close(fd);
+    // Persist the directory entry as well; best effort because the marker is a
+    // safety signal and the write failure may already indicate a bad medium.
+    (void)::fsync(directory_fd_);
+    if (saved != 0) {
+        return Error::make(ErrorCode::io_error,
+                           std::string("cannot persist persistence marker: ") +
+                               std::strerror(saved),
+                           saved);
+    }
+    return Error::none();
+}
+
+bool SupervisorStore::inconsistent_marker_present() const {
+    if (directory_fd_ < 0) return true;  // Fail closed.
+    struct stat info {};
+    if (::fstatat(directory_fd_, kInconsistentMarker, &info, AT_SYMLINK_NOFOLLOW) == 0) {
+        return true;
+    }
+    // Only a confirmed absence clears the safety condition.
+    return errno != ENOENT;
+}
+
+Error SupervisorStore::clear_inconsistent_marker() {
+    if (directory_fd_ < 0) return Error::make(ErrorCode::unavailable, "data directory is closed");
+    if (::unlinkat(directory_fd_, kInconsistentMarker, 0) != 0 && errno != ENOENT) {
+        return Error::make(ErrorCode::io_error,
+                           std::string("cannot clear persistence marker: ") + std::strerror(errno),
+                           errno);
+    }
+    (void)::fsync(directory_fd_);
+    return Error::none();
+}
+
+Error SupervisorStore::count(std::uint64_t& out) const {    out = 0;
     Error error;
     Stmt stmt(db_, "SELECT COUNT(*) FROM services", error);
     if (!stmt.ok()) return error;

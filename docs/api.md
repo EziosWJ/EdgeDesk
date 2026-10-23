@@ -339,7 +339,9 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 `null`；`cpu_percent`/`rss_bytes` 不可用时同样为 `null`，不得当作 0。
 
 `UNKNOWN` 表示 Supervisor 无法证明进程组归属，因而拒绝发送信号或启动第二份实例。
-该状态不会自动恢复：运维确认原进程组已不存在后，才能通过 stop/start 清除。
+身份依据包括 boot ID、leader/anchor 的 PID+starttime+PGID+SID；anchor 是 Supervisor
+创建的哨兵进程，存活期间 PGID 不会被内核复用。该状态不会自动恢复：运维确认原进程组
+已不存在后，才能通过 stop/start 清除。
 
 ### stop/restart 异步操作
 
@@ -362,7 +364,9 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 - `succeeded` 时 `result` 是操作完成后的服务对象；`failed` 时 `error` 为
   `{"slug": "…", "message": "…"}`，`result` 为 `null`。
 - 同一服务同一类型的 pending 操作重复提交返回同一个 `operation_id`；人工 stop 会
-  取代 pending restart。已完成的操作用于查询保留，内存中按 256 条上限裁剪。
+  取代 pending restart。已完成的操作用于查询保留，内存中最多保留 256 条；裁剪时
+  跳过 pending 操作并优先驱逐最旧的已完成操作，因此长停止不会阻塞历史清理。
+  pending 操作数量受每个服务至多一个 stop/restart 约束。
 - 通过 `GET /api/supervisor/operations/{id}` 轮询；未知 ID 返回 404
   `operation_not_found`。操作历史不跨 Supervisor 重启保留。
 - 客户端断开、页面刷新或 HTTP 超时只表示调用方停止等待，不会取消停止/清理。

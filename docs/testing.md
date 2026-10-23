@@ -525,7 +525,7 @@ Supervisor 集成测试（`scripts/supervisor_test.py`）实际覆盖：
 
 | 验证 | 命令 | 实际结果 |
 | --- | --- | --- |
-| L0 原生 | `scripts/test-fast.sh` | **26/26 通过**；新增 `process_control_test`（PSH-01/02 身份探测），`supervisor_engine_test` 增至 21 个场景，总耗时约 8.4 s |
+| L0 原生 | `scripts/test-fast.sh` | **26/26 通过**；新增 `process_control_test`（PSH-01/02 身份探测），`supervisor_engine_test` 增至 26 个场景，总耗时约 10 s |
 | L0 前端 | 同上 | **27 个文件 / 155 个测试通过** |
 | L1 全量 | `scripts/test-pr.sh` | 前端 155 测试 + 生产构建、`dev-disk` 构建、**26/26 ctest**、完整集成套件通过，**87 s** |
 | 集成 stop/restart | `scripts/supervisor_test.py` | 返回 `operation_id`，轮询 `state=succeeded`；stop 后 PID 消失，restart 生成新 PID |
@@ -537,18 +537,28 @@ Supervisor 集成测试（`scripts/supervisor_test.py`）实际覆盖：
 | 用例 | 覆盖 | 断言 |
 | --- | --- | --- |
 | `process_control_test::test_verified_absent_and_uncertain` | PSH-01 | 存活 leader 为 `verified`；starttime/boot ID 不匹配或缺少 starttime 为 `uncertain`；拒绝信号且不杀进程；组消失为 `absent` |
-| `process_control_test::test_descendant_group_identity` | PSH-01/02 | leader 退出后后代仍被会话锚定为 `verified`；SIGTERM 后组变为 `absent` |
+| `process_control_test::test_anchor_descendant_identity` | PSH-01/02 | leader 退出后后代 + anchor 为 `verified`；仅剩 anchor 为 `anchor_only`（TERM 拒绝、SIGKILL 回收）；anchor 身份不匹配为 `uncertain` |
+| `process_control_test::test_spawn_anchor_lifecycle` | PSH-01/07 | 真实 spawn 自动创建 sentinel；sentinel 读取 commit 后关闭全部 FD、comm=`edgedesk-anchor`、与工作负载同 PGID/SID；SIGKILL 后组消失 |
+| `process_control_test::test_script_inode_and_argv` | PSH-07 | 同一 inode 检查/执行；argv 中空格与元字符不被解释；带参数解释器；FIFO、长 shebang、缺失解释器失败 |
 | `test_operation_contract` / `test_operation_retention_bound` | PSH-06 | pending、重复 stop 幂等、成功结果、未知操作 404、后续 stop 为新操作；300 次完成后最旧操作被裁剪，最新仍可查询 |
 | `test_persistence_failure_is_fail_closed` | PSH-04 | 身份持久化失败时无存活子进程且状态 `FAILED`；停止意图失败时进程仍在、状态 `RUNNING`、返回 `supervisor_unavailable` |
 | `test_descendant_cleanup_before_restart` | PSH-02 | 忽略 SIGTERM 的后代被 SIGKILL；只有旧组消失后才出现新 PID；旧 PGID 无成员 |
 | `test_interrupted_stop_recovery` | PSH-05 | 停止过程中 Supervisor 崩溃后，新实例恢复清理并到达 `STOPPED`，`desired_state=stopped` |
 | `test_recovery_unverifiable_identity` | PSH-05 | 篡改 `start_ticks` 后恢复为 `UNKNOWN`，进程未被信号 |
 | `test_shebang_script_start` | PSH-07 | `#!/bin/sh` 脚本执行并输出日志；缺失解释器启动失败且 `last_error` 指出解释器 |
+| `test_incomplete_start_is_not_auto_started` | PSH-04 | `STARTING` 且无身份的重启行被标记 `FAILED`，不会因陈旧 `desired_state` 自动启动 |
+| `test_persistence_marker_blocks_autostart` | PSH-04 | 持久化标记抑制新 boot 的 autostart；归一成功后标记清除 |
+| `test_persistence_failure_disables_auto_restart` | PSH-04 | 运行期写失败后自动重启被禁用；下一次 Supervisor 启动不恢复陈旧 running 意图 |
+| `test_operation_pruning_with_pending_front` | PSH-06 | 队首 pending 不会阻塞旧的已完成操作裁剪 |
+| `test_orphan_cleanup_with_never_policy` | PSH-02 | `never` 策略下 leader 退出的忽略 TERM 后代仍被清理 |
+| `supervisor_store_test::test_marker_and_schema_v2` | PSH-03/04 | 标记文件、anchor 列持久化、v1→v2 前向迁移 |
+| `supervisor_store_test::test_database_path_swap_and_file_types` | PSH-03 | 目录替换不重定向写入；符号链接/FIFO 数据库被拒绝 |
+| `supervisor_log_store_test::test_directory_swap_and_file_types` | PSH-03 | 目录替换后日志仍写入原目录；FIFO 日志不阻塞且被拒绝 |
 | `supervisor_store_test` 目录用例 | PSH-03 | 拒绝 `/`、相对路径、`.`/`..`、符号链接、普通文件与错误属主；系统祖先权限不变；嵌套目录创建为 `0700` |
 
-仍未执行（不得视为通过）：root UID/GID 切换（PSH-09）；OpenRC/BusyBox 真机与真实
-reboot（PSH-10）；高频日志/慢客户端/队列饱和/多服务并发压力（PSH-11）；加固后的
-musl/static-PIE 与 ARM64/QEMU 重跑（本轮未改 CMake、第三方库或平台适配，未执行 L2）。
+2026-10-23 已在 Ubuntu 26.04 / systemd 虚拟机完成 root UID/GID 切换（PSH-09）、
+systemd 与真实 reboot（PSH-10）以及隔离实例的 30 分钟压力（PSH-11），详见下一节。
+OpenRC/BusyBox、ARM64/QEMU 与 Bootlin musl 交叉构建仍未执行，不得视为通过。
 
 2026-10-23 安装器 `--ops` 改动复跑 L1 时，首次 `ctest -j4` 命中
 `supervisor_engine_test` 的退避计时断言（`backoff_durations[0] >= 180`）。该用例以
@@ -559,16 +569,70 @@ musl/static-PIE 与 ARM64/QEMU 重跑（本轮未改 CMake、第三方库或平�
 
 ### 明确未验证项
 
-- **root 身份切换**：集成测试以 `uid=1000` 运行，未实际以 root 启动 Supervisor，也未验证
-  跨 UID/GID 的 `setgroups`/`setgid`/`setuid` 失败清理。相关配置校验与拒绝路径有原生测试，
-  但运行时身份切换没有证据。
-- **init 真机**：systemd 已在 Ubuntu 26.04 测试机完成真实安装、启停与重启验证
-  （见“安装器实际执行记录”）；OpenRC 与 BusyBox 仍只有生成物和语法检查，未在真实
-  init 环境执行启动、停止、Supervisor 崩溃后的 respawn。不得视为平台验收通过。
-- **真实 reboot**：未执行系统重启；boot ID 变化后的 `autostart` 行为只有代码路径和单元级
-  构造测试，没有真实断电/重启证据。
+- **root 身份切换（PSH-09）**：已在本轮 Ubuntu 26.04 虚拟机以 root 实测，见“虚拟机
+  root/systemd/reboot 验收”。
+- **init 真机（PSH-10）**：systemd 已完成真实安装、启停、respawn 与 reboot 验证；
+  **OpenRC 与 BusyBox 仍只有生成物和语法检查**，未在真实 init 环境执行启动、停止、
+  Supervisor 崩溃后的 respawn。不得视为平台验收通过。
+- **真实 reboot（PSH-10）**：已执行真实 `systemctl reboot` 并验证 boot ID 变化后的
+  autostart 与人工停止语义。
 - **Buildroot/真实硬件、ARM32**：未构建、未运行。
-- **压力/高频日志/慢客户端/消息洪流**：只有单元级边界测试，没有长时间压力测试或基准数据。
+- **压力（PSH-11）**：已在隔离实例执行 30 分钟 / 1,000+ 生命周期操作；真实硬件长期
+  运行与文件系统损坏注入仍未执行。
 - **systemd/OpenRC/BusyBox 之外的发行版与容器环境**：未验证。
 
 实施期间仍按本文件前述 L0/L1/L2 规则执行。发布前须实际运行适用的完整矩阵；静态编译成功不能代替进程生命周期、权限和 init 行为的运行验证。
+
+## 虚拟机 root/systemd/reboot/压力验收（2026-10-23）
+
+### 环境
+
+- 目标：`root@192.168.1.74`，Ubuntu 26.04 LTS，内核 `7.0.2-6-pve`，x86_64，
+  systemd 259，8 GiB RAM，`/` 可用约 46 GiB。
+- 安装前备份：`/root/edgedesk-backup-20261023-135723`（`/etc/edgedesk`、
+  `edgedesk*.service`、`/var/lib/edgedesk`、`/var/lib/edgedesk-supervisor`）。
+- 隔离测试：`pshsvc`（服务身份）、`pshclient`（socket 组）、`pshother`（未授权），
+  `/root/psh-accept` + `/srv/psh-accept` + `/run/psh-accept`；
+  系统实例继续使用安装器目录。
+- 二进制：`cmake --build --preset release-embed`（x86_64 musl static-pie）。
+
+### 实际执行
+
+| 场景 | 命令/方法 | 结果 |
+| --- | --- | --- |
+| 宿主 L0 | `scripts/test-fast.sh` | 26/26 原生、前端 155 通过 |
+| 宿主 L1 | `scripts/test-pr.sh` | 前端构建 + 26/26 ctest + 完整集成套件通过（86 s） |
+| static-pie L2 | `ctest --preset release-embed` | 26/26 通过；两个二进制均为 static-pie |
+| 权限隔离（A） | 隔离 root Supervisor + Python JSON-RPC 客户端 | 46/46：UID/GID/补充组、cwd、anchor UID=0、socket 0660 root:pshclients、`SO_PEERCRED` 拒绝、SIGTERM/SIGKILL、孤儿清理、DB/日志 0600/0700 |
+| systemd（B） | `systemctl restart/stop/start`、`kill -9` Supervisor | 24/24：graceful restart 重启服务；SIGKILL 后 2 s respawn 并以原 PID 接管；stop/start 恢复 `desired_state=running` |
+| 真实 reboot | `systemctl reboot`，SSH 恢复后重新验证 | 19/19：新 boot ID、autostart 启动、人工停止保持、DB v2/quick_check、anchor 重建 |
+| 压力（C） | 隔离实例，7 类并发 worker，1,000+ 操作 / 30 分钟 | 结果见 SPEC-0010 §6；结束后无测试进程、无 anchor、SQLite 完整、资源有界 |
+
+### root/权限验收细节
+
+- 服务以 `pshsvc`（uid 995/gid 984）运行，`/proc/<pid>/status` 的 Uid/Gid 与
+  `id -G` 一致；anchor 为 uid 0 且与工作负载同 PGID/SID。
+- socket `srw-rw---- root pshclients`；组内 UID 可连接；未在允许列表的组内 peer
+  被 `SO_PEERCRED` 拒绝（日志 `rejected IPC peer uid=994 gid=1000`）。
+- 数据库 `0600 root:root`，数据/日志目录 `0700 root:root`，服务日志 `0600 root`，
+  服务 cwd `0700 pshsvc`，可执行文件 root 所有且非组/世界可写。
+- SIGTERM 优雅停止在 `stop_timeout_ms=1500` 内完成；忽略 SIGTERM 的服务在约 1.7 s 后
+  被 SIGKILL，`last_signal=9`；无关 `sleep 600` 全程存活。
+- root 服务必须 `allow_root=true`；未确认时返回 `root_confirmation_required`；
+  未知 `run_user` 被拒绝。
+
+### systemd 与 reboot 细节
+
+- 系统数据库从 schema v1 迁移到 v2（新增 anchor 列），`PRAGMA quick_check=ok`，
+  原有 0 行数据保持不变。
+- 真实 reboot 前后 boot ID 由 `07ebc04e-f5ca-4196-871b-3bf2d9d0ca95` 变为
+  `8e30915e-c4e6-4e17-a5db-907fc3726e82`。
+- `autostart=true` 的测试服务在新 boot 自动启动并以 pshsvc 运行；人工停止的服务
+  保持 `STOPPED`、`desired_state=stopped`、身份列清零。
+- `systemctl --failed` 为空；journal 无 error/failure 记录。
+
+### 仍未验证
+
+- OpenRC / BusyBox init 的真实启停、respawn、reboot（本机只有 systemd）。
+- ARM64/QEMU、Bootlin musl 交叉构建在本轮未重跑。
+- 真实硬件断电/文件系统损坏/磁盘满故障注入。

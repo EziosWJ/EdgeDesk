@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,6 +37,10 @@ struct EngineOptions {
     // persistence write fail. Used to prove the fail-safe ordering required by
     // SPEC-0010 PSH-04; never set by production callers.
     std::function<bool()> persistence_fault;
+    // Directory used for per-spawn executable symlinks (see spawn_service).
+    // Empty selects /run/edgedesk-supervisor-exec for root and a per-UID
+    // directory under /tmp otherwise.
+    std::string exec_staging_directory;
 };
 
 struct RpcResult {
@@ -145,11 +150,20 @@ private:
     bool group_alive(const ServiceHandle& handle) const;
     bool group_verifiable(const ServiceHandle& handle) const;
     bool group_uncertain(const ServiceHandle& handle) const;
+    bool group_anchor_only(const ServiceHandle& handle) const;
     bool leader_alive(const ServiceHandle& handle) const;
     bool unverified_process_may_exist(const ServiceHandle& handle) const;
+    // Clears PID/PGID/start/boot-scoped identity. A still-unreaped anchor PID is
+    // remembered so poll() can reap it without logging an "unknown child".
+    void clear_identity(ServiceHandle& handle);
+    void handle_anchor_exit(ServiceHandle& handle, std::int64_t now_ms);
+    void remove_exec_staging(ServiceHandle& handle);
+    // Applies the fail-safe reaction to a runtime persistence failure.
+    void mark_persistence_failure(ServiceHandle& handle, std::string_view context);
 
     EngineOptions options_;
     std::string boot_id_;
+    std::string exec_staging_;
     std::int64_t started_at_ms_ = 0;
     std::int64_t engine_steady_ms_ = 0;
     bool shutting_down_ = false;
@@ -162,6 +176,10 @@ private:
     std::vector<PendingOperation> pending_;
     std::map<std::string, ServiceOperation> operations_;
     std::deque<std::string> operation_order_;
+    // Anchor PIDs whose identity metadata was cleared before poll() reaped the
+    // zombie. Bounded: entries are removed on reap and the set is reset if it
+    // ever grows beyond a fixed limit.
+    std::set<int> retired_anchor_pids_;
 };
 
 } // namespace edgedesk::supervisor

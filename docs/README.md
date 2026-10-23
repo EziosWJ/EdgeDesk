@@ -69,7 +69,7 @@
 | [ADR-0016](adr/0016-process-supervisor-security.md) | root 守护进程、运行身份隔离、IPC 与执行安全 | 已实现（V1.0；root/init 真机验证待补） |
 | [ADR-0017](adr/0017-root-operations-profile.md) | 安装器 `--ops` root 运维模式：unit、Supervisor 允许列表与目录属主 | Accepted（暂存测试通过；真机手工迁移已验证，`--ops` 重装未验证） |
 | [ADR-0018](adr/0018-native-application-packages.md) | 原生应用包、单 ELF 后端、Supervisor 生命周期、HTTP over UDS 与覆盖升级 | Accepted（实施待开始） |
-| [ADR-0019](adr/0019-process-supervisor-identity-and-operations.md) | Supervisor 进程组三态身份、异步操作契约、持久化顺序、脚本执行与审计边界 | Accepted（PSH-01～08 已实现；平台项未验证） |
+| [ADR-0019](adr/0019-process-supervisor-identity-and-operations.md) | Supervisor 进程组四态身份（anchor）、异步操作契约、持久化顺序、staging 执行与审计边界 | Accepted（PSH-01～11 已实现；systemd/reboot 已验收，OpenRC/BusyBox/ARM 未验证） |
 
 ## Spec（要做什么）
 

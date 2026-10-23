@@ -38,16 +38,31 @@ public:
     Error save_runtime(std::string_view id, const ServiceRuntime& runtime);
     Error count(std::uint64_t& out) const;
 
-    static constexpr int schema_version() { return 1; }
+    // Durable "previous persistence writes failed" marker. It lives next to the
+    // database and is created through the verified directory descriptor so a
+    // path swap cannot redirect it. Startup uses it to refuse auto-starting
+    // services from a runtime row that may not reflect the last transition
+    // (SPEC-0010 PSH-04).
+    Error mark_inconsistent(std::string_view reason);
+    bool inconsistent_marker_present() const;
+    Error clear_inconsistent_marker();
+
+    static constexpr int schema_version() { return 2; }
 
 private:
-    SupervisorStore(std::string database_path, sqlite3* db) : database_path_(std::move(database_path)), db_(db) {}
+    SupervisorStore(std::string database_path, sqlite3* db, int directory_fd)
+        : database_path_(std::move(database_path)), db_(db), directory_fd_(directory_fd) {}
     Error initialize_schema();
-    Error apply_schema_v1();
+    Error apply_schema_v2();
+    Error migrate_schema_v1();
     Error set_user_version(int version);
 
     std::string database_path_;
     sqlite3* db_ = nullptr;
+    // Pins the data directory inode for the connection lifetime. The SQLite
+    // filename is opened through /proc/self/fd/<directory_fd_>/<basename>, so
+    // renaming or replacing the configured path cannot move the database.
+    int directory_fd_ = -1;
 };
 
 // Private directory helper shared with tests. The path is walked component by
@@ -55,7 +70,12 @@ private:
 // without ".", "..", symlink or non-directory components. Missing components are
 // created as 0700. Only the final configured directory is verified to be owned
 // by the effective user and tightened to 0700; ancestors are never modified.
-bool ensure_private_directory(const std::string& path, std::string& error);
+//
+// When `directory_fd` is non-null it receives an open descriptor for the final
+// directory (caller closes it). Keeping that descriptor open pins the directory
+// inode so later file operations use openat instead of re-resolving the path.
+bool ensure_private_directory(const std::string& path, std::string& error,
+                              int* directory_fd = nullptr);
 Error sqlite_error_to_error(int code, const std::string& context);
 
 } // namespace edgedesk::supervisor

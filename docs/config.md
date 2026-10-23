@@ -296,7 +296,7 @@ Web 后端仍只监听管理员配置的 HTTP 地址（Phase 1 仅回环），Su
 | 选项 | 默认值 | 说明 |
 |---|---|---|
 | `--socket PATH` | `/run/edgedesk-supervisor.sock` | Unix Domain Socket；目录必须由 Supervisor 用户拥有且不可被组/其他用户写 |
-| `--database PATH` | `/var/lib/edgedesk-supervisor/supervisor.db` | 独立 SQLite schema v1 |
+| `--database PATH` | `/var/lib/edgedesk-supervisor/supervisor.db` | 独立 SQLite schema v2（v1 自动前向迁移） |
 | `--log-dir PATH` | `/var/lib/edgedesk-supervisor/logs` | 每服务一个有界轮转日志 |
 | `--allow-uid USER\|UID` | root 时 `0`；非 root 时自身 UID | 允许连接 IPC 的对端 UID，可重复 |
 | `--allow-gid GROUP\|GID` | 无 | 允许连接 IPC 的对端主 GID，可重复 |
