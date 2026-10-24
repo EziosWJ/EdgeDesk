@@ -239,6 +239,25 @@ if grep -q '"event":"supervisor.logs"' "$SUP_STATE/audit.log"; then
 fi
 grep -q '"event":"supervisor.delete"' "$SUP_STATE/audit.log"
 grep -q 'root_confirmation_required' "$SUP_STATE/audit.log"
+
+log "native application backend install/start/proxy/upgrade/uninstall"
+if [ -n "$RUNNER" ]; then
+  echo "[integration] native backend phase skipped under cross-runner" >&2
+else
+  COMMAND_CC=${CC:-cc}
+  if ! command -v "$COMMAND_CC" >/dev/null 2>&1; then
+    echo "cc is required to build the native backend example for the integration suite" >&2
+    exit 1
+  fi
+  NATIVE_DIR="$ROOT/native-backend"
+  mkdir -p "$NATIVE_DIR"
+  "$COMMAND_CC" -std=c11 -O2 -Wall -Wextra -Werror \
+    -o "$NATIVE_DIR/notes-backend" \
+    "$PWD/tools/ext-sdk/templates/native-backend/backend/main.c"
+  python3 scripts/native_backend_test.py --host 127.0.0.1 --port "$SUP_PORT" \
+    --password "$NEW_PASSWORD" --apps-root "$APPS" --binary "$NATIVE_DIR/notes-backend"
+fi
+
 stop_pid "$SUP_SERVER_PID"
 stop_pid "$SUP_PID"
 

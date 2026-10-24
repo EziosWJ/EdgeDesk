@@ -487,6 +487,17 @@ Error ZipReader::extract_all(int dir_fd, std::vector<IntegrityEntry>& integrity,
         UniqueFd output_fd(::openat(parent.get(), final_name.c_str(),
                                     O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
         if (!output_fd.valid()) return io_error("create package file " + entry.name);
+        // The package's Unix mode is the only signal for whether a declared
+        // backend executable is actually executable. Keep those bits so the
+        // installer can validate the package contract instead of inventing an
+        // execute bit after extraction. Everything else is normalized to the
+        // host's private staging mode (no group/other access, no setuid bits).
+        const std::uint32_t package_mode = entry.external_attributes >> 16;
+        const mode_t extracted_mode =
+            package_mode == 0 ? 0600 : static_cast<mode_t>(0600 | (package_mode & 0111));
+        if (::fchmod(output_fd.get(), extracted_mode) != 0) {
+            return io_error("set package file mode " + entry.name);
+        }
 
         Sha256 hasher;
         std::uint64_t produced_total = 0;

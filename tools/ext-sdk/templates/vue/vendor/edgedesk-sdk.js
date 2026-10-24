@@ -326,6 +326,19 @@ export class EdgeDeskClient {
     return this.call('terminal.sessions.close', { sessionId }, options);
   }
 
+  // ---- native backend (SPEC-0011) ----
+  /**
+   * Proxy a JSON HTTP request to this application's own native backend. The
+   * host resolves the socket from the authenticated runtime instance; callers
+   * cannot name a host, port, socket or another application.
+   */
+  backendRequest(method, path, options = {}) {
+    const params = { method: String(method).toUpperCase(), path: String(path) };
+    if (options.body !== undefined) params.body = options.body;
+    if (options.contentType !== undefined) params.contentType = options.contentType;
+    return this.call('backend.request', params, options);
+  }
+
   // ---- events ----
   subscribe(events, options) {
     return this.call('events.subscribe', { events }, options);

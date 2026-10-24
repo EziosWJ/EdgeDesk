@@ -13,7 +13,7 @@
 namespace edgedesk::extensions {
 namespace {
 
-constexpr int kSchemaVersion = 2;
+constexpr int kSchemaVersion = 3;
 
 class Stmt {
 public:
@@ -155,7 +155,15 @@ bool ensure_private_directory(const std::string& path, std::string& error) {
                     error = "directory is not owned by the service user: " + current;
                     return false;
                 }
-                if (::chmod(current.c_str(), 0700) != 0) {
+                // Traversal-only (0711) is the single non-private mode the
+                // native backend feature establishes for EdgeDesk-owned roots:
+                // a non-root backend identity must reach its own data/run
+                // directory. Preserve exactly that mode; every other mode is
+                // tightened back to 0700 on startup. Anything broader (group
+                // or other write/read) is still reduced.
+                const mode_t existing = info.st_mode & 07777;
+                const mode_t wanted = existing == 0711 ? 0711 : 0700;
+                if (::chmod(current.c_str(), wanted) != 0) {
                     error = "cannot tighten directory permissions: " + current + ": " + std::strerror(errno);
                     return false;
                 }
@@ -308,6 +316,22 @@ CREATE TABLE IF NOT EXISTS app_kv (
     size_bytes INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY(app_id, key)
+);
+CREATE TABLE IF NOT EXISTS app_backends (
+    app_id TEXT PRIMARY KEY,
+    service_id TEXT NOT NULL UNIQUE,
+    executable_rel TEXT NOT NULL,
+    args_json TEXT NOT NULL DEFAULT '[]',
+    arch TEXT NOT NULL,
+    run_user TEXT NOT NULL DEFAULT '',
+    run_group TEXT NOT NULL DEFAULT '',
+    allow_root INTEGER NOT NULL DEFAULT 0,
+    autostart INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'stopped',
+    error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(app_id) REFERENCES apps(app_id) ON DELETE CASCADE
 );
 )SQL";
     error = exec_locked(schema);
@@ -738,6 +762,164 @@ Error ExtensionStore::list_network_origins(std::string_view app_id,
 
 Error ExtensionStore::clear_network_origins(std::string_view app_id) {
     return replace_network_origins(app_id, {});
+}
+
+Error ExtensionStore::upsert_backend(const BackendRecord& record) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const std::string args_json = nlohmann::json(record.args).dump();
+    Error error;
+    Stmt stmt(db_,
+              "INSERT INTO app_backends(app_id, service_id, executable_rel, args_json, arch, "
+              "run_user, run_group, allow_root, autostart, state, error, created_at, updated_at) "
+              "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+              "ON CONFLICT(app_id) DO UPDATE SET service_id=excluded.service_id, "
+              "executable_rel=excluded.executable_rel, args_json=excluded.args_json, "
+              "arch=excluded.arch, run_user=excluded.run_user, run_group=excluded.run_group, "
+              "allow_root=excluded.allow_root, autostart=excluded.autostart, "
+              "state=excluded.state, error=excluded.error, updated_at=excluded.updated_at",
+              error);
+    if (!stmt.ok()) return error;
+    const std::int64_t now = now_unix_seconds();
+    stmt.text(1, record.app_id);
+    stmt.text(2, record.service_id);
+    stmt.text(3, record.executable_rel);
+    stmt.text(4, args_json);
+    stmt.text(5, record.arch);
+    stmt.text(6, record.run_user);
+    stmt.text(7, record.run_group);
+    stmt.int64(8, record.allow_root ? 1 : 0);
+    stmt.int64(9, record.autostart ? 1 : 0);
+    stmt.text(10, record.state);
+    stmt.text(11, record.error);
+    stmt.int64(12, record.created_at > 0 ? record.created_at : now);
+    stmt.int64(13, now);
+    return step_result(db_, stmt.step(), "upsert backend");
+}
+
+Error ExtensionStore::get_backend(std::string_view app_id, BackendRecord& out, bool& found) const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    found = false;
+    out = {};
+    Error error;
+    Stmt stmt(db_,
+              "SELECT app_id, service_id, executable_rel, args_json, arch, run_user, run_group, "
+              "allow_root, autostart, state, error, created_at, updated_at "
+              "FROM app_backends WHERE app_id=?",
+              error);
+    if (!stmt.ok()) return error;
+    stmt.text(1, app_id);
+    const int result = stmt.step();
+    if (result == SQLITE_DONE) return Error::none();
+    if (result != SQLITE_ROW) return step_result(db_, result, "read backend");
+    out.app_id = column_text(stmt.get(), 0);
+    out.service_id = column_text(stmt.get(), 1);
+    out.executable_rel = column_text(stmt.get(), 2);
+    const auto args = nlohmann::json::parse(column_text(stmt.get(), 3), nullptr, false);
+    if (args.is_discarded() || !args.is_array()) {
+        return Error::make(ErrorCode::io_error, "stored backend args_json is invalid");
+    }
+    out.args.clear();
+    for (const auto& item : args) {
+        if (!item.is_string()) {
+            return Error::make(ErrorCode::io_error, "stored backend args_json is invalid");
+        }
+        out.args.push_back(item.get<std::string>());
+    }
+    out.arch = column_text(stmt.get(), 4);
+    out.run_user = column_text(stmt.get(), 5);
+    out.run_group = column_text(stmt.get(), 6);
+    out.allow_root = column_int64(stmt.get(), 7) != 0;
+    out.autostart = column_int64(stmt.get(), 8) != 0;
+    out.state = column_text(stmt.get(), 9);
+    out.error = column_text(stmt.get(), 10);
+    out.created_at = column_int64(stmt.get(), 11);
+    out.updated_at = column_int64(stmt.get(), 12);
+    found = true;
+    return Error::none();
+}
+
+Error ExtensionStore::list_backends(std::vector<BackendRecord>& out) const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    out.clear();
+    Error error;
+    Stmt stmt(db_, "SELECT app_id FROM app_backends ORDER BY app_id", error);
+    if (!stmt.ok()) return error;
+    for (;;) {
+        const int result = stmt.step();
+        if (result == SQLITE_DONE) break;
+        if (result != SQLITE_ROW) return step_result(db_, result, "list backends");
+        BackendRecord record;
+        bool found = false;
+        Error read_error = get_backend(column_text(stmt.get(), 0), record, found);
+        if (!read_error.ok()) return read_error;
+        if (found) out.push_back(std::move(record));
+    }
+    return Error::none();
+}
+
+Error ExtensionStore::set_backend_state(std::string_view app_id, std::string_view state,
+                                        const std::string& error_message) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Error error;
+    Stmt stmt(db_, "UPDATE app_backends SET state=?, error=?, updated_at=? WHERE app_id=?", error);
+    if (!stmt.ok()) return error;
+    stmt.text(1, state);
+    stmt.text(2, error_message);
+    stmt.int64(3, now_unix_seconds());
+    stmt.text(4, app_id);
+    Error step_error = step_result(db_, stmt.step(), "update backend state");
+    if (!step_error.ok()) return step_error;
+    if (sqlite3_changes(db_) == 0) {
+        return Error::make(ErrorCode::not_found, "application has no native backend");
+    }
+    return Error::none();
+}
+
+Error ExtensionStore::set_backend_identity(std::string_view app_id, const std::string& run_user,
+                                           const std::string& run_group, bool allow_root) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Error error;
+    Stmt stmt(db_,
+              "UPDATE app_backends SET run_user=?, run_group=?, allow_root=?, updated_at=? "
+              "WHERE app_id=?",
+              error);
+    if (!stmt.ok()) return error;
+    stmt.text(1, run_user);
+    stmt.text(2, run_group);
+    stmt.int64(3, allow_root ? 1 : 0);
+    stmt.int64(4, now_unix_seconds());
+    stmt.text(5, app_id);
+    Error step_error = step_result(db_, stmt.step(), "update backend identity");
+    if (!step_error.ok()) return step_error;
+    if (sqlite3_changes(db_) == 0) {
+        return Error::make(ErrorCode::not_found, "application has no native backend");
+    }
+    return Error::none();
+}
+
+Error ExtensionStore::set_backend_autostart(std::string_view app_id, bool autostart) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Error error;
+    Stmt stmt(db_, "UPDATE app_backends SET autostart=?, updated_at=? WHERE app_id=?", error);
+    if (!stmt.ok()) return error;
+    stmt.int64(1, autostart ? 1 : 0);
+    stmt.int64(2, now_unix_seconds());
+    stmt.text(3, app_id);
+    Error step_error = step_result(db_, stmt.step(), "update backend autostart");
+    if (!step_error.ok()) return step_error;
+    if (sqlite3_changes(db_) == 0) {
+        return Error::make(ErrorCode::not_found, "application has no native backend");
+    }
+    return Error::none();
+}
+
+Error ExtensionStore::delete_backend(std::string_view app_id) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Error error;
+    Stmt stmt(db_, "DELETE FROM app_backends WHERE app_id=?", error);
+    if (!stmt.ok()) return error;
+    stmt.text(1, app_id);
+    return step_result(db_, stmt.step(), "delete backend");
 }
 
 Error ExtensionStore::insert_integrity_locked(const std::vector<IntegrityEntry>& entries,

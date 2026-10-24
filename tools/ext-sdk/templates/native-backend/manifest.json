@@ -1,0 +1,20 @@
+{
+  "id": "dev.edgedesk.notes-example",
+  "name": "Notes Backend Example",
+  "description": "Static Web UI plus one native C backend served over a Unix domain socket",
+  "version": "1.0.0",
+  "entry": "index.html",
+  "minHostApiVersion": "1.0.0",
+  "maxHostApiVersion": "1.9.9",
+  "permissions": [],
+  "window": {
+    "defaultWidth": 820,
+    "defaultHeight": 620,
+    "minWidth": 420,
+    "minHeight": 320,
+    "instances": "single"
+  },
+  "backend": {
+    "executable": "backend/notes-backend"
+  }
+}

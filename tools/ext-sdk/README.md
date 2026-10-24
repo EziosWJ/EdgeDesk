@@ -1,8 +1,9 @@
 # EdgeDesk Extension SDK 1.0
 
-Independent development toolkit for EdgeDesk static Web applications. Node.js
-is used only as a development/build tool; EdgeDesk devices never execute
-Node.js, and installed packages contain static assets only.
+Independent development toolkit for EdgeDesk applications. Node.js is used
+only as a development/build tool; EdgeDesk devices never execute Node.js or any
+script shipped in a package. A package contains static Web assets and,
+optionally, one native ELF backend (SPEC-0011).
 
 ## Package layout
 
@@ -10,23 +11,27 @@ Node.js, and installed packages contain static assets only.
 manifest.json       required, stable reverse-domain id + SemVer
 index.html          required entry
 assets/...          built static resources, relative paths only
+backend/<name>      optional executable ELF (one architecture per package)
 ```
 
 No symlinks, absolute paths, `..`, duplicate (case-insensitive) names or
-backend/script runtime payloads are accepted. ZIP packages are uploaded by an
+script runtime payloads are accepted. ZIP packages are uploaded by an
 administrator and installed as immutable internal revisions.
 
 ## CLI
 
 ```bash
-# Validate manifest, assets and relative references
+# Validate manifest, assets, backend path/ELF and relative references
 node bin/edgedesk-ext.js validate ./dist
 
-# Validate and create a ZIP package
+# Validate and create a ZIP package (keeps the executable bit)
 node bin/edgedesk-ext.js pack ./dist my-app.edgedesk.zip
 
-# Inspect an existing package's entry list
+# Inspect an existing package's entry list (marks executable entries)
 node bin/edgedesk-ext.js inspect my-app.edgedesk.zip
+
+# Scaffold from a template
+node bin/edgedesk-ext.js init ./my-app --template native-backend
 ```
 
 Build a framework template with Vite first (`npm run build`), then run the CLI
@@ -48,6 +53,9 @@ await client.storageSet('settings', { theme: 'dark' });
 const listing = await client.filesList('/');
 const entry = await client.uploadFile('/report.bin', file);
 const blob = await client.downloadFile('/report.bin');
+
+const health = await client.backendRequest('GET', '/health');
+const result = await client.backendRequest('POST', '/notes', { body: { text: 'hello' } });
 
 const session = await client.terminalCreate({ title: 'App shell' });
 client.on('terminal.output', ({ sessionId, data }) => {
@@ -94,13 +102,91 @@ targets host API `1.0.0`. `manifest.json` must declare
 `minHostApiVersion`/`maxHostApiVersion`; missing, malformed or out-of-range
 values prevent the app from being enabled.
 
+## Native backend packages (SPEC-0011)
+
+A package may add one optional native backend. It is never executed during
+installation; EdgeDesk validates it, copies it to a stable program path and
+lets an administrator start it through the Process Supervisor.
+
+### Manifest
+
+```json
+"backend": {
+  "executable": "backend/notes-backend",
+  "args": ["--mode", "notes"]
+}
+```
+
+| Field | Rule |
+| --- | --- |
+| `backend` | Optional object. Missing = Web-only app with unchanged behavior. |
+| `backend.executable` | Required normalized relative path, max 4096 bytes. Rejected: absolute path, `..`, `.`, empty segment, backslash, NUL/control characters. |
+| `backend.args` | Optional string array: max 128 entries, max 8192 bytes each, max 128 KiB total. Each entry is one argv element; there is no shell expansion. |
+
+All other `backend` keys are rejected, including `run_user`, `run_group`,
+`root`, `autostart`, `socket`, `data_dir`, `url` and `port`. Identity,
+autostart, socket and data directory are administrator/host properties.
+
+The SDK validator checks that the executable exists, is a regular file, has
+the executable bit set and has a supported ELF header (x86_64, aarch64, arm32;
+ET_EXEC/ET_DYN, little-endian). It warns when the target architecture differs
+from the validator host. The **device performs the authoritative ELF,
+executable-mode and architecture checks at install** and rejects scripts,
+non-ELF files, symlinks and mismatched architectures.
+
+### Runtime contract
+
+- `EDGEDESK_APP_SOCKET`: absolute Unix socket path supplied by the host.
+- `EDGEDESK_APP_DATA_DIR`: absolute persistent data directory supplied by the
+  host. The manifest cannot override either variable.
+- The backend binds a `SOCK_STREAM` UDS and answers HTTP/1.1 with
+  `Content-Length`. V1 proxies JSON `GET|POST|PUT|PATCH|DELETE` requests only;
+  no WebSocket, streaming, arbitrary TCP or cross-app access.
+- The sandboxed UI calls `client.backendRequest(method, path, { body })`; the
+  host resolves the socket from the authenticated runtime instance, so the page
+  can never name a host, port or socket.
+- Run the process as an administrator-selected user/group. The program
+  directory is not writable by that user; persistent data belongs under
+  `EDGEDESK_APP_DATA_DIR`. The socket uses mode `0660` and the run directory is
+  created by EdgeDesk; unsafe permissions cause startup to be refused.
+- Installation and upgrade leave the backend stopped and autostart off.
+  Native upgrades overwrite the stable program path; there is **no automatic
+  rollback**. A failed upgrade keeps the app stopped and marks it
+  `UPGRADE_FAILED`. Uninstall keeps data by default.
+
+### Package layout
+
+```text
+manifest.json
+index.html
+... static assets ...
+backend/notes-backend     ELF executable, mode 0755
+```
+
+One package targets exactly one architecture. Build and publish x86_64,
+aarch64 and arm32 packages separately; a package for another architecture is
+rejected by the device.
+
+### Unsigned packages
+
+Signatures are not required in V1. SHA-256 integrity entries detect corruption
+and content changes but do not prove the publisher. Install only packages from
+a trusted source; a backend runs with the OS permissions of the selected
+identity (including host-level access if an administrator selects root).
+
+See `templates/native-backend` for a complete C example, build/cross-compile
+commands and the executed-versus-unverified evidence notes.
+
 ## Templates
 
+- `templates/native-backend` — static UI + POSIX C backend (SPEC-0011)
 - `templates/vanilla` — no build step, directly packable
 - `templates/react` — React + Vite
 - `templates/vue` — Vue + Vite
 - `templates/svelte` — Svelte + Vite
 
-Each template vendors `vendor/edgedesk-sdk.js` so it can be built offline.
-Framework templates require their own `npm install` in the template directory;
-the SDK itself has no runtime dependencies.
+`edgedesk-ext init <dir> --template <name>` copies any of these. Each template
+vendors `vendor/edgedesk-sdk.js` so it can be built offline. Framework
+templates require their own `npm install` in the template directory; the SDK
+itself has no runtime dependencies. `native-backend` additionally requires a C
+compiler (`make`) and must be built before `validate`/`pack`.

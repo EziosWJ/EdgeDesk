@@ -51,7 +51,10 @@ public:
     std::uint64_t file_size() const { return file_size_; }
 
     // Extracts every entry below `dir_fd` (an opened directory), creates
-    // parent directories with 0700, files with 0600 and computes SHA-256.
+    // parent directories with 0700 and files with 0600 plus only the package's
+    // Unix execute bits (if any), and computes SHA-256. Preserving the execute
+    // bits lets the installer validate the declared backend executable instead
+    // of granting an execute bit that the package never carried.
     // On failure the caller owns cleanup of the temporary directory.
     //
     // The install path uses this overload: the integrity manifest is the only

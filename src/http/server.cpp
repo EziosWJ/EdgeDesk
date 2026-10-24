@@ -1,9 +1,11 @@
 #include "http/server.hpp"
 
 #include "http/routes/auth_route.hpp"
+#include "http/routes/backend_proxy_route.hpp"
 #include "http/routes/extension_route.hpp"
 #include "http/routes/file_route.hpp"
 #include "http/routes/health_route.hpp"
+#include "http/routes/native_backend_route.hpp"
 #include "http/routes/settings_route.hpp"
 #include "http/routes/supervisor_route.hpp"
 #include "http/routes/system_route.hpp"
@@ -49,6 +51,8 @@ int Server::run() {
     register_settings_routes(router, context_);
     register_supervisor_routes(router, context_);
     register_extension_routes(router, context_);
+    register_native_backend_routes(router, context_);
+    register_backend_proxy_routes(router, context_);
 
     // Extension application assets are served from immutable revision
     // directories by the async /apps/* route registered above. Anything under

@@ -525,10 +525,69 @@ void test_script_inode_and_argv() {
 
 } // namespace
 
+// SPEC-0011: application-managed services are identified by the host-owned
+// socket environment variable. Their program tree must not be writable by the
+// backend identity; this covers Supervisor autostart/recovery paths that do not
+// pass through the extension lifecycle.
+void test_native_app_program_ownership_gate() {
+    struct passwd* entry = ::getpwuid(::geteuid());
+    if (entry == nullptr) return;
+    struct group* group_entry = ::getgrgid(::getegid());
+    ResolvedIdentity identity;
+    identity.uid = ::geteuid();
+    identity.gid = ::getegid();
+    identity.user_name = entry->pw_name != nullptr ? entry->pw_name : "";
+    identity.group_name = group_entry != nullptr && group_entry->gr_name != nullptr
+                              ? group_entry->gr_name
+                              : "";
+    identity.home = entry->pw_dir != nullptr ? entry->pw_dir : "/";
+    identity.supplementary_groups = {::getegid()};
+    identity.is_root = ::geteuid() == 0;
+
+    ServiceConfig config;
+    config.name = "app-program-gate";
+    config.executable = "/bin/sleep";
+    config.args = {"5"};
+    config.cwd = "/bin"; // host-owned, not writable by the unprivileged identity
+    config.run_user = identity.user_name;
+    config.run_group = identity.group_name;
+    config.env["EDGEDESK_APP_SOCKET"] = "/tmp/edgedesk-gate.sock";
+
+    SpawnOutcome allowed = spawn_service(config, identity);
+    CHECK(allowed.error.ok());
+    if (allowed.error.ok()) {
+        std::string release_error;
+        CHECK(release_service_child(allowed.handshake_fd, release_error));
+        (void)::kill(-allowed.pgid, SIGKILL);
+        int status = 0;
+        while (::waitpid(allowed.pid, &status, 0) < 0 && errno == EINTR) {
+        }
+        if (allowed.log_read_fd >= 0) ::close(allowed.log_read_fd);
+        if (allowed.exec_read_fd >= 0) ::close(allowed.exec_read_fd);
+    }
+
+    if (::geteuid() == 0) {
+        // Root is a host-level identity explicitly accepted by allow_root; DAC
+        // cannot confine it, so the ownership gate is intentionally skipped.
+        return;
+    }
+
+    char directory[] = "/tmp/edgedesk-pc-gate-XXXXXX";
+    CHECK(::mkdtemp(directory) != nullptr);
+    ServiceConfig denied = config;
+    denied.cwd = directory; // owned by the backend identity
+    SpawnOutcome rejected = spawn_service(denied, identity);
+    CHECK(!rejected.error.ok());
+    CHECK(rejected.error.code == ErrorCode::permission_denied);
+    CHECK(rejected.pid <= 0);
+    (void)::rmdir(directory);
+}
+
 int main() {
     test_legacy_leader_identity();
     test_anchor_descendant_identity();
     test_spawn_anchor_lifecycle();
     test_script_inode_and_argv();
+    test_native_app_program_ownership_gate();
     return edgedesk::test::finish("process_control_test");
 }

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Notes Backend Example</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">EDGEDESK NATIVE BACKEND EXAMPLE</p>
+        <h1>Notes backend</h1>
+        <p class="hint">
+          The Web UI runs in the sandboxed iframe. Requests are proxied by the host over the
+          application's Unix domain socket; the page never sees the socket path.
+        </p>
+      </div>
+      <span id="status" class="status">connecting</span>
+    </header>
+
+    <main>
+      <section>
+        <h2>Health</h2>
+        <div class="row">
+          <button id="health" type="button">GET /health</button>
+          <code id="health-output">not called</code>
+        </div>
+      </section>
+
+      <section>
+        <h2>Notes</h2>
+        <form id="note-form" class="row">
+          <input id="note-text" maxlength="4096" placeholder="Write a note" autocomplete="off" />
+          <button type="submit">POST /notes</button>
+        </form>
+        <ul id="notes" class="notes"></ul>
+      </section>
+
+      <p id="error" class="error" role="status"></p>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

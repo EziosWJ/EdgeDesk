@@ -583,6 +583,38 @@ void test_manual_stop_survives_supervisor_restart() {
     CHECK_EQ(record.value("desired_state", std::string()), "stopped");
 }
 
+void test_autostart_disabled_before_reboot_does_not_start() {
+    Harness harness;
+    harness.root = make_root("edgedesk-engine-autostart-off-test");
+    const std::string database = (harness.root / "state" / "supervisor.db").string();
+    const std::string logs = (harness.root / "logs").string();
+    CHECK(create_engine(harness, database, logs, "boot-A"));
+    if (!harness.engine) return;
+
+    ServiceConfig config = config_for("autostart-off", "/bin/sleep", {"60"});
+    config.autostart = true;
+    const std::string id = create_service(harness, config);
+    CHECK(!id.empty());
+    if (id.empty()) return;
+
+    // Application disable disarms autostart before stopping. A later boot must
+    // not start the service even though the persisted config once had it on.
+    json params;
+    params["id"] = id;
+    params["autostart"] = false;
+    CHECK(harness.engine->rpc("service.update", params).ok);
+    CHECK_EQ(stop_service(*harness.engine, id).value("state", std::string()), "succeeded");
+    harness.engine.reset();
+    CHECK(create_engine(harness, database, logs, "boot-B"));
+    for (int index = 0; index < 40; ++index) {
+        (void)harness.engine->poll(steady_millis());
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    const json record = get_record(harness, id);
+    CHECK_EQ(record["state"].get<std::string>(), "STOPPED");
+    CHECK_EQ(record.value("autostart", true), false);
+}
+
 void test_adoption_after_abrupt_supervisor_exit() {
     Harness harness;
     harness.root = make_root("edgedesk-engine-adoption-test");
@@ -1596,6 +1628,7 @@ int main() {
     test_stop_escalates_to_sigkill();
     test_never_policy_does_not_restart();
     test_autostart_after_supervisor_restart();
+    test_autostart_disabled_before_reboot_does_not_start();
     test_manual_stop_survives_supervisor_restart();
     test_adoption_after_abrupt_supervisor_exit();
     test_delete_requires_stopped_service();

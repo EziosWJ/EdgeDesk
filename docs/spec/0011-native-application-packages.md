@@ -1,9 +1,9 @@
 # SPEC-0011：原生应用包与后端运行时
 
-- 状态：**Accepted（Grill 已结束，实施待开始）**
+- 状态：**宿主实现完成并完成 2026-10-23 审查加固（x86_64 glibc L0/L1 已验证；生产发布门槛未满足：root Supervisor + 跨 UID、ARM64/ARM32、musl 与真实 root 身份切换/init/reboot 未验证）**
 - 日期：2026-10-23
 - 关联基线：[SPEC-0007：扩展应用平台](0007-extension-applications.md)、[SPEC-0008：扩展平台加固](0008-extension-platform-hardening.md)、[SPEC-0009：Process Supervisor](0009-process-supervisor.md)、[SPEC-0010：Supervisor 安全与可靠性加固](0010-process-supervisor-hardening.md)
-- 关联 ADR：[ADR-0011](../adr/0011-extension-runtime-and-packages.md)、[ADR-0012](../adr/0012-extension-security-and-communication.md)、[ADR-0015](../adr/0015-process-supervisor-architecture.md)、[ADR-0016](../adr/0016-process-supervisor-security.md)、[ADR-0017](../adr/0017-root-operations-profile.md)、[ADR-0018](../adr/0018-native-application-packages.md)
+- 关联 ADR：[ADR-0011](../adr/0011-extension-runtime-and-packages.md)、[ADR-0012](../adr/0012-extension-security-and-communication.md)、[ADR-0015](../adr/0015-process-supervisor-architecture.md)、[ADR-0016](../adr/0016-process-supervisor-security.md)、[ADR-0017](../adr/0017-root-operations-profile.md)、[ADR-0018](../adr/0018-native-application-packages.md)、[ADR-0020](../adr/0020-native-backend-isolation-and-upgrade-consistency.md)
 - 实施计划：[SPEC-0011 实施计划与 Ticket 拆分](../tasks/0011-native-application-packages.md)
 
 > 本 SPEC 在现有静态 Web 扩展基础上增加可选的原生后端能力，不替换现有 Web 运行时。本文获批不代表功能已实现；实现状态以代码、自动化测试和 docs/testing.md 中的实际证据为准。
@@ -71,7 +71,7 @@ ZIP 包沿用现有 manifest.json 和 Web 静态资源。含原生后端的包�
 校验规则：
 
 - 路径必须是包内相对路径；拒绝绝对路径、路径穿越、符号链接、重复路径和非普通文件。
-- 目标必须是可执行 ELF 文件；拒绝脚本、非 ELF 文件和不可执行文件。
+- 目标必须是可执行 ELF 文件；拒绝脚本、非 ELF 文件和不可执行文件。执行权限必须来自包内 ZIP 记录的 Unix mode（仅保留执行位）；安装器不得在解压或安装时补执行位来放行 `0644/0600/无模式` 的 ELF。
 - 安装器检查 ELF 目标架构是否与设备匹配；不匹配时拒绝安装。
 - 不经 Shell 启动。可执行文件与参数数组分别传递给 Process Supervisor。
 - 不允许 backend 对象声明多个进程。
@@ -94,7 +94,7 @@ ZIP 包沿用现有 manifest.json 和 Web 静态资源。含原生后端的包�
 2. 校验 ZIP、manifest、路径、重复文件、符号链接、SHA-256、ELF 类型与架构。
 3. 准备 Web 静态资源修订和原生后端文件。
 4. 提交应用元数据和后端服务映射。
-5. 安装完成后后端必须处于 STOPPED，且开机自启关闭。
+5. 安装完成后后端必须处于 STOPPED，且开机自启关闭。安装本身不创建 Supervisor 服务；首次保存身份或开启自启时创建服务，创建请求先以 `autostart=false` 落地，服务 ID 持久化成功后才恢复管理员的自启偏好。
 6. 安装阶段不得执行后端，不运行安装脚本，不允许包内程序隐式修改系统配置。
 
 任一步骤失败时，不得把半成品登记为可启动应用。复用现有操作记录与恢复机制清理临时文件。
@@ -106,7 +106,9 @@ ZIP 包沿用现有 manifest.json 和 Web 静态资源。含原生后端的包�
 - 运行数据目录通过 EDGEDESK_APP_DATA_DIR 环境变量传给后端。
 - Socket 位于宿主创建的每应用运行目录中；宿主通过 EDGEDESK_APP_SOCKET 环境变量传入完整 Socket 路径。
 - Socket 路径、父目录权限和 Socket 文件权限必须同时允许指定后端身份创建/监听，并允许 EdgeDesk Web 后端连接；权限无法安全建立时必须拒绝启动。
-- 安装程序目录不得对普通后端运行用户开放写权限。root 身份按管理员显式配置的实际权限处理。
+- 安装程序树归 EdgeDesk 主机身份所有：`native/` 根为 `0711`，应用程序目录为 `0755`（保留宿主原子替换能力），稳定可执行文件为 `0555`。普通后端运行用户不得拥有或写入这些路径。
+- 属主而非模式位是安全边界。非 root EdgeDesk 与后端 `run_user` 为同一 UID 时无法互相隔离，必须拒绝配置与启动（`backend_program_not_isolated`）；可靠部署是 root EdgeDesk/Supervisor + 非 root 运行身份。root 后端是显式主机级例外，无法由 DAC 约束。
+- Supervisor 在 `fork` 前对带 `EDGEDESK_APP_SOCKET` 的服务再次校验可执行文件与工作目录的属主/可写性，覆盖 autostart、恢复和通用 Supervisor 配置路径。
 - 目录创建、属主修改和权限修改必须限制在 EdgeDesk 拥有的专用目录中，使用 SPEC-0010 要求的安全路径处理；不得对任意路径直接 chmod/chown。
 - 不允许 manifest 指定任意数据目录或 Socket 路径。
 
@@ -125,8 +127,13 @@ ZIP 包沿用现有 manifest.json 和 Web 静态资源。含原生后端的包�
 - 复用现有 Supervisor 的生命周期状态、日志、重启策略和 init 适配。V1 不新增应用健康检查协议。
 - Supervisor 的 RUNNING 只代表进程存在，不代表 HTTP API 已就绪或业务健康。
 - 扩展管理器拥有该服务配置。进程管理界面可以显示扩展服务状态，但不得让普通编辑路径意外覆盖应用管理器生成的可执行路径、参数或身份配置。
+- 升级后必须把稳定路径、argv、env、身份与自启同步到已存在的 Supervisor 服务；同步失败不得让不匹配的版本自动启动。
+- Supervisor 创建服务成功但扩展数据库无法保存服务 ID 时，必须关闭自启并删除服务；清理失败写入持久化恢复记录，下次启动重试。
 
 ### 6.2 管理操作
+
+- 禁用含后端的应用必须先关闭 Supervisor 自启、失效运行会话、停止后端并确认终态，然后才写入 `disabled`；停止失败返回明确错误并保持应用 enabled。
+- 禁用期间不得允许开启自启；重新启用不会隐式启动后端。
 
 应用管理界面提供：
 
@@ -164,7 +171,7 @@ Web 前端继续在现有 iframe sandbox 中运行，并通过专属 MessagePort
 backend.request 至少接受：
 
 - method：允许的 HTTP 方法，例如 GET、POST、PUT、PATCH、DELETE。
-- path：以 / 开始的应用内相对路径，不允许完整 URL 或路径穿越。
+- path：以 / 开始的 origin-form 请求目标，允许 `path?query`；不允许完整 URL、协议相对路径、片段、路径穿越（含百分号编码形式）、编码路径分隔符或控制字符。
 - body：可选 JSON 值。
 - contentType：V1 默认 application/json。
 
@@ -177,20 +184,22 @@ V1 只承诺常见 JSON API 请求/响应，不支持 WebSocket、任意 TCP 代
 - 默认只允许应用自身的前端访问自身后端；V1 不实现跨应用调用。未来跨应用能力必须通过单独的 manifest 权限与审批决策引入。
 - 调用必须经过现有 MessagePort 握手、运行实例、权限快照和会话状态检查。
 - 不运行、Socket 不存在、连接拒绝、权限错误、响应格式无效时，返回稳定、可诊断的宿主错误。
-- 关闭窗口、禁用或升级时，旧实例的 MessagePort 失效。
+- 关闭窗口、禁用或升级时，旧实例的 MessagePort 失效；代理执行前重新校验运行时会话与应用状态，已排队的请求不得继续触达后端。
 - 不增加独立健康检查协议；前端调用失败时显示后端不可用错误，不能把 Supervisor RUNNING 等同于 API 可用。
 
 ## 8. 升级与失败处理
 
 ### 8.1 升级流程
 
-1. 上传新 ZIP 并完整校验包、manifest、SHA-256、ELF 和目标架构。
+1. 上传新 ZIP 并完整校验包、manifest、SHA-256、ELF、包内执行位和目标架构。
 2. 校验失败时保持现有应用与进程不变。
-3. 关闭应用运行实例并停止原生后端。
-4. 将后端二进制覆盖到稳定程序路径；不保留原生后端历史版本，不自动回滚。
-5. 后端文件替换和元数据更新成功后，更新应用版本信息并激活新 Web 静态资源修订。
-6. 升级成功后保持后端停止；是否再次启动由管理员决定。
-7. 在停止后端后发生的覆盖或元数据提交失败，应用必须保持停止，显示 UPGRADE_FAILED 和明确错误，不得报告升级成功或自动启动可能不匹配的版本。
+3. 关闭应用运行实例并停止原生后端；停止必须确认终态（STOPPED/FAILED），BACKOFF 也要显式停止以清除自动重启。
+4. 在提交新修订或覆盖二进制之前，先关闭 Supervisor 自启。若该步骤失败，升级中止，旧应用与程序保持不变。
+5. 将后端二进制覆盖到稳定程序路径；不保留原生后端历史版本，不自动回滚。
+6. 后端文件替换和元数据更新成功后，更新应用版本信息、激活新 Web 静态资源修订，并把稳定路径、argv、env、身份与自启同步到已存在的 Supervisor 服务。
+7. 升级成功后保持后端停止；是否再次启动由管理员决定。
+8. 在停止后端后发生的覆盖、元数据提交或 Supervisor 同步失败，应用必须保持停止，关闭自启，显示 UPGRADE_FAILED 和明确错误，不得报告升级成功或自动启动可能不匹配的版本。同步失败时尽力删除服务或进入不可启动状态。
+9. 含原生后端的应用不得仅切换 Web 历史修订；降级必须通过完整应用包执行同一受控流程。
 
 V1 不提供原生后端二进制自动回滚。管理员可以重新上传旧包进行人工恢复。Web 静态资源继续使用现有版本修订与不可变 URL 机制，不得原地覆盖已发布 revisionId 对应的资源。
 
@@ -215,7 +224,8 @@ V1 不提供原生后端二进制自动回滚。管理员可以重新上传旧�
 
 - 应用包不要求数字签名；SHA-256 不能证明发布者身份。
 - V1 不实现额外进程沙箱。应用权限由所选 Linux 用户、用户组、文件权限和现有 Supervisor 配置决定。
-- 管理员指定 root 时，后端拥有主机级权限。不能把 root 扩展视为受限插件；恶意或有漏洞的 root 后端可能控制整台设备。
+- 管理员指定 root 时，后端拥有主机级权限。不能把 root 扩展视为受限插件；恶意或有漏洞的 root 后端可能控制整台设备，也无法阻止其修改程序文件。
+- 非 root 的同 UID 后端与 EdgeDesk 无法互相隔离，必须拒绝；这是有意的安全收紧，不是兼容性缺陷。
 - 不允许包内安装脚本、Shell 命令字符串或自动执行逻辑。
 - 宿主只代理到应用绑定的 UDS，禁止由前端提供任意 Socket/URL，以避免代理被用作访问其他本地服务的通道。
 - 应用程序目录、数据目录和运行目录必须分离，并在文件系统边界执行权限检查。
@@ -233,6 +243,9 @@ V1 不提供原生后端二进制自动回滚。管理员可以重新上传旧�
 ### 11.2 包与安装
 
 - 有效 ELF 后端包通过；脚本、非 ELF、不可执行文件、错误架构、绝对路径、路径穿越和符号链接均拒绝。
+- ZIP 中 `0644/0600/无模式` 的 ELF 被拒绝；安装器不得补执行位。最终稳定文件为 `0555`。
+- 同 UID 非 root 身份配置与启动被拒绝；root 后端仅在显式 `allow_root` 下按主机级例外处理。
+- Supervisor 对带 `EDGEDESK_APP_SOCKET` 的服务拒绝属主为后端 UID 或组/其他可写的程序树。
 - 安装不执行后端，安装完成后服务 STOPPED 且 autostart=false。
 - SHA-256、ZIP 损坏、重复路径、磁盘不足和安装中断均有失败测试。
 - 包校验失败不得改变现有应用状态。
@@ -242,7 +255,9 @@ V1 不提供原生后端二进制自动回滚。管理员可以重新上传旧�
 - 管理员配置运行身份后，可以启动、停止和重启后端。
 - Supervisor 服务配置使用绝对可执行路径和 argv 数组。
 - EDGEDESK_APP_SOCKET 与 EDGEDESK_APP_DATA_DIR 由宿主传入，且不允许 manifest 覆盖。
-- 开机自启可独立启用/禁用，默认关闭。
+- 开机自启可独立启用/禁用，默认关闭；禁用应用会关闭 Supervisor 自启并停止后端，失败时返回错误且不标记 disabled。
+- 升级后 Supervisor 服务定义与当前包一致；同步失败进入 UPGRADE_FAILED 且自启关闭。
+- 服务创建后无法持久化 ID 时清理孤儿服务；清理失败有持久化恢复记录并在启动时重试。
 - Supervisor 停止、崩溃恢复、SQLite 写失败、root 身份切换和 init 适配必须使用真实测试证据。
 
 ### 11.4 通信与隔离
@@ -251,11 +266,13 @@ V1 不提供原生后端二进制自动回滚。管理员可以重新上传旧�
 - app A 不能通过请求参数访问 app B 的后端或任意本地 URL。
 - 未启动、Socket 权限错误和后端返回无效响应时返回明确错误。
 - 浏览器不可直接访问后端 Socket 或 EdgeDesk 为后端创建的 TCP 端口。
-- 关闭/禁用/升级后旧运行实例不能继续发起代理请求。
+- 关闭/禁用/升级后旧运行实例不能继续发起代理请求；已排队请求在执行前复核会话与应用状态。
+- 正常查询字符串被转发；绝对 URL、片段、路径穿越和非法路径仍被拒绝。
 
 ### 11.5 升级、卸载与数据
 
 - 升级前校验失败时旧应用保持不变。
+- 仅切换 Web 历史修订被拒绝；原生应用的降级通过完整包执行。
 - 覆盖失败时应用保持停止并标记失败，不自动回滚。
 - 升级不删除数据；卸载默认保留数据。
 - 独立清理操作只删除指定 appId 的数据，并有确认与审计。

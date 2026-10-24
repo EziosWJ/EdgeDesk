@@ -28,10 +28,16 @@ src/
 │   └── file_service.*        浏览/下载/上传/编辑/删除的业务实现
 ├── extensions/
 │   ├── semver.*              严格 SemVer 与宿主 API 兼容范围
-│   ├── manifest.*            manifest 核心/模块字段校验、来源与 CSP
+│   ├── backend_spec.hpp      manifest 可选原生后端字段（仅 executable + argv）
+│   ├── elf_info.*            只读 ELF 头校验与宿主架构匹配（不执行）
+│   ├── manifest.*            manifest 核心/模块字段与 backend 校验、来源与 CSP
 │   ├── zip_reader.*          流式 ZIP 校验、解压、逐文件 SHA-256、完整性验证
-│   ├── extension_store.*     SQLite schema/事务/KV/权限/操作日志（局部例外）
-│   ├── package_manager.*     安装/升级/回滚/卸载/隔离/清理/静态修订
+│   ├── extension_store.*     SQLite schema v3/事务/KV/权限/操作日志/app_backends
+│   ├── package_manager.*     安装/升级/回滚/卸载/隔离/清理/静态修订/原生后端挂钩
+│   ├── native_backend.*      BackendRecord、稳定路径与 serviceId 占位
+│   ├── native_backend_installer.*  稳定程序目录、原子覆盖、卸载/清理（不执行）
+│   ├── native_backend_lifecycle.*  身份/autostart、运行目录、Supervisor 服务参数
+│   ├── backend_proxy.*       有界 HTTP-over-UDS 代理（仅本应用 socket）
 │   └── extension_runtime.*   运行实例快照、KV 游标、传输、锁协调、终端回收
 ├── http/
 │   ├── server.*              libhv 路由与 WebSocket 装配、静态资源与 SPA 回退
@@ -39,7 +45,7 @@ src/
 │   ├── http_util.*           JSON 响应、Cookie、Host/Origin 校验等协议适配
 │   ├── upload_state.hpp      流式上传/扩展安装的请求级状态（HttpContext userdata）
 │   ├── ws_state.hpp          每个 WebSocket 连接的状态
-│   └── routes/               health / auth / file / terminal / system / extension
+│   └── routes/               health / auth / file / terminal / system / extension / native_backend / backend_proxy
 ├── terminal/
 │   ├── pty.*                 forkpty 封装（fork 与 exec 之间仅异步信号安全调用）
 │   ├── terminal_session.*    单会话：读取线程、有界回放、CommandGuard 交互
@@ -140,13 +146,17 @@ apps/
 ├── extensions.db               SQLite 元数据与 KV（0600）
 ├── revisions/<appId>/<revisionId>/
 │                              不可变静态资源与 manifest
-├── data/<appId>/              平台托管的应用数据目录（当前 KV 在 SQLite）
+├── native/<appId>/backend     可选原生后端稳定程序路径（0555，宿主身份所有，原子覆盖）
+├── data/<appId>/              平台托管的应用数据目录（原生后端可写）
+├── run/<appId>/backend.sock   宿主创建的每应用运行目录与 Unix Socket
 └── tmp/
     ├── op-<operationId>/      安装/升级临时目录（启动时幂等清理）
     └── transfers/*.journal    扩展上传临时文件恢复日志
 ```
 
-目录为 `0700`；若数据根不可创建/不可写，扩展 API 返回 `503 extensions_unavailable`，核心认证、文件、终端与指标仍可用。
+目录默认 `0700`；存在非 root 原生后端身份时，EdgeDesk 拥有的 `apps/`、`apps/data/`
+与 `apps/run/` 使用 `0711` 遍历权限（不可列出），每次启动只保留该精确模式，更宽权限会被收紧。
+若数据根不可创建/不可写，扩展 API 返回 `503 extensions_unavailable`，核心认证、文件、终端与指标仍可用。
 
 ### 安装与修订
 
@@ -172,9 +182,34 @@ apps/
 - 禁用、升级、卸载、完整性隔离：`ExtensionRuntime::invalidate_app` 删除会话与传输任务，并关闭该实例创建的 PTY 会话；前端同步关闭窗口。
 - 文件传输由 1 MiB 顺序块、逐块确认、专用端口组成；上传使用 `FileService` 临时文件与原子替换，下载持有共享读锁。
 
+### 原生后端（SPEC-0011）
+
+- manifest 可选 `backend`（仅包内相对可执行路径 + argv 数组）。ZIP 解压保留包内执行位，
+  安装器据此校验 ELF 并原子覆盖 `native/<appId>/backend`（`0555`，宿主身份所有）；安装、升级与
+  卸载都不执行包内程序。
+- 程序树归 EdgeDesk 主机身份：`native/` 为 `0711`、应用目录 `0755`、可执行文件 `0555`。
+  非 root 同 UID 后端会被拒绝（`backend_program_not_isolated`）；可靠部署为 root Supervisor +
+  非 root `run_user`。Supervisor 在 `fork` 前对带 `EDGEDESK_APP_SOCKET` 的服务再次校验属主/可写性。
+- 每个含后端的应用在 `app_backends` 保存一行稳定映射。管理员保存身份后创建 Supervisor 服务
+  （不启动，创建时先 `autostart=false`，映射成功后再恢复偏好）；Supervisor 分配的 serviceId 立即回写。
+  升级在提交前关闭自启、提交后以 `service.update` 同步完整配置；同步失败进入 `upgrade_failed`
+  并关闭自启。运行用户/组、`allow_root`、autostart 只由管理员设置，manifest 不能覆盖。
+- 禁用含后端应用先关闭自启、失效会话、停止并确认终态，再写入 `disabled`；失败返回错误且保持 enabled。
+- 运行目录与 Socket 由宿主创建，`EDGEDESK_APP_SOCKET` / `EDGEDESK_APP_DATA_DIR` 通过服务环境传入。
+  `describe` 只报告配置；进程存活状态始终来自 Supervisor。
+- 前端 `backend.request` 经宿主桥接调用 `POST /api/extensions/runtime/backend/request`；
+  路由只从 `X-EdgeDesk-Runtime` 会话解析 appId，`BackendProxy` 在固定大小 worker 池中通过该应用
+  自己的 Unix Socket 发送受限 HTTP/1.1 请求（允许正常查询串，拒绝片段/绝对 URL/路径穿越）。
+  执行前重新校验运行时会话与应用状态，失效的排队请求不会触达后端。没有按应用开放 TCP 端口，
+  也不支持 WebSocket/流式代理。
+- 升级前用有界同步停止钩子确认进程已停止并关闭 Supervisor 自启；失败则不提交、不覆盖程序。
+  安装成功后同步服务定义。升级失败保持停止、关闭自启并标记 `upgrade_failed`，无自动回滚。
+  禁用/卸载先停止并删除 Supervisor 服务，默认保留数据。含后端的应用不得仅切换 Web 历史修订。
+
 ### SQLite 范围
 
-SQLite 只位于 `src/extensions/`，保存扩展清单、状态、活动修订、权限、操作日志、完整性索引和应用 KV。认证使用 `auth.json`、设置使用 `settings.json`、终端与指标保持原有内存/文件实现；不得据此迁移其他模块。
+SQLite 只位于 `src/extensions/`，保存扩展清单、状态、活动修订、权限、操作日志、完整性索引、
+原生后端映射与应用 KV。认证使用 `auth.json`、设置使用 `settings.json`、终端与指标保持原有内存/文件实现；不得据此迁移其他模块。
 
 ## 认证与持久化边界
 

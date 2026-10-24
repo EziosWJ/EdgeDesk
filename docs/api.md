@@ -255,6 +255,31 @@ WebSocket 升级在 HTTP 头阶段校验认证与 Origin，失败不会进入 10
 | `POST` | `/api/extensions/runtime/terminal/sessions` | 创建 PTY；body `title/cwd/cols/rows`。 |
 | `POST` | `/api/extensions/runtime/terminal/close` | body `{"session_id":"..."}`。 |
 | `POST` | `/api/extensions/runtime/errors` | 应用错误上报；只写应用/实例/修订、类型、截断消息与栈到审计。type/message/stack 先脱敏、按 UTF-8 边界截断并作为带引号的 `key="value"` 字段编码；审计 sink 再次脱敏 detail/path，并将单字段限制在 8192 字节（超出追加 `[TRUNCATED]`）。不记录原始请求正文。 |
+| `POST` | `/api/extensions/runtime/backend/request` | 原生后端 HTTP-over-UDS 代理（SPEC-0011）。身份只取自 `X-EdgeDesk-Runtime` 头对应运行实例（请求体 token 被忽略）；body `{"method","path","body"?,"contentType"?}`；`path` 是 origin-form 请求目标，允许正常查询串（`/notes?limit=2`），拒绝片段、绝对 URL、协议相对路径、路径穿越（含百分号编码形式）、编码路径分隔符与控制字符。成功返回宿主 `200` 与 `{"status","headers","body"}`；不代理 WebSocket/流式响应/任意 URL。排队请求在执行前重新校验运行时会话与应用状态。 |
+
+### 原生后端管理（SPEC-0011）
+
+纯 Web 应用（manifest 无 `backend`）不产生 Supervisor 服务；`GET .../backend` 返回
+`200 {"backend":{"present":false,"reason":"..."}}`，其余后端管理端点返回
+`409 backend_not_configured`。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/extensions/{app_id}/backend` | 后端状态、架构、稳定程序/数据/运行路径、运行身份、自启、持久化状态与 Supervisor 运行状态。 |
+| `PUT` | `/api/extensions/{app_id}/backend/identity` | body `{"run_user","run_group","allow_root"}`；只修改管理员身份配置，不允许改可执行文件或参数。 |
+| `PUT` | `/api/extensions/{app_id}/backend/autostart` | body `{"enabled":bool}`；独立于手动启动/停止。禁用或 `upgrade_failed` 时不得开启。 |
+| `POST` | `/api/extensions/{app_id}/backend/start\|stop\|restart` | 经 Supervisor 执行；安装不会自动启动。前置条件不满足时返回明确错误，不报告成功。`upgrade_failed` 必须重新安装后才能启动。 |
+| `POST` | `/api/extensions/{app_id}/disable` | 含后端应用先关闭自启、失效会话并停止服务；确认 `STOPPED/FAILED` 后才标记 disabled。停止或自启取消失败返回非 2xx，应用保持 enabled。 |
+| `POST` | `/api/extensions/{app_id}/activate` | 仅允许纯 Web 应用切换历史修订；含原生后端的应用返回 `409`，降级必须上传完整包。 |
+| `POST` | `/api/extensions/{app_id}/data/purge` | body `{"confirm":true,"app_id":"<same>"}`；只删除该 appId 的专用数据目录与 KV 命名空间。 |
+
+后端错误 slug：`backend_not_configured`、`backend_not_running`、`backend_unavailable`、
+`backend_timeout`、`backend_protocol_error`、`backend_identity_required`、`backend_arch_mismatch`、
+`backend_upgrade_failed`、`backend_permission_denied`、`backend_program_not_isolated`、
+`backend_running`、`backend_app_disabled`、`backend_root_not_allowed`、`backend_service_orphan`、
+`runtime_session_invalid`、`supervisor_busy`。运行身份、程序属主隔离、Socket 权限、架构或
+Supervisor 不可用均不得返回成功。`backend_program_not_isolated` 表示同 UID 非 root 或程序树
+归错误属主；可靠部署需要 root Supervisor 与非 root `run_user`。
 
 终端输入/输出仍通过宿主页面已有的 `/ws/terminal` 中继到应用；`terminal.access` 权限快照由
 宿主桥接与运行时端点共同检查。会话创建/关闭/列表写审计，不记录原始终端输入输出。

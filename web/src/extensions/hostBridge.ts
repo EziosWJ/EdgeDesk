@@ -83,6 +83,8 @@ function errorFromApi(error: unknown): RpcError {
       quota_exceeded: RPC_ERROR.quotaExceeded,
       not_found: RPC_ERROR.notFound,
       app_not_found: RPC_ERROR.notFound,
+      backend_not_configured: RPC_ERROR.notFound,
+      backend_not_running: RPC_ERROR.conflict,
       conflict: RPC_ERROR.conflict,
       invalid_argument: RPC_ERROR.invalidParams,
       too_large: RPC_ERROR.tooLarge,
@@ -93,6 +95,25 @@ function errorFromApi(error: unknown): RpcError {
     return new RpcError(code, error.message, { slug: error.code, status: error.status });
   }
   return new RpcError(RPC_ERROR.internal, error instanceof Error ? error.message : 'internal error');
+}
+
+const BACKEND_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+const BACKEND_PATH_MAX = 2048;
+
+/** Reject anything that is not an application-relative HTTP path. */
+function validateBackendPath(path: string): void {
+  if (!path.startsWith('/') || path.startsWith('//')) {
+    throw new RpcError(RPC_ERROR.invalidParams, 'path must be an application-relative path starting with /');
+  }
+  if (path.length > BACKEND_PATH_MAX) {
+    throw new RpcError(RPC_ERROR.invalidParams, 'path is too long');
+  }
+  if (path.includes('\\') || /[\u0000-\u001f\u007f]/.test(path)) {
+    throw new RpcError(RPC_ERROR.invalidParams, 'path contains invalid characters');
+  }
+  if (path.split('?')[0].split('/').some((segment) => segment === '..' || segment === '.')) {
+    throw new RpcError(RPC_ERROR.invalidParams, 'path traversal is not allowed');
+  }
 }
 
 export class HostBridge {
@@ -281,6 +302,33 @@ export class HostBridge {
       case 'auth.getStatus': {
         const status = await extensionApi.authStatus();
         return { result: { authenticated: status.authenticated, method: status.method } };
+      }
+      case 'backend.request': {
+        // No manifest permission: an application may only reach its own backend.
+        // The runtime token stays host-side and identifies the app on the server.
+        const body = this.params(rawParams);
+        const method = this.stringParam(body, 'method');
+        if (!BACKEND_METHODS.has(method)) {
+          throw new RpcError(RPC_ERROR.invalidParams, `method must be one of ${[...BACKEND_METHODS].join(', ')}`);
+        }
+        const path = this.stringParam(body, 'path');
+        validateBackendPath(path);
+        if (body.contentType !== undefined && body.contentType !== 'application/json') {
+          throw new RpcError(RPC_ERROR.invalidParams, 'contentType must be application/json');
+        }
+        const response = await extensionApi.runtimeBackendRequest(token, {
+          method,
+          path,
+          ...(Object.prototype.hasOwnProperty.call(body, 'body') ? { body: body.body } : {}),
+          ...(body.contentType === 'application/json' ? { contentType: 'application/json' } : {}),
+        });
+        return {
+          result: {
+            status: response.status,
+            headers: response.headers ?? {},
+            body: response.body ?? null,
+          },
+        };
       }
       case 'storage.get': {
         this.requirePermission('storage');

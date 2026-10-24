@@ -34,9 +34,41 @@
 | `description` / `publisher` | 可选展示字段；`publisher` 不受信任 |
 
 - 声明 `network.origins` 会自动把 `network` 加入申请权限集合。
-- `backend` / `runtime` / `scripts` 字段只产生“保留且不执行”警告。
+- `backend` 为可选对象，规则见 2.1；`runtime` / `scripts` 字段仍只产生“保留且不执行”警告。
 - 未知权限、非法来源、路径穿越式 `icon`、反向范围均拒绝安装。
 - 宿主 API 范围不兼容时拒绝启用；核心升级后可自动禁用不兼容应用，但保留包与数据。
+
+### 2.1 原生后端声明（SPEC-0011）
+
+`backend` 缺失时保持纯 Web 应用语义，不创建 Supervisor 服务、不执行包内文件。
+
+| 字段 | 规则 |
+| --- | --- |
+| `backend.executable` | 必填，规范化包内相对路径，≤4096 字节；拒绝绝对路径、`.`/`..`/空段、反斜杠、NUL 与控制字符 |
+| `backend.args` | 可选字符串数组；≤128 项，每项 ≤8192 字节，总计 ≤128 KiB；逐项作为 argv，不做 Shell 展开 |
+
+- `backend` 中的其他键一律拒绝：运行用户/组、root/allow_root、autostart、socket、data_dir、url、port 等均由管理员或宿主管理。
+- 目标必须是包内普通、可执行的 ELF，且每个包只包含一个目标架构；设备在安装时做权威校验并拒绝脚本、非 ELF、符号链接与架构不匹配。
+- SDK/CLI（`tools/ext-sdk`）在开发期镜像上述 manifest 限制，并检查可执行位与 ELF 头（x86_64/aarch64/arm32）；跨架构包给出警告而非拒绝，最终由目标设备判定。
+- 宿主通过 `EDGEDESK_APP_SOCKET` / `EDGEDESK_APP_DATA_DIR` 传入运行路径；前端只能经 JSON-RPC `backend.request` 访问本应用后端（见 `api.md`）。
+- 未签名包仅依赖 SHA-256 完整性清单，不证明发布者身份；升级覆盖稳定程序路径且不自动回滚。
+
+### 2.2 原生后端安装、升级与卸载
+
+- 含 `backend` 的包在宿主未装配 `NativeBackendInstaller` 时直接拒绝安装，绝不静默忽略后端。
+- 校验发生在修订目录移动与元数据提交之前：路径经 `PathSandbox`/`openat` 解析，拒绝符号链接、越界与硬链接别名；ELF 只读取头部，要求普通文件、可执行位、`ET_EXEC`/`ET_DYN`、小端、32/64 位与 `e_machine` 一致，并与宿主架构匹配。校验失败时现有应用、活动修订、后端行与程序文件均不变。
+- ZIP 解压只保留包内 Unix mode 的执行位（文件规范化为 `0600 | mode & 0111`），安装器据此判定“可执行”；不再于暂存区补执行位。稳定程序文件由宿主写成 `0555`。
+- 稳定程序路径为 `<apps_root>/native/<app_id>/backend`：安装器在程序目录创建临时文件、写入并 `fsync`，再同目录原子 `renameat` 覆盖，随后 `fsync` 目录；不保留历史二进制、不创建版本目录。程序目录 `0755`、`native/` 根 `0711`，均归 EdgeDesk 主机身份所有；属主是隔离边界，模式位只是纵深防御。
+- 非 root EdgeDesk 与后端 `run_user` 同 UID 时无法阻止后端改写程序文件，配置与启动均拒绝（`backend_program_not_isolated`）；可靠部署为 root Supervisor + 非 root 运行身份。Supervisor 在 `fork` 前对带 `EDGEDESK_APP_SOCKET` 的服务再次校验执行文件/工作目录属主与可写性。
+- 持久化数据位于 `<apps_root>/data/<app_id>`（缺失时以 0700 创建，已有目录不改权限，属主切换属于生命周期层）；升级与卸载默认不删除。运行目录 `<apps_root>/run/<app_id>` 由生命周期层按需创建。
+- 升级（存在后端行）在修改任何文件前调用有界停止钩子；钩子失败则中止升级，旧应用与程序保持不变。随后、在提交新修订或覆盖二进制之前，必须关闭 Supervisor 自启；失败同样中止。升级成功保留管理员的运行用户/组、`allow_root` 与 `autostart`，后端状态写回 `stopped`，不自动启动。
+- 元数据事务提交后若程序文件复制/落地失败，应用保持停止且后端行标记 `upgrade_failed` 与明确错误，并关闭自启；不自动回滚、不自动启动，管理员重新上传包恢复。
+- 升级成功后调用 Supervisor `service.update` 同步绝对路径、argv、env、身份与自启。同步失败同样标记 `upgrade_failed`、关闭自启并尽力删除/停用服务。
+- 含原生后端的应用禁止仅切换 Web 历史修订；`activate_revision` 返回冲突，降级必须通过完整应用包。
+- Supervisor 创建服务成功但服务 ID 无法持久化时，立即关闭自启并删除服务；删除失败写入 `operations(type=backend_orphan)`，启动恢复重试。创建请求期间强制 `autostart=false`，映射成功后才恢复管理员偏好。
+- 原生后端升级为纯 Web 包时，先停止后端，提交新修订后删除服务映射、程序目录与运行目录，保留数据目录。
+- 卸载前必须能确认后端已停止（配置了停止钩子且调用成功），否则拒绝卸载并保留程序文件。卸载成功后删除服务映射、程序目录与运行目录；`keep_data=true`（默认）保留数据目录与平台 KV，`keep_data=false` 才删除该应用的数据目录。
+- 启动恢复逐行校验 `app_backends`：活动修订必须仍声明匹配的执行文件/参数，稳定程序必须存在、可执行且架构匹配；否则把行标记为 `upgrade_failed` 并记录诊断，绝不把缺失或损坏的程序报告为可启动。恢复操作幂等。
 
 ## 3. 生命周期状态机
 
@@ -56,13 +88,14 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 
 - 首次安装即使校验通过也进入 `pending_review`，不能启动。
 - 升级保留原授权；新权限保持未授权，需管理员再次批准。
+- 禁用含原生后端的应用：先持久化并关闭 Supervisor 自启、失效运行会话，再停止并确认服务终态；失败返回错误且应用保持 enabled。只有成功后写入 `disabled`，重启启用不自动启动后端。
 - 单项权限撤销延迟到下一运行实例；禁用立即关闭窗口、端口、事件和该实例创建的终端。
 - 完整性检查按清单与实际文件集合**精确比对**：缺失文件、大小/SHA-256 不符、未登记的普通文件、符号链接与特殊文件（以及重复/大小写冲突路径）均判定失败，并给出确定的 `mismatch_path`。静态资源只服务活动修订清单中登记的文件，未登记文件即使物理存在也返回 404。
 - 完整性失败范围：**仅活动修订**失败时，修订与应用标记 `isolated`、清除有效授权、关闭运行访问，保留文件与审计；**历史修订**失败只把该修订标记为 `isolated`/`integrity=mismatch` 并禁止再次激活，不改变应用状态、活动修订、授权或现有运行会话。修复/重装后回到 `pending_review`，必须重新审批。
 - 服务重启：未完成 operation 的临时目录与未提交修订被幂等清理；活动指针指向的修订存在性会被校验。KV 删除与 app/revision/权限/完整性状态在同一 SQLite 事务提交，恢复后不会出现“KV 已删除但重装未提交”的组合。
 - 传输日志：扩展上传在 `apps_root/tmp/transfers/*.journal` 记录临时文件位置；重启时删除孤儿临时文件再删除日志。
 
-## 4. SQLite schema（`apps_root/extensions.db`，schema v2；v1 原地迁移）
+## 4. SQLite schema（`apps_root/extensions.db`，schema v3；v1/v2 原地迁移）
 
 | 表 | 关键列 | 约束 |
 | --- | --- | --- |
@@ -74,9 +107,11 @@ pending_review ──approve(enable)──> enabled ──disable──> disable
 | `integrity_entries` | `(revision_id, path)` PK、`size`、`sha256` | 逐文件 SHA-256 清单 |
 | `operations` | `operation_id` PK、`type`、`phase`、`temp_path`、`revision_id` | 启动恢复依据 |
 | `app_kv` | `(app_id, key)` PK、`value` JSON 文本、`size_bytes` | 无 FK：卸载保留数据 |
+| `app_backends` | `app_id` PK、`service_id` UNIQUE、`executable_rel`、`args_json`、`arch`、`run_user`、`run_group`、`allow_root`、`autostart`、`state`、`error` | 每应用至多一行；app FK 级联；只保存宿主/管理员状态，进程存活状态读 Supervisor |
 
-- `PRAGMA journal_mode=WAL`、`foreign_keys=ON`、`synchronous=FULL`；数据库文件 `0600`，根目录 `0700`。
+- `PRAGMA journal_mode=WAL`、`foreign_keys=ON`、`synchronous=FULL`；数据库文件 `0600`，根目录 `0700`（存在非 root 原生后端身份时仅使用 `0711` 遍历权限；每次打开只保留精确的 `0711`，更宽的权限会被收紧回 `0700`）。
 - 所有跨表状态变更在 `BEGIN IMMEDIATE` 事务中提交；失败回滚。
+- `app_backends.state` 仅取 `stopped`、`upgrading`、`upgrade_failed`；不得写入 Supervisor 的运行态。`service_id` 保存 Supervisor 在 `service.create` 时分配的稳定 id（首次创建前使用 `app-<sha256(appId)[:32]>` 占位，创建后立即回写；升级保留该 id）；`executable_rel`/`args_json`/`arch` 来自通过校验的包，运行身份与 `autostart` 只由管理员设置。`upgrade_failed` 是终态，直到重新安装；启动、自启、身份修改与状态重置均被拒绝。服务 ID 回写失败时的孤儿服务恢复记录复用 `operations`（`type=backend_orphan`，`revision_id` 保存 service id）。
 - 重装“保留但不恢复”或陈旧保留行的 KV 删除位于安装的最终事务内；ZIP/清单校验、修订目录移动、完整性写入或 SQLite 失败都会回滚并保留旧 KV 与原应用状态。
 - 扩展应用不能直接打开数据库，也不能用 localStorage/IndexedDB 作为持久化契约。
 
@@ -222,7 +257,7 @@ src/file/file_lock.*  统一共享读/独占写锁；FileService 集成
 src/http/routes/extension_route.cpp
                       /api/extensions、/api/extensions/runtime、/apps 静态资源
 web/src/extensions/   管理 UI、iframe runtime、host bridge、动态注册表
-tools/ext-sdk/        SDK、CLI、vanilla/React/Vue/Svelte 模板
+tools/ext-sdk/        SDK、CLI、vanilla/React/Vue/Svelte/native-backend 模板与示例
 scripts/extension_test.py
                       扩展平台集成测试（含崩溃恢复模式）
 ```

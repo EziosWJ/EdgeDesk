@@ -1,6 +1,8 @@
 #include "test_util.hpp"
 #include "extensions/zip_builder.hpp"
 
+#include "extensions/elf_info.hpp"
+#include "extensions/native_backend_installer.hpp"
 #include "extensions/package_manager.hpp"
 
 #include <algorithm>
@@ -1058,7 +1060,894 @@ void test_recovery(const fs::path& base) {
     CHECK(!fs::exists(upload_orphan));
 }
 
+// ---------------------------------------------------------------------------
+// Native backend packages (SPEC-0011 APPX-01/APPX-02)
+// ---------------------------------------------------------------------------
+
+std::uint16_t elf_machine(ElfArch arch) {
+    switch (arch) {
+        case ElfArch::x86_64: return 62;
+        case ElfArch::aarch64: return 183;
+        case ElfArch::arm32: return 40;
+        case ElfArch::unknown: break;
+    }
+    return 0;
+}
+
+void put_le16(std::string& bytes, std::size_t offset, std::uint16_t value) {
+    bytes[offset] = static_cast<char>(value & 0xff);
+    bytes[offset + 1] = static_cast<char>((value >> 8) & 0xff);
+}
+
+// Minimal ELF header; package installation only reads the identification and
+// the first header fields.
+std::string make_elf(ElfArch arch) {
+    const bool is_32 = arch == ElfArch::arm32;
+    std::string bytes(is_32 ? 52 : 64, '\0');
+    bytes[0] = '\x7f';
+    bytes[1] = 'E';
+    bytes[2] = 'L';
+    bytes[3] = 'F';
+    bytes[4] = is_32 ? 1 : 2;
+    bytes[5] = 1;
+    bytes[6] = 1;
+    put_le16(bytes, 16, 3); // ET_DYN
+    put_le16(bytes, 18, elf_machine(arch));
+    put_le16(bytes, 20, 1);
+    return bytes;
+}
+
+std::string host_elf() { return make_elf(host_elf_arch()); }
+
+std::string other_arch_elf() {
+    return make_elf(host_elf_arch() == ElfArch::x86_64 ? ElfArch::aarch64 : ElfArch::x86_64);
+}
+
+std::string read_file_bytes(const fs::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+}
+
+nlohmann::json backend_manifest_json(const std::string& id, const std::string& version,
+                                     const std::string& executable = "bin/backend",
+                                     const nlohmann::json& args = nlohmann::json::array({"--serve"})) {
+    auto manifest = manifest_json(id, version);
+    manifest["backend"] = {{"executable", executable}, {"args", args}};
+    return manifest;
+}
+
+std::vector<ZipItem> native_items(const nlohmann::json& manifest, const std::string& elf,
+                                  const std::string& path = "bin/backend") {
+    auto items = app_items(manifest, "<h1>native</h1>");
+    items.push_back({path, elf, S_IFREG | 0755, false, ""});
+    return items;
+}
+
+struct NativeFixture {
+    std::unique_ptr<PackageManager> manager;
+    std::unique_ptr<NativeBackendInstaller> installer;
+    std::string root;
+};
+
+NativeFixture make_native_fixture(const fs::path& base, const std::string& name) {
+    NativeFixture fixture;
+    fixture.root = (base / name).string();
+    Error error;
+    fixture.manager = PackageManager::create(fixture.root, error);
+    CHECK(fixture.manager != nullptr);
+    if (!fixture.manager) return fixture;
+    fixture.installer = std::make_unique<NativeBackendInstaller>(fixture.manager->store(), fixture.root);
+    fixture.manager->set_backend_installer(fixture.installer.get());
+    // A Supervisor-backed stop is required before an upgrade touches the
+    // stable executable. Tests that exercise stop failures override this.
+    fixture.manager->set_backend_stop_hook([](std::string_view) { return Error::none(); });
+    // Tests run without a Supervisor; native upgrades still require the sync
+    // hook, so a no-op stands in unless the test installs its own.
+    fixture.manager->set_backend_sync_hook(
+        [](std::string_view, bool) { return Error::none(); });
+    return fixture;
+}
+
+bool get_backend_row(PackageManager& manager, const std::string& id, BackendRecord& out) {
+    bool found = false;
+    const Error error = manager.store().get_backend(id, out, found);
+    CHECK(error.ok());
+    return found;
+}
+
+bool install_native(NativeFixture& fixture, const fs::path& base, const std::string& zip_name,
+                    const nlohmann::json& manifest, const std::string& elf, InstallOptions options = {},
+                    InstallResult* out = nullptr) {
+    const auto zip = make_zip(base, zip_name, native_items(manifest, elf));
+    InstallResult local;
+    Error error = fixture.manager->install(zip, options, out != nullptr ? *out : local);
+    CHECK(error.ok());
+    if (!error.ok()) std::fprintf(stderr, "native install error: %s\n", error.message.c_str());
+    return error.ok();
+}
+
+void test_backend_install_valid(const fs::path& base) {
+    auto fixture = make_native_fixture(base, "apps-native-valid");
+    if (!fixture.manager) return;
+    const std::string id = "io.example.native.valid";
+    const std::string elf = host_elf();
+    const auto manifest = backend_manifest_json(id, "1.0.0", "bin/backend", {"--serve", "--port", "0"});
+    InstallResult result;
+    if (!install_native(fixture, base, "native-valid.zip", manifest, elf, {}, &result)) return;
+
+    CHECK_STR_EQ(result.app.status, app_status::pending_review);
+    BackendRecord backend;
+    CHECK(get_backend_row(*fixture.manager, id, backend));
+    CHECK_STR_EQ(backend.app_id, id);
+    CHECK_STR_EQ(backend.service_id, backend_service_id(id));
+    CHECK_STR_EQ(backend.executable_rel, "bin/backend");
+    CHECK_EQ(backend.args.size(), std::size_t{3});
+    CHECK_STR_EQ(backend.args[0], "--serve");
+    CHECK_STR_EQ(backend.arch, elf_arch_name(host_elf_arch()));
+    CHECK_STR_EQ(backend.state, backend_state::stopped);
+    CHECK(backend.error.empty());
+    CHECK(!backend.autostart);
+    CHECK(!backend.allow_root);
+    CHECK(backend.run_user.empty());
+    CHECK(backend.run_group.empty());
+    for (const auto& warning : result.warnings) {
+        CHECK(warning.find("reserved") == std::string::npos);
+    }
+
+    const fs::path program = fs::path(fixture.root) / "native" / id / "backend";
+    CHECK(fs::exists(program));
+    CHECK_STR_EQ(read_file_bytes(program), elf);
+    struct stat info {};
+    CHECK_EQ(::stat(program.c_str(), &info), 0);
+    CHECK((info.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0);
+    // The stable program is host-owned and read-only/executable: the package
+    // cannot carry write permission into the installed tree.
+    CHECK_EQ(static_cast<unsigned>(info.st_mode & 0777), 0555u);
+    CHECK(fs::is_directory(fs::path(fixture.root) / "data" / id));
+    // Installation never starts the backend; the run directory is created
+    // lazily by the lifecycle layer.
+    CHECK(!fs::exists(fs::path(fixture.root) / "run" / id));
+    CHECK_EQ(directory_entries(fs::path(fixture.root) / "native" / id), std::size_t{1});
+}
+
+void test_backend_rejections(const fs::path& base) {
+    auto expect_rejected = [&](const std::string& name, const nlohmann::json& manifest,
+                               const std::string& elf) {
+        const std::string id = manifest.value("id", std::string());
+        auto fixture = make_native_fixture(base, "apps-native-reject-" + name);
+        if (!fixture.manager) return;
+        const auto zip = make_zip(base, "native-reject-" + name + ".zip", native_items(manifest, elf));
+        InstallResult result;
+        const Error error = fixture.manager->install(zip, {}, result);
+        if (error.ok()) std::fprintf(stderr, "backend case unexpectedly accepted: %s\n", name.c_str());
+        CHECK(!error.ok());
+        CHECK(!error.message.empty());
+        BackendRecord backend;
+        CHECK(!get_backend_row(*fixture.manager, id, backend));
+        CHECK(!fs::exists(fs::path(fixture.root) / "native" / id));
+        bool found = false;
+        AppRecord app;
+        CHECK(fixture.manager->get_app(id, app, found).ok());
+        CHECK(!found);
+    };
+
+    expect_rejected("script", backend_manifest_json("io.example.reject.script", "1.0.0"),
+                    "#!/bin/sh\necho not-a-backend\n");
+    expect_rejected("nonelf", backend_manifest_json("io.example.reject.nonelf", "1.0.0"),
+                    "this is not an ELF file but is long enough to look like a header ....");
+    expect_rejected("wrongarch", backend_manifest_json("io.example.reject.wrongarch", "1.0.0"),
+                    other_arch_elf());
+    expect_rejected("absolute",
+                    backend_manifest_json("io.example.reject.absolute", "1.0.0", "/bin/true"), host_elf());
+    expect_rejected("traversal",
+                    backend_manifest_json("io.example.reject.traversal", "1.0.0", "../backend"), host_elf());
+
+    auto forbidden = backend_manifest_json("io.example.reject.forbidden", "1.0.0");
+    forbidden["backend"]["run_user"] = "root";
+    expect_rejected("forbidden-key", forbidden, host_elf());
+
+    auto array_backend = manifest_json("io.example.reject.array", "1.0.0");
+    array_backend["backend"] = nlohmann::json::array(
+        {{{"executable", "one"}}, {{"executable", "two"}}});
+    expect_rejected("array", array_backend, host_elf());
+
+    auto null_backend = manifest_json("io.example.reject.null", "1.0.0");
+    null_backend["backend"] = nullptr;
+    expect_rejected("null", null_backend, host_elf());
+
+    // A declared executable must carry an execute bit in the ZIP entry. The
+    // installer must not add one during extraction or installation.
+    for (const auto mode : {0644u, 0600u, 0u}) {
+        auto fixture = make_native_fixture(base, "apps-native-mode-" + std::to_string(mode));
+        if (!fixture.manager) continue;
+        const std::string id = "io.example.reject.mode" + std::to_string(mode);
+        auto items = native_items(backend_manifest_json(id, "1.0.0"), host_elf());
+        items.back().mode = mode == 0 ? 0 : (S_IFREG | mode);
+        const auto zip = make_zip(base, "native-mode-" + std::to_string(mode) + ".zip", items);
+        InstallResult result;
+        const Error error = fixture.manager->install(zip, {}, result);
+        CHECK(!error.ok());
+        CHECK(!fs::exists(fs::path(fixture.root) / "native" / id));
+    }
+
+    // A backend package must not be silently installed when the host has no
+    // installer configured.
+    auto fixture = make_native_fixture(base, "apps-native-no-installer");
+    if (fixture.manager) {
+        fixture.manager->set_backend_installer(nullptr);
+        const std::string id = "io.example.reject.noinstaller";
+        const auto zip = make_zip(base, "native-reject-noinstaller.zip",
+                                  native_items(backend_manifest_json(id, "1.0.0"), host_elf()));
+        InstallResult result;
+        const Error error = fixture.manager->install(zip, {}, result);
+        CHECK(!error.ok());
+        CHECK(error.code == ErrorCode::unsupported);
+        CHECK(error.message.find("not supported") != std::string::npos);
+        CHECK(!fs::exists(fs::path(fixture.root) / "native" / id));
+    }
+}
+
+void test_backend_installer_path_checks(const fs::path& base) {
+    auto fixture = make_native_fixture(base, "apps-native-links");
+    if (!fixture.manager) return;
+    const fs::path extracted = base / "native-extracted-links";
+    fs::remove_all(extracted);
+    fs::create_directories(extracted);
+    {
+        std::ofstream file(extracted / "real.bin", std::ios::binary | std::ios::trunc);
+        file << host_elf();
+    }
+    CHECK_EQ(::chmod((extracted / "real.bin").c_str(), 0755), 0);
+
+    std::error_code link_error;
+    fs::create_symlink("real.bin", extracted / "backend.bin", link_error);
+    CHECK(!link_error);
+    Manifest manifest;
+    std::string error;
+    std::vector<std::string> warnings;
+    CHECK(parse_manifest(backend_manifest_json("io.example.links", "1.0.0", "backend.bin"), manifest,
+                         error, warnings));
+    BackendRecord output;
+    CHECK(!fixture.installer->validate(extracted.string(), manifest, output).ok());
+
+    // A hard link to the validated file is rejected as an alias.
+    fs::remove(extracted / "backend.bin");
+    {
+        std::ofstream file(extracted / "backend.bin", std::ios::binary | std::ios::trunc);
+        file << host_elf();
+    }
+    CHECK_EQ(::chmod((extracted / "backend.bin").c_str(), 0755), 0);
+    CHECK_EQ(::link((extracted / "backend.bin").c_str(), (extracted / "alias.bin").c_str()), 0);
+    CHECK(!fixture.installer->validate(extracted.string(), manifest, output).ok());
+
+    // A directory declared as the executable is rejected.
+    Manifest directory_manifest;
+    CHECK(parse_manifest(backend_manifest_json("io.example.links", "1.0.0", "adir"), directory_manifest,
+                         error, warnings));
+    fs::create_directories(extracted / "adir");
+    CHECK(!fixture.installer->validate(extracted.string(), directory_manifest, output).ok());
+}
+
+void test_backend_upgrade_preserves_identity_and_data(const fs::path& base) {
+    auto fixture = make_native_fixture(base, "apps-native-upgrade");
+    if (!fixture.manager) return;
+    const std::string id = "io.example.native.upgrade";
+    const std::string first_elf = host_elf();
+    InstallResult first;
+    if (!install_native(fixture, base, "native-up-1.zip",
+                        backend_manifest_json(id, "1.0.0", "bin/backend", {"--first"}), first_elf, {},
+                        &first)) {
+        return;
+    }
+    AppRecord app;
+    CHECK(fixture.manager->approve(id, {}, true, app).ok());
+    CHECK(fixture.manager->store().set_backend_identity(id, "backuser", "backgroup", true).ok());
+    CHECK(fixture.manager->store().set_backend_autostart(id, true).ok());
+    const fs::path data_dir = fs::path(fixture.root) / "data" / id;
+    write_text(data_dir / "keep.txt", "persistent");
+
+    int stop_calls = 0;
+    fixture.manager->set_backend_stop_hook([&](std::string_view) {
+        ++stop_calls;
+        return Error::none();
+    });
+
+    const std::string second_elf = host_elf() + std::string(16, 'x');
+    InstallOptions options;
+    options.expected_app_id = id;
+    InstallResult second;
+    if (!install_native(fixture, base, "native-up-2.zip",
+                        backend_manifest_json(id, "1.1.0", "bin/backend", {"--second"}), second_elf,
+                        options, &second)) {
+        return;
+    }
+    CHECK_EQ(stop_calls, 1);
+    CHECK_STR_EQ(second.app.active_revision_id, second.revision.revision_id);
+    BackendRecord backend;
+    CHECK(get_backend_row(*fixture.manager, id, backend));
+    CHECK_STR_EQ(backend.args[0], "--second");
+    CHECK_STR_EQ(backend.arch, elf_arch_name(host_elf_arch()));
+    CHECK_STR_EQ(backend.state, backend_state::stopped);
+    CHECK(backend.error.empty());
+    CHECK_STR_EQ(backend.run_user, "backuser");
+    CHECK_STR_EQ(backend.run_group, "backgroup");
+    CHECK(backend.allow_root);
+    CHECK(backend.autostart);
+    const fs::path program = fs::path(fixture.root) / "native" / id / "backend";
+    CHECK_STR_EQ(read_file_bytes(program), second_elf);
+    CHECK_STR_EQ(read_file_bytes(data_dir / "keep.txt"), "persistent");
+    CHECK_EQ(directory_entries(fs::path(fixture.root) / "native" / id), std::size_t{1});
+
+    // Native versions move as one package: switching only the Web revision is
+    // refused and leaves the active revision and backend row unchanged.
+    AppRecord after_switch;
+    const Error switch_error =
+        fixture.manager->activate_revision(id, first.revision.revision_id, true, after_switch);
+    CHECK(!switch_error.ok());
+    CHECK(switch_error.code == ErrorCode::conflict);
+    bool found = false;
+    CHECK(fixture.manager->get_app(id, after_switch, found).ok());
+    CHECK_STR_EQ(after_switch.active_revision_id, second.revision.revision_id);
+    BackendRecord unchanged;
+    CHECK(get_backend_row(*fixture.manager, id, unchanged));
+    CHECK_STR_EQ(unchanged.args[0], "--second");
+}
+
+void test_backend_invalid_upgrade_keeps_existing(const fs::path& base) {
+    auto fixture = make_native_fixture(base, "apps-native-bad-upgrade");
+    if (!fixture.manager) return;
+    const std::string id = "io.example.native.badupgrade";
+    const std::string first_elf = host_elf();
+    if (!install_native(fixture, base, "native-bad-1.zip",
+                        backend_manifest_json(id, "1.0.0", "bin/backend", {"--first"}), first_elf)) {
+        return;
+    }
+    AppRecord app;
+    CHECK(fixture.manager->approve(id, {}, true, app).ok());
+    const std::string old_revision = app.active_revision_id;
+    const fs::path program = fs::path(fixture.root) / "native" / id / "backend";
+    CHECK_STR_EQ(read_file_bytes(program), first_elf);
+
+    int stop_calls = 0;
+    fixture.manager->set_backend_stop_hook([&](std::string_view) {
+        ++stop_calls;
+        return Error::none();
+    });
+    const auto zip = make_zip(base, "native-bad-2.zip",
+                              native_items(backend_manifest_json(id, "1.1.0", "bin/backend", {"--bad"}),
+                                           other_arch_elf()));
+    InstallOptions options;
+    options.expected_app_id = id;
+    InstallResult failed;
+    const Error error = fixture.manager->install(zip, options, failed);
+    CHECK(!error.ok());
+    // Validation happens before the backend is stopped.
+    CHECK_EQ(stop_calls, 0);
+
+    bool found = false;
+    CHECK(fixture.manager->get_app(id, app, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(app.active_revision_id, old_revision);
+    CHECK_STR_EQ(read_file_bytes(program), first_elf);
+    BackendRecord backend;
+    CHECK(get_backend_row(*fixture.manager, id, backend));
+    CHECK_STR_EQ(backend.args[0], "--first");
+    CHECK_STR_EQ(backend.state, backend_state::stopped);
+}
+
+void test_backend_stop_hook_failure_aborts_upgrade(const fs::path& base) {
+    auto fixture = make_native_fixture(base, "apps-native-stop-failure");
+    if (!fixture.manager) return;
+    const std::string id = "io.example.native.stopfailure";
+    const std::string first_elf = host_elf();
+    if (!install_native(fixture, base, "native-stop-1.zip",
+                        backend_manifest_json(id, "1.0.0"), first_elf)) {
+        return;
+    }
+    AppRecord app;
+    CHECK(fixture.manager->approve(id, {}, true, app).ok());
+    const std::string old_revision = app.active_revision_id;
+
+    fixture.manager->set_backend_stop_hook([](std::string_view) {
+        return Error::make(ErrorCode::unavailable, "supervisor unavailable");
+    });
+    const auto zip = make_zip(base, "native-stop-2.zip",
+                              native_items(backend_manifest_json(id, "1.1.0"), host_elf()));
+    InstallOptions options;
+    options.expected_app_id = id;
+    InstallResult failed;
+    const Error error = fixture.manager->install(zip, options, failed);
+    CHECK(!error.ok());
+    CHECK(error.message.find("cannot stop") != std::string::npos);
+
+    bool found = false;
+    CHECK(fixture.manager->get_app(id, app, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(app.active_revision_id, old_revision);
+    CHECK_STR_EQ(read_file_bytes(fs::path(fixture.root) / "native" / id / "backend"), first_elf);
+}
+
+void test_web_only_package_has_no_backend(const fs::path& base) {
+    auto fixture = make_native_fixture(base, "apps-native-web-only");
+    if (!fixture.manager) return;
+    const std::string id = "io.example.native.webonly";
+    const auto zip = make_zip(base, "native-web-only.zip",
+                              app_items(manifest_json(id, "1.0.0"), "<h1>web</h1>"));
+    InstallResult result;
+    CHECK(fixture.manager->install(zip, {}, result).ok());
+    BackendRecord backend;
+    CHECK(!get_backend_row(*fixture.manager, id, backend));
+    CHECK(!fs::exists(fs::path(fixture.root) / "native" / id));
+    CHECK(!fs::exists(fs::path(fixture.root) / "run" / id));
+}
+
+void test_native_to_web_only_upgrade(const fs::path& base) {
+    auto fixture = make_native_fixture(base, "apps-native-to-web");
+    if (!fixture.manager) return;
+    const std::string id = "io.example.native.toweb";
+    if (!install_native(fixture, base, "native-toweb-1.zip",
+                        backend_manifest_json(id, "1.0.0"), host_elf())) {
+        return;
+    }
+    AppRecord app;
+    CHECK(fixture.manager->approve(id, {}, true, app).ok());
+    const fs::path data_dir = fs::path(fixture.root) / "data" / id;
+    write_text(data_dir / "keep.txt", "persistent");
+
+    int stop_calls = 0;
+    fixture.manager->set_backend_stop_hook([&](std::string_view) {
+        ++stop_calls;
+        return Error::none();
+    });
+    int removed_services = 0;
+    fixture.manager->set_backend_service_remove_hook([&](std::string_view service_id) {
+        CHECK(!service_id.empty());
+        ++removed_services;
+        return Error::none();
+    });
+    const auto zip = make_zip(base, "native-toweb-2.zip",
+                              app_items(manifest_json(id, "1.1.0"), "<h1>web</h1>"));
+    InstallOptions options;
+    options.expected_app_id = id;
+    InstallResult result;
+    CHECK(fixture.manager->install(zip, options, result).ok());
+    CHECK_EQ(stop_calls, 1);
+    CHECK_EQ(removed_services, 1);
+
+    BackendRecord backend;
+    CHECK(!get_backend_row(*fixture.manager, id, backend));
+    CHECK(!fs::exists(fs::path(fixture.root) / "native" / id));
+    CHECK(!fs::exists(fs::path(fixture.root) / "run" / id));
+    CHECK_STR_EQ(read_file_bytes(data_dir / "keep.txt"), "persistent");
+    bool found = false;
+    CHECK(fixture.manager->get_app(id, app, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(app.active_revision_id, result.revision.revision_id);
+}
+
+void test_native_uninstall_and_data_retention(const fs::path& base) {
+    auto fixture = make_native_fixture(base, "apps-native-uninstall");
+    if (!fixture.manager) return;
+    const std::string id = "io.example.native.uninstall";
+    if (!install_native(fixture, base, "native-uninstall-1.zip",
+                        backend_manifest_json(id, "1.0.0"), host_elf())) {
+        return;
+    }
+    AppRecord app;
+    CHECK(fixture.manager->approve(id, {}, true, app).ok());
+    const fs::path data_dir = fs::path(fixture.root) / "data" / id;
+    write_text(data_dir / "keep.txt", "persistent");
+    int stop_calls = 0;
+    fixture.manager->set_backend_stop_hook([&](std::string_view) {
+        ++stop_calls;
+        return Error::none();
+    });
+    int removed_services = 0;
+    fixture.manager->set_backend_service_remove_hook([&](std::string_view service_id) {
+        CHECK(!service_id.empty());
+        ++removed_services;
+        return Error::none();
+    });
+
+    CHECK(fixture.manager->uninstall(id, true).ok());
+    CHECK_EQ(stop_calls, 1);
+    CHECK_EQ(removed_services, 1);
+    BackendRecord backend;
+    CHECK(!get_backend_row(*fixture.manager, id, backend));
+    CHECK(!fs::exists(fs::path(fixture.root) / "native" / id));
+    CHECK(!fs::exists(fs::path(fixture.root) / "run" / id));
+    CHECK_STR_EQ(read_file_bytes(data_dir / "keep.txt"), "persistent");
+    bool found = false;
+    CHECK(fixture.manager->get_app(id, app, found).ok());
+    CHECK(found);
+    CHECK_STR_EQ(app.status, app_status::uninstalled);
+    CHECK(app.data_retained);
+
+    // Reinstall (retained data is kept on disk) and uninstall with purge.
+    if (!install_native(fixture, base, "native-uninstall-2.zip",
+                        backend_manifest_json(id, "1.0.0"), host_elf())) {
+        return;
+    }
+    CHECK(fixture.manager->approve(id, {}, true, app).ok());
+    CHECK(fixture.manager->uninstall(id, false).ok());
+    CHECK_EQ(removed_services, 2);
+    CHECK(!fs::exists(fs::path(fixture.root) / "native" / id));
+    CHECK(!fs::exists(data_dir));
+    CHECK(fixture.manager->get_app(id, app, found).ok());
+    CHECK(!found);
+}
+
+void test_native_uninstall_stop_failure_aborts(const fs::path& base) {
+    auto fixture = make_native_fixture(base, "apps-native-uninstall-stop");
+    if (!fixture.manager) return;
+    const std::string id = "io.example.native.uninstallstop";
+    if (!install_native(fixture, base, "native-uninstall-stop.zip",
+                        backend_manifest_json(id, "1.0.0"), host_elf())) {
+        return;
+    }
+    AppRecord app;
+    CHECK(fixture.manager->approve(id, {}, true, app).ok());
+    fixture.manager->set_backend_stop_hook([](std::string_view) {
+        return Error::make(ErrorCode::unavailable, "cannot stop");
+    });
+    const Error error = fixture.manager->uninstall(id, true);
+    CHECK(!error.ok());
+    CHECK(error.message.find("cannot stop") != std::string::npos);
+
+    BackendRecord backend;
+    CHECK(get_backend_row(*fixture.manager, id, backend));
+    CHECK(fs::exists(fs::path(fixture.root) / "native" / id / "backend"));
+    bool found = false;
+    CHECK(fixture.manager->get_app(id, app, found).ok());
+    CHECK(found);
+    CHECK(app.status != app_status::uninstalled);
+
+    // Without a hook the stop cannot be confirmed and uninstall is refused.
+    fixture.manager->set_backend_stop_hook(nullptr);
+    CHECK(!fixture.manager->uninstall(id, true).ok());
+    CHECK(fs::exists(fs::path(fixture.root) / "native" / id / "backend"));
+}
+
+void test_backend_install_failure_marks_upgrade_failed(const fs::path& base) {
+    auto fixture = make_native_fixture(base, "apps-native-install-failure");
+    if (!fixture.manager) return;
+    const std::string id = "io.example.native.installfailure";
+    // A directory at the stable program path makes the atomic rename fail
+    // after the metadata transaction has committed.
+    fs::create_directories(fs::path(fixture.root) / "native" / id / "backend");
+    bool fail_safe_called = false;
+    fixture.manager->set_backend_fail_safe_hook([&](std::string_view app_id) {
+        fail_safe_called = app_id == id;
+        return Error::none();
+    });
+    const auto zip = make_zip(base, "native-install-failure.zip",
+                              native_items(backend_manifest_json(id, "1.0.0"), host_elf()));
+    InstallResult result;
+    const Error error = fixture.manager->install(zip, {}, result);
+    CHECK(!error.ok());
+    CHECK(error.message.find("native backend installation failed") != std::string::npos);
+    CHECK(fail_safe_called);
+
+    BackendRecord backend;
+    CHECK(get_backend_row(*fixture.manager, id, backend));
+    CHECK_STR_EQ(backend.state, backend_state::upgrade_failed);
+    CHECK(!backend.error.empty());
+    CHECK(!backend.autostart);
+    bool found = false;
+    AppRecord app;
+    CHECK(fixture.manager->get_app(id, app, found).ok());
+    CHECK(found);
+    CHECK(!app.active_revision_id.empty());
+}
+
+void test_backend_recovery(const fs::path& base) {
+    const std::string id = "io.example.native.recovery";
+
+    // A valid backend survives a restart unchanged.
+    {
+        auto fixture = make_native_fixture(base, "apps-native-recovery-ok");
+        if (!fixture.manager) return;
+        if (!install_native(fixture, base, "native-recovery-ok.zip",
+                            backend_manifest_json(id, "1.0.0"), host_elf())) {
+            return;
+        }
+        const std::string root = fixture.root;
+        fixture.installer.reset();
+        fixture.manager.reset();
+        Error error;
+        auto reopened = PackageManager::create(root, error);
+        CHECK(reopened != nullptr);
+        if (!reopened) return;
+        BackendRecord backend;
+        bool found = false;
+        CHECK(reopened->store().get_backend(id, backend, found).ok());
+        CHECK(found);
+        CHECK_STR_EQ(backend.state, backend_state::stopped);
+    }
+
+    // A missing program file is never reported as startable.
+    {
+        auto fixture = make_native_fixture(base, "apps-native-recovery-missing");
+        if (!fixture.manager) return;
+        if (!install_native(fixture, base, "native-recovery-missing.zip",
+                            backend_manifest_json(id, "1.0.0"), host_elf())) {
+            return;
+        }
+        CHECK(fs::remove(fs::path(fixture.root) / "native" / id / "backend"));
+        const std::string root = fixture.root;
+        fixture.installer.reset();
+        fixture.manager.reset();
+        Error error;
+        auto reopened = PackageManager::create(root, error);
+        CHECK(reopened != nullptr);
+        if (!reopened) return;
+        BackendRecord backend;
+        bool found = false;
+        CHECK(reopened->store().get_backend(id, backend, found).ok());
+        CHECK(found);
+        CHECK_STR_EQ(backend.state, backend_state::upgrade_failed);
+        CHECK(backend.error.find("not runnable") != std::string::npos);
+        reopened.reset();
+
+        // Recovery is idempotent.
+        auto again = PackageManager::create(root, error);
+        CHECK(again != nullptr);
+        if (!again) return;
+        CHECK(again->store().get_backend(id, backend, found).ok());
+        CHECK(found);
+        CHECK_STR_EQ(backend.state, backend_state::upgrade_failed);
+    }
+
+    // A truncated/corrupt program is also marked failed.
+    {
+        auto fixture = make_native_fixture(base, "apps-native-recovery-corrupt");
+        if (!fixture.manager) return;
+        if (!install_native(fixture, base, "native-recovery-corrupt.zip",
+                            backend_manifest_json(id, "1.0.0"), host_elf())) {
+            return;
+        }
+        const fs::path corrupt_program = fs::path(fixture.root) / "native" / id / "backend";
+        // The installed program is read-only (0555); simulate an external
+        // corruption by restoring owner write first.
+        CHECK_EQ(::chmod(corrupt_program.c_str(), 0644), 0);
+        write_text(corrupt_program, "bad");
+        const std::string root = fixture.root;
+        fixture.installer.reset();
+        fixture.manager.reset();
+        Error error;
+        auto reopened = PackageManager::create(root, error);
+        CHECK(reopened != nullptr);
+        if (!reopened) return;
+        BackendRecord backend;
+        bool found = false;
+        CHECK(reopened->store().get_backend(id, backend, found).ok());
+        CHECK(found);
+        if (backend.state != backend_state::upgrade_failed) {
+            std::fprintf(stderr, "corrupt recovery state=%s error=%s\n", backend.state.c_str(),
+                         backend.error.c_str());
+        }
+        CHECK_STR_EQ(backend.state, backend_state::upgrade_failed);
+        CHECK(!backend.error.empty());
+    }
+
+    // A crash after the persisted "upgrading" marker but before the Supervisor
+    // synchronization is a safe failure even when the program bytes still look
+    // valid.
+    {
+        auto fixture = make_native_fixture(base, "apps-native-recovery-upgrading");
+        if (!fixture.manager) return;
+        if (!install_native(fixture, base, "native-recovery-upgrading.zip",
+                            backend_manifest_json(id, "1.0.0"), host_elf())) {
+            return;
+        }
+        BackendRecord record;
+        bool found = false;
+        CHECK(fixture.manager->store().get_backend(id, record, found).ok());
+        CHECK(found);
+        record.state = backend_state::upgrading;
+        record.autostart = true;
+        CHECK(fixture.manager->store().upsert_backend(record).ok());
+        const std::string root = fixture.root;
+        fixture.installer.reset();
+        fixture.manager.reset();
+        Error error;
+        auto reopened = PackageManager::create(root, error);
+        CHECK(reopened != nullptr);
+        if (!reopened) return;
+        CHECK(reopened->store().get_backend(id, record, found).ok());
+        CHECK(found);
+        CHECK_STR_EQ(record.state, backend_state::upgrade_failed);
+        CHECK(!record.autostart);
+        CHECK(record.error.find("interrupted") != std::string::npos);
+    }
+}
+
 } // namespace
+
+void test_backend_upgrade_syncs_supervisor_and_fails_safe(const fs::path& base) {
+    const std::string id = "io.example.native.sync";
+    // Successful upgrade: the sync hook runs after the new executable and row
+    // are in place and observes the new argv.
+    {
+        auto fixture = make_native_fixture(base, "apps-native-sync-ok");
+        if (!fixture.manager) return;
+        if (!install_native(fixture, base, "native-sync-1.zip",
+                            backend_manifest_json(id, "1.0.0", "bin/backend", {"--first"}),
+                            host_elf())) {
+            return;
+        }
+        CHECK(fixture.manager->store().set_backend_autostart(id, true).ok());
+        int sync_calls = 0;
+        std::vector<bool> suppress_flags;
+        bool fail_safe_called = false;
+        fixture.manager->set_backend_sync_hook([&](std::string_view app_id,
+                                                   bool suppress_autostart) {
+            ++sync_calls;
+            suppress_flags.push_back(suppress_autostart);
+            if (app_id != id) return Error::make(ErrorCode::io_error, "wrong app during sync");
+            if (suppress_autostart) return Error::none();
+            BackendRecord record;
+            bool found = false;
+            if (!fixture.manager->store().get_backend(id, record, found).ok() || !found) {
+                return Error::make(ErrorCode::io_error, "backend row missing");
+            }
+            return record.args.size() == 1 && record.args[0] == "--second"
+                       ? Error::none()
+                       : Error::make(ErrorCode::io_error, "stale argv during sync");
+        });
+        fixture.manager->set_backend_fail_safe_hook([&](std::string_view) {
+            fail_safe_called = true;
+            return Error::none();
+        });
+        InstallOptions options;
+        options.expected_app_id = id;
+        InstallResult upgraded;
+        CHECK(fixture.manager->install(
+            make_zip(base, "native-sync-2.zip",
+                     native_items(backend_manifest_json(id, "1.1.0", "bin/backend",
+                                                        {"--second"}),
+                                  host_elf())),
+            options, upgraded)
+                  .ok());
+        CHECK_EQ(sync_calls, 2);
+        CHECK_EQ(suppress_flags.size(), std::size_t{2});
+        if (suppress_flags.size() == 2) {
+            CHECK_EQ(suppress_flags[0], true);
+            CHECK_EQ(suppress_flags[1], false);
+        }
+        CHECK(!fail_safe_called);
+        BackendRecord backend;
+        CHECK(get_backend_row(*fixture.manager, id, backend));
+        CHECK_STR_EQ(backend.state, backend_state::stopped);
+        CHECK(backend.autostart);
+    }
+
+    // Synchronization failure: the new package is already committed, so the
+    // only safe outcome is upgrade_failed with autostart disarmed.
+    {
+        auto fixture = make_native_fixture(base, "apps-native-sync-fail");
+        if (!fixture.manager) return;
+        if (!install_native(fixture, base, "native-syncfail-1.zip",
+                            backend_manifest_json(id, "1.0.0"), host_elf())) {
+            return;
+        }
+        CHECK(fixture.manager->store().set_backend_autostart(id, true).ok());
+        bool fail_safe_called = false;
+        fixture.manager->set_backend_sync_hook([](std::string_view, bool suppress_autostart) {
+            if (suppress_autostart) return Error::none();
+            return Error::make(ErrorCode::unavailable, "supervisor unreachable");
+        });
+        fixture.manager->set_backend_fail_safe_hook([&](std::string_view) {
+            fail_safe_called = true;
+            return Error::none();
+        });
+        InstallOptions options;
+        options.expected_app_id = id;
+        InstallResult failed;
+        const Error error = fixture.manager->install(
+            make_zip(base, "native-syncfail-2.zip",
+                     native_items(backend_manifest_json(id, "1.1.0"), host_elf())),
+            options, failed);
+        CHECK(!error.ok());
+        CHECK(error.message.find("Supervisor synchronization failed") != std::string::npos);
+        CHECK(fail_safe_called);
+        BackendRecord backend;
+        CHECK(get_backend_row(*fixture.manager, id, backend));
+        CHECK_STR_EQ(backend.state, backend_state::upgrade_failed);
+        CHECK(!backend.autostart);
+    }
+}
+
+void test_orphan_service_operations_are_recoverable(const fs::path& base) {
+    auto fixture = make_native_fixture(base, "apps-native-orphan");
+    if (!fixture.manager) return;
+
+    OperationRecord operation;
+    operation.type = "backend_orphan";
+    operation.phase = "pending";
+    operation.app_id = "io.example.orphan";
+    operation.revision_id = "svc-123";
+    operation.error = "cannot persist service id";
+    CHECK(fixture.manager->store().create_operation(operation).ok());
+
+    // Generic recovery must not convert the marker into an interrupted install.
+    CHECK(fixture.manager->recover().ok());
+    {
+        std::vector<OperationRecord> pending;
+        CHECK(fixture.manager->store().list_pending_operations(pending).ok());
+        bool found = false;
+        for (const auto& item : pending) {
+            if (item.type == "backend_orphan") {
+                found = true;
+                CHECK_STR_EQ(item.phase, "pending");
+            }
+        }
+        CHECK(found);
+    }
+
+    // A failed cleanup keeps the marker pending with its diagnostic.
+    fixture.manager->set_backend_orphan_cleanup_hook(
+        [](std::string_view service_id, std::string& detail) {
+            CHECK_STR_EQ(std::string(service_id), "svc-123");
+            detail = "supervisor unavailable";
+            return Error::make(ErrorCode::unavailable, detail);
+        });
+    CHECK(fixture.manager->recover_backend_orphans().ok());
+    {
+        std::vector<OperationRecord> pending;
+        CHECK(fixture.manager->store().list_pending_operations(pending).ok());
+        bool found = false;
+        for (const auto& item : pending) {
+            if (item.type == "backend_orphan" && item.revision_id == "svc-123") {
+                found = true;
+                CHECK(item.error.find("supervisor unavailable") != std::string::npos);
+            }
+        }
+        CHECK(found);
+    }
+
+    // A later successful retry marks the marker done.
+    fixture.manager->set_backend_orphan_cleanup_hook(
+        [](std::string_view, std::string&) { return Error::none(); });
+    CHECK(fixture.manager->recover_backend_orphans().ok());
+    {
+        std::vector<OperationRecord> pending;
+        CHECK(fixture.manager->store().list_pending_operations(pending).ok());
+        for (const auto& item : pending) CHECK(item.type != "backend_orphan");
+    }
+}
+
+void test_safe_state_enforcement_disarms_failed_backend(const fs::path& base) {
+    auto fixture = make_native_fixture(base, "apps-native-safe-state");
+    if (!fixture.manager) return;
+    const std::string id = "io.example.native.safestate";
+    if (!install_native(fixture, base, "native-safe-state.zip",
+                        backend_manifest_json(id, "1.0.0"), host_elf())) {
+        return;
+    }
+    BackendRecord backend;
+    CHECK(get_backend_row(*fixture.manager, id, backend));
+    backend.state = backend_state::upgrade_failed;
+    backend.autostart = true;
+    backend.error = "upgrade failed";
+    CHECK(fixture.manager->store().upsert_backend(backend).ok());
+
+    int calls = 0;
+    fixture.manager->set_backend_fail_safe_hook([&](std::string_view app_id) {
+        ++calls;
+        CHECK_STR_EQ(std::string(app_id), id);
+        BackendRecord updated;
+        bool found = false;
+        CHECK(fixture.manager->store().get_backend(id, updated, found).ok());
+        CHECK(found);
+        updated.autostart = false;
+        return fixture.manager->store().upsert_backend(updated);
+    });
+    CHECK(fixture.manager->enforce_backend_safety().ok());
+    CHECK_EQ(calls, 1);
+    CHECK(get_backend_row(*fixture.manager, id, backend));
+    CHECK(!backend.autostart);
+}
 
 int main() {
     const auto base = make_base();
@@ -1084,6 +1973,21 @@ int main() {
     test_upgrade_failure_preserves_kv_and_active_revision(base);
     test_recovery_preserves_kv_and_committed_install(base);
     test_recovery(base);
+    test_backend_install_valid(base);
+    test_backend_rejections(base);
+    test_backend_installer_path_checks(base);
+    test_backend_upgrade_preserves_identity_and_data(base);
+    test_backend_invalid_upgrade_keeps_existing(base);
+    test_backend_stop_hook_failure_aborts_upgrade(base);
+    test_web_only_package_has_no_backend(base);
+    test_native_to_web_only_upgrade(base);
+    test_native_uninstall_and_data_retention(base);
+    test_native_uninstall_stop_failure_aborts(base);
+    test_backend_install_failure_marks_upgrade_failed(base);
+    test_backend_upgrade_syncs_supervisor_and_fails_safe(base);
+    test_orphan_service_operations_are_recoverable(base);
+    test_safe_state_enforcement_disarms_failed_backend(base);
+    test_backend_recovery(base);
     std::filesystem::remove_all(base);
     return edgedesk::test::finish("extension_package_test");
 }

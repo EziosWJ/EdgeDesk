@@ -35,6 +35,25 @@
 尚未验证：ARM64/musl/真实硬件 L2 矩阵；这些平台不得据本文宣称通过。发布前仍需按风险清单门槛
 执行 L2 并保留证据。
 
+## 2026-10-23 SPEC-0011 原生后端风险证据
+
+| 风险 | 实现控制 | 验证 | 状态 |
+| --- | --- | --- | --- |
+| 未签名原生 ELF 获得本机执行能力 | 管理员主动上传；安装只校验不执行；未签名提示；SHA-256 仅完整性 | `elf_info_test`、`extension_package_test`、L1 端到端 | 风险接受（来源由管理员负责） |
+| 原生后端无进程沙箱 | 复用管理员指定 Linux 用户/组与 `allow_root` 显式确认；不新增容器/namespace/seccomp | 单元；root/跨用户运行未验证 | 风险接受；root 后端为主机级权限 |
+| 后端改写自身/其他应用安装程序 | 程序树归宿主身份（文件 `0555`、目录 `0755`、`native/` `0711`）；非 root 同 UID 拒绝；Supervisor `fork` 前复核属主/可写性 | `native_backend_lifecycle_test`、`process_control_test`、`extension_package_test` | 已实现（真实 root + 跨 UID 未验证） |
+| 宿主代理被用作任意本地服务通道 | 只从 `X-EdgeDesk-Runtime` 会话取 appId；Socket 路径由宿主推导；拒绝 app_id/socket/url 参数、片段/绝对 URL/路径穿越与跨应用访问；允许正常查询串；固定大小 worker + 超时；执行前复核会话 | `backend_proxy_test`、`native_backend_test.py` | 已实现 |
+| 覆盖运行中程序 | 升级前有界停止并轮询 Supervisor 状态、关闭自启，失败则不提交/不覆盖；安装/卸载不执行包内容 | `extension_package_test`、L1 端到端（运行中升级，仅 root 路径） | 已实现；同 UID 非 root 路径不执行后端 |
+| 升级失败留下半成品/旧配置自启 | 提交前关闭自启；覆盖/同步失败标记 `upgrade_failed`、保持停止并再次关闭自启；无自动回滚/自动启动 | 单元 + L1 | 已实现 |
+| 禁用后仍运行或开机自启 | 先关自启、失效会话、停止并确认终态，再写 disabled；失败返回错误 | `supervisor_engine_test`、L1（无服务路径） | 部分验证；真实运行中禁用需 root/跨 UID |
+| 仅切换 Web 修订造成版本错配 | 含后端的应用拒绝 `activate_revision`，要求完整包 | `extension_package_test` | 已实现 |
+| 服务 ID 持久化失败留下自启孤儿 | 创建时强制 `autostart=false`；失败关闭自启并删除；清理失败写入 `operations(type=backend_orphan)` 并在启动重试 | `extension_package_test` | 已实现（真实 Supervisor 清理未验证） |
+| ELF 执行位绕过 | ZIP 保留执行位；`0644/0600/无模式` 拒绝；稳定文件 `0555` | `extension_package_test`、SDK CLI 测试 | 已实现 |
+| 非 root 身份无法穿越私有数据根 | 仅对 EdgeDesk 拥有的 `apps/`、`data/`、`run/` 保留精确 `0711`；更宽权限收紧 | `extension_store_test`、`native_backend_lifecycle_test` | 已实现（真实跨用户未验证） |
+| Socket 被其他本地用户连接 | 运行目录 0770 归后端身份；Socket 权限由后端建立；无法安全建立时拒绝启动 | 单元测试 | 部分验证；真实跨用户/root 待验证 |
+
+发布门槛仍需 ARM64/ARM32、musl、真实 root 身份切换与 init/reboot 证据；不得据本节宣称生产通过。
+
 ## 风险摘要
 
 | ID | 风险 | 级别 | 决策状态 | 首期必须落实的边界 |

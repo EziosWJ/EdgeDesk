@@ -8,6 +8,38 @@ export type ExtensionWindowSpec = {
   instances?: 'single' | 'multi';
 };
 
+/** Supervisor-reported live state for a native backend. */
+export type BackendSupervisorState = {
+  state?: string;
+  pid?: number | null;
+  last_exit_code?: number | null;
+  last_exit_at?: number | null;
+};
+
+/**
+ * Native backend descriptor from SPEC-0011. `present=false` means the package
+ * is a pure Web application and no backend controls may be shown.
+ * Persisted `state` only tracks manager state (stopped/upgrading/upgrade_failed);
+ * process liveness is always read from `supervisor`, never copied.
+ */
+export type BackendInfo = {
+  present: boolean;
+  service_id?: string;
+  arch?: string;
+  host_arch?: string;
+  executable?: string;
+  program_dir?: string;
+  data_dir?: string;
+  socket_path?: string;
+  run_user?: string;
+  run_group?: string;
+  allow_root?: boolean;
+  autostart?: boolean;
+  state?: 'stopped' | 'upgrading' | 'upgrade_failed' | string;
+  error?: string;
+  supervisor?: BackendSupervisorState | null;
+};
+
 export type ExtensionRevision = {
   revision_id: string;
   version: string;
@@ -40,6 +72,14 @@ export type ExtensionApp = {
   window?: ExtensionWindowSpec;
   network_origins: string[];
   revisions?: ExtensionRevision[];
+  /** Present on detail responses; omitted or `present=false` for pure Web apps. */
+  backend?: BackendInfo;
+};
+
+export type ExtensionDetail = {
+  app: ExtensionApp;
+  revisions: ExtensionRevision[];
+  backend?: BackendInfo;
 };
 
 export type ExtensionSession = {

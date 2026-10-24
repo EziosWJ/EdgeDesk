@@ -6,6 +6,7 @@
 #include "extensions/manifest.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -18,6 +19,8 @@ class PathSandbox;
 }
 
 namespace edgedesk::extensions {
+
+class NativeBackendInstaller;
 
 struct InstallOptions {
     // When set, the manifest id must match (used by /apps/{id}/upgrade).
@@ -76,9 +79,61 @@ public:
     const std::string& root() const { return root_; }
     const std::string& temporary_directory() const { return tmp_dir_; }
 
+    // Installed by the process-level assembly (Application). Null keeps the
+    // package manager fully Web-only: a package that declares `backend` is then
+    // rejected instead of silently installing an unused executable.
+    void set_backend_installer(NativeBackendInstaller* installer) {
+        backend_installer_ = installer;
+    }
+    NativeBackendInstaller* backend_installer() const { return backend_installer_; }
+
+    // Bounded, synchronous stop used by upgrade before the executable is
+    // replaced. It is installed only when a Supervisor is configured and must
+    // return an error rather than overwrite a possibly running program.
+    using BackendStopHook = std::function<Error(std::string_view app_id)>;
+    void set_backend_stop_hook(BackendStopHook hook) { backend_stop_hook_ = std::move(hook); }
+
+    // Removes the Supervisor service definition created for a native backend
+    // (uninstall or native -> Web-only upgrade). Implemented by the process
+    // assembly with the bounded Supervisor client; not_found is success.
+    using BackendServiceRemoveHook = std::function<Error(std::string_view service_id)>;
+    void set_backend_service_remove_hook(BackendServiceRemoveHook hook) {
+        backend_service_remove_hook_ = std::move(hook);
+    }
+
+    // Synchronizes an existing Supervisor service with the current backend
+    // record. `suppress_autostart` only clears boot autostart (used before the
+    // metadata/binary switch); the full sync applies executable/argv/env/
+    // identity/autostart. Returns an error when the service exists and cannot
+    // be synchronized.
+    using BackendSyncHook = std::function<Error(std::string_view app_id, bool suppress_autostart)>;
+    void set_backend_sync_hook(BackendSyncHook hook) { backend_sync_hook_ = std::move(hook); }
+
+    // Forces a backend into a safe failure state: stop it if necessary and
+    // leave autostart disabled so a mismatched version can never be started by
+    // the Supervisor (including at boot).
+    using BackendFailSafeHook = std::function<Error(std::string_view app_id)>;
+    void set_backend_fail_safe_hook(BackendFailSafeHook hook) {
+        backend_fail_safe_hook_ = std::move(hook);
+    }
+
+    // Deletes a Supervisor service whose id could not be persisted. The
+    // detail is recorded when cleanup fails so startup recovery can retry.
+    using BackendOrphanCleanupHook =
+        std::function<Error(std::string_view service_id, std::string& detail)>;
+    void set_backend_orphan_cleanup_hook(BackendOrphanCleanupHook hook) {
+        backend_orphan_cleanup_hook_ = std::move(hook);
+    }
+
     // Cleans unfinished operations and orphan revision directories. Idempotent;
     // runs once at startup and is safe to call again.
     Error recover();
+
+    // Startup reconciliation that requires Supervisor hooks: retries orphan
+    // service cleanup and reasserts the safe failure state for backends left
+    // upgrade_failed. Called by the process assembly after hooks are wired.
+    Error recover_backend_orphans();
+    Error enforce_backend_safety();
 
     // Installs or upgrades from a validated ZIP file. The file must already be
     // on local disk (streamed uploads finish before this call).
@@ -123,6 +178,10 @@ private:
                    std::string revisions_dir, std::string data_dir);
 
     Error prepare_directories();
+    // Repairs backend rows after a crash: validates that each row still points
+    // at the stable program file of the active revision, and marks rows that
+    // cannot be started as upgrade_failed. Idempotent.
+    Error recover_backends();
     Error fail_operation(const std::string& operation_id, const std::string& temp_path,
                          const std::string& revision_path, const std::string& message);
     Error move_into_place(const std::string& source, const std::string& destination);
@@ -140,6 +199,12 @@ private:
     std::string data_dir_;
     mutable std::mutex sandbox_mutex_;
     mutable std::unordered_map<std::string, std::shared_ptr<PathSandbox>> sandboxes_;
+    NativeBackendInstaller* backend_installer_ = nullptr;
+    BackendStopHook backend_stop_hook_;
+    BackendServiceRemoveHook backend_service_remove_hook_;
+    BackendSyncHook backend_sync_hook_;
+    BackendFailSafeHook backend_fail_safe_hook_;
+    BackendOrphanCleanupHook backend_orphan_cleanup_hook_;
 };
 
 // Recursively removes a directory without following symlinks.
